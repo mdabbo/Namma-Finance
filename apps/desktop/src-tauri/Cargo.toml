@@ -1,0 +1,23 @@
+[package]
+name = "mep-finance-desktop"
+version = "0.1.0"
+description = "NAMAA Finance — Project Financial Management for MEP design offices"
+authors = ["MEP Finance"]
+edition = "2021"
+
+[lib]
+name = "mep_finance_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-process = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
