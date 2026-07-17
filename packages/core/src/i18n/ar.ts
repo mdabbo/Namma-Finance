@@ -360,6 +360,7 @@ export const ar: Dictionary = {
     autoAllocate: "توزيع تلقائي (الأقدم أولًا)",
     totalPaid: "إجمالي المدفوع",
     remainingBalance: "الرصيد المتبقي",
+    remainingHint: "كامل قيمة التعاقد شاملاً الأعمال غير المستخلصة — المستحق الآن: {{due}}",
     collectionRate: "نسبة التحصيل",
   },
   expenses: {
@@ -434,6 +435,7 @@ export const ar: Dictionary = {
     readyToCollectHint: "دفعات مرحلية منجزة لم تُستخلص بعد — أصدر المستخلص وحصِّل من العميل.",
     teamPayables: "دفعات مستحقة لفريق العمل",
     teamPayablesHint: "دفع العميل هذه المستخلصات — ادفع المرحلة المقابلة لأعضاء الفريق.",
+    byCurrency: "حسب العملة (بالقيم الأصلية)",
     certifiedVsCollected: "المستخلص مقابل المحصَّل",
     consolidatedNote: "جميع الأرقام موحَّدة بعملة {{currency}}",
   },

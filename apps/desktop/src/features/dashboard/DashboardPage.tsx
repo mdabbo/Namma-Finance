@@ -29,7 +29,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { computeDashboardKpis, isBillable, toEgpPiasters } from "@mep/core";
+import { computeDashboardKpis, isBillable, ratioBp, toEgpPiasters, type ProjectFinancials } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useCategories } from "../../repositories/expenses";
 import { Badge, Card, EmptyState, RatioBar } from "../../components/ui";
@@ -50,6 +50,49 @@ export function DashboardPage() {
     () => (financials ? computeDashboardKpis(financials.projects, financials.allExpenses) : null),
     [financials],
   );
+
+  // money KPIs in the base currency, source-aware: same-currency amounts at
+  // FACE VALUE, foreign amounts via the EGP pivot (fixes the stored-vs-today
+  // rate drift that made a 10,000 SAR contract read 9,596)
+  const money = useMemo(() => {
+    if (!financials) return null;
+    const sumProjects = (pick: (p: ProjectFinancials) => number) =>
+      financials.projects.reduce(
+        (s, p) => s + base.convertFrom(pick(p), p.project.currency, p.project.fxRateMicro),
+        0,
+      );
+    const contractValue = sumProjects((p) => p.contractValueMinor);
+    const revenue = sumProjects((p) => p.certifiedBaseMinor);
+    const expenses = financials.allExpenses.reduce(
+      (s, e) => s + base.convertFrom(e.amountMinor, e.currency, e.fxRateMicro),
+      0,
+    );
+    const profit = revenue - expenses;
+    return {
+      contractValue,
+      revenue,
+      collected: sumProjects((p) => p.totalPaidMinor),
+      outstanding: sumProjects((p) => p.outstandingMinor),
+      expenses,
+      profit,
+      marginBp: ratioBp(profit, revenue),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [financials, base.code]);
+
+  /** Face-value totals per currency — no conversion at all. */
+  const byCurrency = useMemo(() => {
+    if (!financials) return [];
+    const groups = new Map<string, { value: number; collected: number; outstanding: number }>();
+    for (const p of financials.projects) {
+      const g = groups.get(p.project.currency) ?? { value: 0, collected: 0, outstanding: 0 };
+      g.value += p.contractValueMinor;
+      g.collected += p.totalPaidMinor;
+      g.outstanding += p.outstandingMinor;
+      groups.set(p.project.currency, g);
+    }
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [financials]);
 
   /** Monthly series: revenue (certified base), cash in (payments), expenses — in EGP. */
   const monthly = useMemo(() => {
@@ -104,7 +147,7 @@ export function DashboardPage() {
     return [...counts.entries()].map(([status, count]) => ({ name: t(`status.${status}`), value: count }));
   }, [financials, t]);
 
-  if (!kpis) return <EmptyState message={t("common.loading")} />;
+  if (!kpis || !money) return <EmptyState message={t("common.loading")} />;
 
   const currencyTick = (v: number) => new Intl.NumberFormat("en", { notation: "compact" }).format(v);
   const toMajor = (egpMinor: number) => base.convert(egpMinor) / 100;
@@ -117,23 +160,23 @@ export function DashboardPage() {
       </div>
 
       <div className="mb-4 grid grid-cols-5 gap-3">
-        <KpiCard label={t("dashboard.kpiContractValue")} value={base.format(kpis.contractValueEgp)} icon={Briefcase} />
-        <KpiCard label={t("dashboard.kpiRevenue")} value={base.format(kpis.revenueEgp)} icon={FileSpreadsheet} />
-        <KpiCard label={t("dashboard.kpiCollected")} value={base.format(kpis.collectedEgp)} icon={Banknote} tone="positive" />
+        <KpiCard label={t("dashboard.kpiContractValue")} value={fmt.money(money!.contractValue, base.code, { compactFraction: true })} icon={Briefcase} />
+        <KpiCard label={t("dashboard.kpiRevenue")} value={fmt.money(money!.revenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
+        <KpiCard label={t("dashboard.kpiCollected")} value={fmt.money(money!.collected, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
         <KpiCard
           label={t("dashboard.kpiOutstanding")}
-          value={base.format(kpis.outstandingEgp)}
+          value={fmt.money(money!.outstanding, base.code, { compactFraction: true })}
           icon={Wallet}
-          tone={kpis.outstandingEgp > 0 ? "warning" : "default"}
+          tone={money!.outstanding > 0 ? "warning" : "default"}
         />
-        <KpiCard label={t("dashboard.kpiExpenses")} value={base.format(kpis.expensesEgp)} icon={TrendingDown} tone="negative" />
+        <KpiCard label={t("dashboard.kpiExpenses")} value={fmt.money(money!.expenses, base.code, { compactFraction: true })} icon={TrendingDown} tone="negative" />
         <KpiCard
           label={t("dashboard.kpiProfit")}
-          value={base.format(kpis.profitEgp)}
+          value={fmt.money(money!.profit, base.code, { compactFraction: true })}
           icon={TrendingUp}
-          tone={kpis.profitEgp >= 0 ? "positive" : "negative"}
+          tone={money!.profit >= 0 ? "positive" : "negative"}
         />
-        <KpiCard label={t("dashboard.kpiMargin")} value={fmt.percent(kpis.marginBp)} icon={Percent} />
+        <KpiCard label={t("dashboard.kpiMargin")} value={fmt.percent(money!.marginBp)} icon={Percent} />
         <KpiCard label={t("dashboard.kpiActiveProjects")} value={String(kpis.activeProjects)} icon={Briefcase} />
         <KpiCard label={t("dashboard.kpiCompletedProjects")} value={String(kpis.completedProjects)} icon={CheckCircle2} />
         <KpiCard
@@ -143,6 +186,24 @@ export function DashboardPage() {
           tone={kpis.overdueCertificates > 0 ? "negative" : "default"}
         />
       </div>
+
+      {byCurrency.length > 1 && (
+        <Card className="mb-4 p-4">
+          <p className="mb-2 text-sm font-semibold">{t("dashboard.byCurrency")}</p>
+          <div className="grid grid-cols-3 gap-x-8 gap-y-1 text-sm">
+            {byCurrency.map(([code, g]) => (
+              <div key={code} className="flex items-baseline justify-between gap-3">
+                <span className="font-semibold tnum">{code}</span>
+                <span className="text-xs text-slate-500 tnum">
+                  {t("dashboard.kpiContractValue")}: <b>{fmt.money(g.value, code, { compactFraction: true })}</b>
+                  {" · "}{t("dashboard.kpiCollected")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.collected, code, { compactFraction: true })}</b>
+                  {" · "}{t("dashboard.kpiOutstanding")}: <b className="text-amber-600 dark:text-amber-400">{fmt.money(g.outstanding, code, { compactFraction: true })}</b>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {financials!.readyToCollect.length > 0 && (
         <Card className="mb-4 border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900 dark:bg-emerald-900/10">
@@ -285,7 +346,9 @@ export function DashboardPage() {
                 </div>
                 <Badge value={fin.project.status} label={t(`status.${fin.project.status}`)} />
               </div>
-              <p className="mb-2 text-lg font-semibold tnum">{base.format(fin.contractValueEgp)}</p>
+              <p className="mb-2 text-lg font-semibold tnum">
+                {base.formatFrom(fin.contractValueMinor, fin.project.currency, fin.project.fxRateMicro)}
+              </p>
               <RatioBar ratioBp={fin.collectionRatioBp} secondaryBp={fin.certifiedRatioBp} className="!h-2.5" />
               <div className="mt-1.5 flex justify-between text-[11px] text-slate-500">
                 <span>{t("projects.collected")}: <b className="tnum">{fmt.percent(fin.collectionRatioBp)}</b></span>

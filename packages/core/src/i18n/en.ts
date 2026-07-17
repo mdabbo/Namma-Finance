@@ -358,6 +358,7 @@ export const en = {
     autoAllocate: "Auto-allocate (oldest first)",
     totalPaid: "Total paid",
     remainingBalance: "Remaining balance",
+    remainingHint: "Whole contract incl. work not yet certified — due now: {{due}}",
     collectionRate: "Collection %",
   },
   expenses: {
@@ -432,6 +433,7 @@ export const en = {
     readyToCollectHint: "Achieved milestones not yet certified — issue a certificate and collect from the client.",
     teamPayables: "Team payments due",
     teamPayablesHint: "The client paid these certificates — pay the matching stage to the team members.",
+    byCurrency: "By currency (face values)",
     certifiedVsCollected: "Certified vs. collected",
     consolidatedNote: "All figures consolidated in {{currency}}",
   },
