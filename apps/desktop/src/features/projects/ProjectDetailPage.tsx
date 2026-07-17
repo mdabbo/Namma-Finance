@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import { useRole } from "../../lib/roles";
 import { ContractForm } from "./ContractForm";
 import { PersonForm } from "../people/PeoplePage";
 import { StagesTab } from "./StagesTab";
@@ -36,6 +37,7 @@ export function ProjectDetailPage() {
   const { data: personPayments = [] } = usePersonPayments(assignments.map((a) => a.id));
   const contractMutations = useContractMutations();
 
+  const role = useRole();
   const [tab, setTab] = useState<Tab>("overview");
   const [contractModal, setContractModal] = useState<Contract | "new" | null>(null);
   const [deletingContract, setDeletingContract] = useState<{ contract: Contract; details: string[] } | null>(null);
@@ -59,7 +61,9 @@ export function ProjectDetailPage() {
     { agreed: 0, paid: 0 },
   );
 
-  const TABS: { key: Tab; label: string }[] = [
+  // engineers see the delivery side only — no money tabs
+  const ENGINEER_TABS: Tab[] = ["stages", "documents"];
+  const ALL_TABS: { key: Tab; label: string }[] = [
     { key: "overview", label: t("projects.overview") },
     { key: "stages", label: t("stages.title") },
     { key: "contracts", label: t("projects.contracts") },
@@ -69,6 +73,8 @@ export function ProjectDetailPage() {
     { key: "team", label: t("projects.team") },
     { key: "documents", label: t("documents.title") },
   ];
+  const TABS = role === "ENGINEER" ? ALL_TABS.filter((x) => ENGINEER_TABS.includes(x.key)) : ALL_TABS;
+  const activeTab = TABS.some((x) => x.key === tab) ? tab : TABS[0]!.key;
 
   return (
     <div>
@@ -97,7 +103,7 @@ export function ProjectDetailPage() {
             onClick={() => setTab(key)}
             className={cx(
               "border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              tab === key
+              activeTab ===key
                 ? "border-brand-600 text-brand-700 dark:text-brand-300"
                 : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300",
             )}
@@ -107,7 +113,7 @@ export function ProjectDetailPage() {
         ))}
       </div>
 
-      {tab === "overview" && (
+      {activeTab ==="overview" && (
         <div className="grid grid-cols-4 gap-3">
           <Card className="p-4">
             <p className="text-xs text-slate-500">{t("clients.totalContracts")}</p>
@@ -161,7 +167,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "contracts" && (
+      {activeTab ==="contracts" && (
         <div>
           <div className="mb-3 flex justify-end">
             <Button variant="primary" onClick={() => setContractModal("new")}>
@@ -230,12 +236,12 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {tab === "stages" && <StagesTab projectId={projectId} />}
-      {tab === "documents" && <DocumentsTab projectId={projectId} />}
-      {tab === "certificates" && <ProjectCertificates projectId={projectId} currency={currency} />}
-      {tab === "payments" && <ProjectPayments projectId={projectId} currency={currency} />}
+      {activeTab ==="stages" && <StagesTab projectId={projectId} />}
+      {activeTab ==="documents" && <DocumentsTab projectId={projectId} />}
+      {activeTab ==="certificates" && <ProjectCertificates projectId={projectId} currency={currency} />}
+      {activeTab ==="payments" && <ProjectPayments projectId={projectId} currency={currency} />}
 
-      {tab === "expenses" && (
+      {activeTab ==="expenses" && (
         <Card className="p-4">
           {expenses.length === 0 ? (
             <EmptyState message={t("common.empty")} />
@@ -264,7 +270,7 @@ export function ProjectDetailPage() {
         </Card>
       )}
 
-      {tab === "team" && (
+      {activeTab ==="team" && (
         <Card className="p-4">
           <div className="mb-3 flex justify-end">
             <Button variant="primary" onClick={() => setAddingMember(true)}>

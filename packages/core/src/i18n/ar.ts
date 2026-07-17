@@ -68,9 +68,10 @@ export const ar: Dictionary = {
     single: "مرحلة",
     addTemplate: "إضافة المراحل القياسية",
     newStage: "مرحلة جديدة",
+    timeline: "الجدول الزمني",
+    today: "اليوم",
     completion: "نسبة الإنجاز",
     engineers: "المهندسون",
-    timeline: "الجدول الزمني",
     template: {
       proposal: "العرض الفني",
       concept: "التصميم المبدئي",
@@ -411,6 +412,25 @@ export const ar: Dictionary = {
       PAID_OUT: "مدفوع",
     },
   },
+  notifications: {
+    title: "التنبيهات",
+    empty: "لا يوجد ما يستدعي انتباهك",
+    dueOn: "يستحق {{date}}",
+    bondExpires: "خطاب الضمان ينتهي {{date}}",
+    kind: {
+      OVERDUE: "مستخلص متأخر",
+      DUE_SOON: "مستخلص يستحق قريبًا",
+      READY_TO_COLLECT: "جاهز للاستخلاص",
+      TEAM_PAYABLE: "دفعة مستحقة لعضو الفريق",
+      BOND_EXPIRY: "خطاب ضمان ينتهي",
+      RECURRING_DUE: "مصروف دوري مستحق",
+    },
+  },
+  roles: {
+    ADMIN: "مدير",
+    ACCOUNTANT: "محاسب",
+    ENGINEER: "مهندس",
+  },
   dashboard: {
     title: "لوحة المتابعة",
     kpiContractValue: "إجمالي قيمة العقود",
@@ -487,5 +507,7 @@ export const ar: Dictionary = {
     syncPushed: "مرسَل",
     syncOk: "نجحت",
     syncFailed: "فشلت",
+    usersTitle: "المستخدمون والأدوار",
+    usersHint: "أنشئ حساب كل شخص من لوحة Supabase (Authentication → Users) ثم حدد دوره هنا. أول من يسجل الدخول يصبح مديرًا تلقائيًا.",
   },
 };

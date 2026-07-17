@@ -66,9 +66,10 @@ export const en = {
     single: "Stage",
     addTemplate: "Add standard stages",
     newStage: "New stage",
+    timeline: "Timeline",
+    today: "Today",
     completion: "Completion",
     engineers: "Engineers",
-    timeline: "Timeline",
     template: {
       proposal: "Proposal",
       concept: "Concept Design",
@@ -409,6 +410,20 @@ export const en = {
       PAID_OUT: "Paid",
     },
   },
+  notifications: {
+    title: "Notifications",
+    empty: "Nothing needs your attention",
+    dueOn: "Due {{date}}",
+    bondExpires: "Performance bond expires {{date}}",
+    kind: {
+      OVERDUE: "Overdue certificate",
+      DUE_SOON: "Certificate due soon",
+      READY_TO_COLLECT: "Ready to invoice",
+      TEAM_PAYABLE: "Team payment due",
+      BOND_EXPIRY: "Bond expiring",
+      RECURRING_DUE: "Recurring expense due",
+    },
+  },
   dashboard: {
     title: "Dashboard",
     kpiContractValue: "Total contract value",
@@ -485,6 +500,13 @@ export const en = {
     syncPushed: "sent",
     syncOk: "Success",
     syncFailed: "Failed",
+    usersTitle: "Users & roles",
+    usersHint: "Create each person's login in your Supabase dashboard (Authentication → Users); assign their role here. The first user to sign in becomes Admin automatically.",
+  },
+  roles: {
+    ADMIN: "Admin",
+    ACCOUNTANT: "Accountant",
+    ENGINEER: "Engineer",
   },
 };
 
