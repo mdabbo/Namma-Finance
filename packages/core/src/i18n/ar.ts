@@ -392,6 +392,7 @@ export const ar: Dictionary = {
     workProgress: "تقدم العمل",
     payments: "الدفعات",
     newPayment: "تسجيل دفعة",
+    duplicatePayment: "هذه الدفعة مسجلة بالفعل (نفس التاريخ والمبلغ والملاحظة) — غيّر التاريخ أو الملاحظة لتسجيلها مرة أخرى عمدًا.",
     statement: "كشف حساب",
     active: "نشط",
     inactive: "غير نشط",

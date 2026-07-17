@@ -390,6 +390,7 @@ export const en = {
     workProgress: "Work progress",
     payments: "Payments",
     newPayment: "Record payment",
+    duplicatePayment: "This exact payment (same date, amount and note) is already recorded — change the date or note to record it again on purpose.",
     statement: "Account statement",
     active: "Active",
     inactive: "Inactive",
