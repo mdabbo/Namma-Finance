@@ -8,7 +8,7 @@ import { useContractMutations, useContractsByProject, contractCascadeInfo } from
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
 import { useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
-import { assignmentSchema, computeAssignmentAccount, toEgpPiasters, type AssignmentInput } from "@mep/core";
+import { assignmentSchema, computeAssignmentAccount, type AssignmentInput } from "@mep/core";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, RatioBar, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { MoneyInput } from "../../components/MoneyInput";
@@ -48,12 +48,12 @@ export function ProjectDetailPage() {
   const BackIcon = i18n.dir() === "rtl" ? ArrowRight : ArrowLeft;
   const currency = project.currency;
 
-  const teamCostEgp = assignments.reduce(
+  const teamCost = assignments.reduce(
     (acc, a) => {
       const paid = personPayments.filter((p) => p.assignmentId === a.id).reduce((s, p) => s + p.amountMinor, 0);
       return {
-        agreed: acc.agreed + toEgpPiasters(a.agreedMinor, a.currency, a.fxRateMicro),
-        paid: acc.paid + toEgpPiasters(paid, a.currency, a.fxRateMicro),
+        agreed: acc.agreed + base.convertFrom(a.agreedMinor, a.currency, a.fxRateMicro),
+        paid: acc.paid + base.convertFrom(paid, a.currency, a.fxRateMicro),
       };
     },
     { agreed: 0, paid: 0 },
@@ -144,7 +144,7 @@ export function ProjectDetailPage() {
             <p className="text-xs text-slate-500">{t("dashboard.kpiExpenses")}</p>
             <p className="mt-1 text-lg font-semibold tnum">{base.format(fin?.expensesEgp ?? 0)}</p>
             <p className="text-xs text-slate-400 tnum">
-              {t("projects.teamCost")}: {base.format(teamCostEgp.paid)} / {base.format(teamCostEgp.agreed)}
+              {t("projects.teamCost")}: {fmt.money(teamCost.paid, base.code, { compactFraction: true })} / {fmt.money(teamCost.agreed, base.code, { compactFraction: true })}
             </p>
           </Card>
           <Card className="p-4">
@@ -495,9 +495,14 @@ function ProjectPayments({ projectId, currency }: { projectId: number; currency:
       due: acc.due + s.totalDueMinor,
       paid: acc.paid + s.totalPaidMinor,
       cashIn: acc.cashIn + s.totalCashInMinor,
+      // what the contract will bring in over its whole life: value + VAT
+      // (retention is inside that — withheld now, released at the end)
+      lifetime: acc.lifetime + s.contract.valueMinor + s.figures.vatMinor,
     }),
-    { due: 0, paid: 0, cashIn: 0 },
+    { due: 0, paid: 0, cashIn: 0, lifetime: 0 },
   );
+  const remaining = Math.max(0, totals.lifetime - totals.cashIn);
+  const dueNow = Math.max(0, totals.due - totals.paid);
 
   return (
     <div className="grid grid-cols-3 gap-3">
@@ -510,7 +515,10 @@ function ProjectPayments({ projectId, currency }: { projectId: number; currency:
       <Card className="p-4">
         <p className="text-xs text-slate-500">{t("payments.remainingBalance")}</p>
         <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-          {fmt.money(totals.due - totals.paid, currency, { compactFraction: true })}
+          {fmt.money(remaining, currency, { compactFraction: true })}
+        </p>
+        <p className="text-xs text-slate-400 tnum">
+          {t("payments.remainingHint", { due: fmt.money(dueNow, currency, { compactFraction: true }) })}
         </p>
       </Card>
       <Card className="p-4">

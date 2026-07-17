@@ -187,6 +187,15 @@ export async function listPersonPayments(assignmentIds: number[]): Promise<Perso
  * revenue − expenses — always includes team costs.
  */
 export async function createPersonPayment(input: PersonPaymentInput): Promise<number> {
+  // guard against accidental double-recording (double-click, repeated "Pay"):
+  // an EXACT twin — same assignment, date, amount and note — is rejected;
+  // change the date or note to record a genuine second payment
+  const twin = await selectOne<{ id: number }>(
+    "SELECT id FROM person_payments WHERE assignment_id = $1 AND date = $2 AND amount_minor = $3 AND note IS $4 LIMIT 1",
+    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
+  );
+  if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
+
   const r = await execute(
     "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
     [input.assignmentId, input.date, input.amountMinor, input.note ?? null],

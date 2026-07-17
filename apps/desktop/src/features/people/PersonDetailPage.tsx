@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, ArrowRight, FileDown, Plus, Trash2 } from "lucide-react";
@@ -193,7 +193,17 @@ export function PersonDetailPage() {
           initialAmountMinor={paymentModal.amountMinor}
           initialNote={paymentModal.note}
           busy={mutations.createPersonPayment.isPending}
-          onClose={() => setPaymentModal(null)}
+          error={
+            mutations.createPersonPayment.isError
+              ? (mutations.createPersonPayment.error as Error).message === "DUPLICATE_PERSON_PAYMENT"
+                ? t("people.duplicatePayment")
+                : (mutations.createPersonPayment.error as Error).message
+              : undefined
+          }
+          onClose={() => {
+            mutations.createPersonPayment.reset();
+            setPaymentModal(null);
+          }}
           onSubmit={(input) => mutations.createPersonPayment.mutate(input, { onSuccess: () => setPaymentModal(null) })}
         />
       )}
@@ -409,6 +419,7 @@ function PersonPaymentForm({
   onSubmit,
   onClose,
   busy,
+  error,
 }: {
   assignment: AssignmentListItem;
   initialAmountMinor?: number;
@@ -416,12 +427,20 @@ function PersonPaymentForm({
   onSubmit: (input: PersonPaymentInput) => void;
   onClose: () => void;
   busy?: boolean;
+  error?: string;
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState({ date: todayIso(), amountMinor: initialAmountMinor ?? 0, note: initialNote ?? "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // same-tick double-click latch: isPending flips only on the next render,
+  // which is too late to stop a fast second click from double-recording
+  const firing = useRef(false);
+  useEffect(() => {
+    if (!busy) firing.current = false;
+  }, [busy]);
 
   function submit() {
+    if (firing.current) return;
     const parsed = personPaymentSchema.safeParse({
       ...form,
       assignmentId: assignment.id,
@@ -433,6 +452,7 @@ function PersonPaymentForm({
       setErrors(errs);
       return;
     }
+    firing.current = true;
     onSubmit(parsed.data);
   }
 
@@ -449,6 +469,7 @@ function PersonPaymentForm({
           <Input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
         </Field>
       </div>
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={onClose}>{t("common.cancel")}</Button>
         <Button variant="primary" onClick={submit} disabled={busy}>{t("common.save")}</Button>
