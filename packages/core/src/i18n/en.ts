@@ -395,6 +395,18 @@ export const en = {
     selectPerson: "Select person",
     orCreateNew: "New person…",
   },
+  team: {
+    schedule: "Payment schedule (mirrors the contract)",
+    remainder: "Not yet certified",
+    dueNow: "Due now",
+    payStage: "Pay",
+    status: {
+      PENDING: "Pending",
+      AWAITING_COLLECTION: "Awaiting collection",
+      PAYABLE: "Payable now",
+      PAID_OUT: "Paid",
+    },
+  },
   dashboard: {
     title: "Dashboard",
     kpiContractValue: "Total contract value",
@@ -418,6 +430,8 @@ export const en = {
     projectCards: "Projects",
     readyToCollect: "Ready to invoice & collect",
     readyToCollectHint: "Achieved milestones not yet certified — issue a certificate and collect from the client.",
+    teamPayables: "Team payments due",
+    teamPayablesHint: "The client paid these certificates — pay the matching stage to the team members.",
     certifiedVsCollected: "Certified vs. collected",
     consolidatedNote: "All figures consolidated in {{currency}}",
   },

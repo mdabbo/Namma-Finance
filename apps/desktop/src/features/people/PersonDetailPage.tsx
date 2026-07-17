@@ -2,7 +2,17 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, ArrowRight, FileDown, Plus, Trash2 } from "lucide-react";
-import { assignmentSchema, computeAssignmentAccount, personPaymentSchema, type AssignmentInput, type PersonPaymentInput } from "@mep/core";
+import {
+  assignmentSchema,
+  computeAssignmentAccount,
+  computeTeamPayout,
+  personPaymentSchema,
+  type AssignmentInput,
+  type ContractState,
+  type PersonPaymentInput,
+  type TeamPayoutState,
+  type TeamStage,
+} from "@mep/core";
 import {
   useAssignmentsByPerson,
   usePeopleMutations,
@@ -10,6 +20,7 @@ import {
   usePersonPayments,
   type AssignmentListItem,
 } from "../../repositories/people";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useProjects } from "../../repositories/projects";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, RatioBar, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
@@ -26,16 +37,28 @@ export function PersonDetailPage() {
   const { data: person } = usePerson(personId);
   const { data: assignments = [] } = useAssignmentsByPerson(personId);
   const { data: payments = [] } = usePersonPayments(assignments.map((a) => a.id));
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = usePeopleMutations();
 
   const [assignmentModal, setAssignmentModal] = useState<AssignmentListItem | "new" | null>(null);
-  const [paymentModal, setPaymentModal] = useState<AssignmentListItem | null>(null);
+  const [paymentModal, setPaymentModal] = useState<{ assignment: AssignmentListItem; amountMinor?: number; note?: string } | null>(null);
   const [printStatement, setPrintStatement] = useState(false);
 
   if (!person) return <EmptyState message={t("common.loading")} />;
   const BackIcon = i18n.dir() === "rtl" ? ArrowRight : ArrowLeft;
 
   const accounts = assignments.map((a) => computeAssignmentAccount(a, payments));
+
+  const statesByProject = new Map<number, ContractState[]>();
+  for (const state of financials?.contractStates.values() ?? []) {
+    const list = statesByProject.get(state.contract.projectId) ?? [];
+    list.push(state);
+    statesByProject.set(state.contract.projectId, list);
+  }
+  const payoutOf = (a: AssignmentListItem): TeamPayoutState => {
+    const paid = payments.filter((p) => p.assignmentId === a.id).reduce((s, p) => s + p.amountMinor, 0);
+    return computeTeamPayout(a.agreedMinor, statesByProject.get(a.projectId) ?? [], paid);
+  };
 
   return (
     <div>
@@ -71,6 +94,7 @@ export function PersonDetailPage() {
           {accounts.map((account) => {
             const a = assignments.find((x) => x.id === account.assignment.id)!;
             const assignmentPayments = payments.filter((p) => p.assignmentId === a.id);
+            const payout = payoutOf(a);
             return (
               <Card key={a.id} className="p-4">
                 <div className="mb-3 flex items-start justify-between">
@@ -80,7 +104,7 @@ export function PersonDetailPage() {
                     {a.scope && <p className="mt-1 text-sm text-slate-500">{a.scope}</p>}
                   </div>
                   <div className="flex gap-1">
-                    <Button variant="ghost" onClick={() => setPaymentModal(a)}>
+                    <Button variant="ghost" onClick={() => setPaymentModal({ assignment: a })}>
                       <Plus size={14} /> {t("people.newPayment")}
                     </Button>
                     <Button variant="ghost" onClick={() => setAssignmentModal(a)}>{t("common.edit")}</Button>
@@ -107,6 +131,20 @@ export function PersonDetailPage() {
                     <RatioBar ratioBp={account.paidRatioBp} className="mb-1.5" />
                   </div>
                 </div>
+
+                {payout.stages.length > 0 && (
+                  <TeamScheduleTable
+                    payout={payout}
+                    currency={a.currency}
+                    onPay={(stage) =>
+                      setPaymentModal({
+                        assignment: a,
+                        amountMinor: stage.amountMinor - stage.paidOutMinor,
+                        note: stage.title || t("team.remainder"),
+                      })
+                    }
+                  />
+                )}
 
                 {a.progressNote && (
                   <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/60">{t("people.workProgress")}: {a.progressNote}</p>
@@ -151,7 +189,9 @@ export function PersonDetailPage() {
 
       {paymentModal && (
         <PersonPaymentForm
-          assignment={paymentModal}
+          assignment={paymentModal.assignment}
+          initialAmountMinor={paymentModal.amountMinor}
+          initialNote={paymentModal.note}
           busy={mutations.createPersonPayment.isPending}
           onClose={() => setPaymentModal(null)}
           onSubmit={(input) => mutations.createPersonPayment.mutate(input, { onSuccess: () => setPaymentModal(null) })}
@@ -213,6 +253,68 @@ export function PersonDetailPage() {
           </div>
         </PrintPortal>
       )}
+    </div>
+  );
+}
+
+/**
+ * The assignment's payment schedule, mirrored live from the project contract
+ * (confirmed rule): same milestones / payment stages, fee split by the same
+ * shares. A stage's certificate being PAID makes it payable to the person.
+ */
+const STAGE_BADGE: Record<TeamStage["status"], string> = {
+  PENDING: "DRAFT",
+  AWAITING_COLLECTION: "SUBMITTED",
+  PAYABLE: "OVERDUE",
+  PAID_OUT: "PAID",
+};
+
+function TeamScheduleTable({
+  payout,
+  currency,
+  onPay,
+}: {
+  payout: TeamPayoutState;
+  currency: string;
+  onPay: (stage: TeamStage) => void;
+}) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const manyContracts = new Set(payout.stages.map((s) => s.contractNumber)).size > 1;
+
+  return (
+    <div className="mb-2 rounded-lg border border-slate-100 dark:border-slate-800">
+      <div className="flex items-center justify-between px-3 py-2">
+        <p className="text-xs font-semibold text-slate-500">{t("team.schedule")}</p>
+        {payout.dueMinor > 0 && (
+          <span className="text-xs font-semibold tnum text-red-600 dark:text-red-400">
+            {t("team.dueNow")}: {fmt.money(payout.dueMinor, currency, { compactFraction: true })}
+          </span>
+        )}
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          {payout.stages.map((stage, i) => (
+            <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
+              <td className="px-3 py-1.5">
+                {stage.title || t("team.remainder")}
+                {manyContracts && <span className="ms-1 text-xs text-slate-400 tnum">({stage.contractNumber})</span>}
+              </td>
+              <td className="py-1.5 text-end tnum">{fmt.money(stage.amountMinor, currency, { compactFraction: true })}</td>
+              <td className="px-3 py-1.5 text-end">
+                <Badge value={STAGE_BADGE[stage.status]} label={t(`team.status.${stage.status}`)} />
+              </td>
+              <td className="w-16 pe-3 text-end">
+                {stage.status === "PAYABLE" && (
+                  <button className="text-xs font-semibold text-brand-600 hover:underline" onClick={() => onPay(stage)}>
+                    {t("team.payStage")}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -302,17 +404,21 @@ function AssignmentForm({
 
 function PersonPaymentForm({
   assignment,
+  initialAmountMinor,
+  initialNote,
   onSubmit,
   onClose,
   busy,
 }: {
   assignment: AssignmentListItem;
+  initialAmountMinor?: number;
+  initialNote?: string;
   onSubmit: (input: PersonPaymentInput) => void;
   onClose: () => void;
   busy?: boolean;
 }) {
   const { t } = useTranslation();
-  const [form, setForm] = useState({ date: todayIso(), amountMinor: 0, note: "" });
+  const [form, setForm] = useState({ date: todayIso(), amountMinor: initialAmountMinor ?? 0, note: initialNote ?? "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   function submit() {

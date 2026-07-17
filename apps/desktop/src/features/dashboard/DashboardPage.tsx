@@ -7,6 +7,7 @@ import {
   BellRing,
   Briefcase,
   CheckCircle2,
+  HandCoins,
   FileSpreadsheet,
   Percent,
   TrendingDown,
@@ -165,6 +166,35 @@ export function DashboardPage() {
                 </div>
                 <span className="ms-3 shrink-0 font-semibold tnum text-emerald-700 dark:text-emerald-300">
                   {fmt.money(item.readyMinor, item.currency, { compactFraction: true })}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {financials!.teamPayables.length > 0 && (
+        <Card className="mb-4 border-sky-200 bg-sky-50/50 p-4 dark:border-sky-900 dark:bg-sky-900/10">
+          <div className="mb-1 flex items-center gap-2">
+            <HandCoins size={16} className="text-sky-600 dark:text-sky-400" />
+            <p className="text-sm font-semibold text-sky-800 dark:text-sky-300">{t("dashboard.teamPayables")}</p>
+          </div>
+          <p className="mb-3 text-xs text-sky-700/70 dark:text-sky-400/70">{t("dashboard.teamPayablesHint")}</p>
+          <div className="space-y-1.5">
+            {financials!.teamPayables.map((item) => (
+              <Link
+                key={item.assignmentId}
+                to={`/people/${item.personId}`}
+                className="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 text-sm hover:bg-white dark:bg-slate-900/50 dark:hover:bg-slate-900"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">
+                    {item.personName} <span className="text-xs text-slate-400 tnum">({item.projectCode} · {item.projectName})</span>
+                  </p>
+                  <p className="truncate text-xs text-slate-500">{item.dueTitles.join(" · ")}</p>
+                </div>
+                <span className="ms-3 shrink-0 font-semibold tnum text-sky-700 dark:text-sky-300">
+                  {fmt.money(item.dueMinor, item.currency, { compactFraction: true })}
                 </span>
               </Link>
             ))}

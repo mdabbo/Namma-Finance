@@ -3,6 +3,7 @@ import {
   computeContractState,
   computeProjectFinancials,
   computeReadyToBill,
+  computeTeamPayout,
   parseMilestones,
   toEgpPiasters,
   type Contract,
@@ -56,6 +57,20 @@ export interface ReadyToCollectItem {
   readyEgp: number;
 }
 
+export interface TeamPayableItem {
+  assignmentId: number;
+  personId: number;
+  personName: string;
+  projectId: number;
+  projectName: string;
+  projectCode: string;
+  currency: string;
+  dueMinor: number;
+  dueEgp: number;
+  /** Released stage titles not yet paid to the person. */
+  dueTitles: string[];
+}
+
 export interface WorkspaceFinancials {
   projects: ProjectFinancials[];
   contractStates: Map<number, ContractState>;
@@ -64,6 +79,8 @@ export interface WorkspaceFinancials {
   cashIn: { date: string; egpMinor: number }[];
   /** Achieved milestones not yet certified — work the client should be billed for. */
   readyToCollect: ReadyToCollectItem[];
+  /** Paid certificates whose team-member share has not been paid out yet. */
+  teamPayables: TeamPayableItem[];
 }
 
 /** Load everything and compute the full financial state of the office. */
@@ -153,7 +170,55 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
   }
   readyToCollect.sort((a, b) => b.readyEgp - a.readyEgp);
 
-  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect };
+  // team payables: client paid a certificate → the matching stage of every
+  // assignment on that project becomes payable to the team member
+  const assignments = await select<{
+    id: number; person_id: number; project_id: number; agreed_minor: number;
+    currency: string; fx_rate_micro: number; person_name: string;
+  }>(
+    `SELECT a.id, a.person_id, a.project_id, a.agreed_minor, a.currency, a.fx_rate_micro, pe.name AS person_name
+     FROM project_assignments a JOIN people pe ON pe.id = a.person_id`,
+  );
+  const paidByAssignment = new Map<number, number>();
+  for (const r of await select<{ assignment_id: number; paid: number }>(
+    "SELECT assignment_id, SUM(amount_minor) AS paid FROM person_payments GROUP BY assignment_id",
+  )) {
+    paidByAssignment.set(r.assignment_id, r.paid);
+  }
+  const statesByProject = new Map<number, ContractState[]>();
+  for (const contract of contracts) {
+    const list = statesByProject.get(contract.projectId) ?? [];
+    list.push(contractStates.get(contract.id)!);
+    statesByProject.set(contract.projectId, list);
+  }
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+  const teamPayables: TeamPayableItem[] = [];
+  for (const a of assignments) {
+    const project = projectById.get(a.project_id);
+    if (!project) continue;
+    const payout = computeTeamPayout(
+      a.agreed_minor,
+      statesByProject.get(a.project_id) ?? [],
+      paidByAssignment.get(a.id) ?? 0,
+    );
+    if (payout.dueMinor > 0) {
+      teamPayables.push({
+        assignmentId: a.id,
+        personId: a.person_id,
+        personName: a.person_name,
+        projectId: project.id,
+        projectName: project.name,
+        projectCode: project.code,
+        currency: a.currency,
+        dueMinor: payout.dueMinor,
+        dueEgp: toEgpPiasters(payout.dueMinor, a.currency, a.fx_rate_micro),
+        dueTitles: payout.dueTitles,
+      });
+    }
+  }
+  teamPayables.sort((a, b) => b.dueEgp - a.dueEgp);
+
+  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables };
 }
 
 export function useWorkspaceFinancials() {

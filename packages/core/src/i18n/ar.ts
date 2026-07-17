@@ -397,6 +397,18 @@ export const ar: Dictionary = {
     selectPerson: "اختر الشخص",
     orCreateNew: "شخص جديد…",
   },
+  team: {
+    schedule: "جدول الدفعات (مطابق للعقد)",
+    remainder: "لم يُستخلص بعد",
+    dueNow: "مستحق الآن",
+    payStage: "دفع",
+    status: {
+      PENDING: "قيد الانتظار",
+      AWAITING_COLLECTION: "بانتظار التحصيل",
+      PAYABLE: "مستحق الدفع الآن",
+      PAID_OUT: "مدفوع",
+    },
+  },
   dashboard: {
     title: "لوحة المتابعة",
     kpiContractValue: "إجمالي قيمة العقود",
@@ -420,6 +432,8 @@ export const ar: Dictionary = {
     projectCards: "المشاريع",
     readyToCollect: "مستحق الاستخلاص والتحصيل",
     readyToCollectHint: "دفعات مرحلية منجزة لم تُستخلص بعد — أصدر المستخلص وحصِّل من العميل.",
+    teamPayables: "دفعات مستحقة لفريق العمل",
+    teamPayablesHint: "دفع العميل هذه المستخلصات — ادفع المرحلة المقابلة لأعضاء الفريق.",
     certifiedVsCollected: "المستخلص مقابل المحصَّل",
     consolidatedNote: "جميع الأرقام موحَّدة بعملة {{currency}}",
   },

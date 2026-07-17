@@ -277,6 +277,7 @@ export function ProjectDetailPage() {
             <div className="space-y-2">
               {assignments.map((a) => {
                 const account = computeAssignmentAccount(a, personPayments);
+                const payable = financials?.teamPayables.find((x) => x.assignmentId === a.id);
                 return (
                   <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2.5 dark:border-slate-800">
                     <div>
@@ -286,6 +287,11 @@ export function ProjectDetailPage() {
                       {a.scope && <p className="text-xs text-slate-400">{a.scope}</p>}
                     </div>
                     <div className="flex items-center gap-6 text-sm">
+                      {payable && (
+                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold tnum text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                          {t("team.dueNow")}: {fmt.money(payable.dueMinor, a.currency, { compactFraction: true })}
+                        </span>
+                      )}
                       <span className="tnum">{t("people.agreedAmount")}: {fmt.money(a.agreedMinor, a.currency, { compactFraction: true })}</span>
                       <span className="tnum text-emerald-600 dark:text-emerald-400">{t("people.paidToDate")}: {fmt.money(account.paidMinor, a.currency, { compactFraction: true })}</span>
                       <span className="tnum text-amber-600 dark:text-amber-400">{t("people.remainingAmount")}: {fmt.money(account.remainingMinor, a.currency, { compactFraction: true })}</span>

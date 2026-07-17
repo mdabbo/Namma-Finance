@@ -4,6 +4,7 @@ export * from "./overdue";
 export * from "./aggregate";
 export * from "./allocation";
 export * from "./valuation";
+export * from "./teamPayout";
 export * from "./overhead";
 export * from "./profitability";
 export * from "./cashflow";
