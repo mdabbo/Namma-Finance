@@ -163,6 +163,12 @@ pub fn run() {
             sql: include_str!("../migrations/0005_backfill_team_expenses.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "phase3_sync_tracking",
+            sql: include_str!("../migrations/0006_sync_tracking.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

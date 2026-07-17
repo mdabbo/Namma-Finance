@@ -13,6 +13,11 @@ export interface AppSettings {
   backupFolder: string;
   /** How office overhead is allocated to projects for net-profit reporting. */
   overheadRule: "REVENUE" | "DIRECT_COST" | "EVEN";
+  /** Phase 3 cloud sync (Supabase). The anon key is public-safe; RLS guards the data. */
+  syncUrl: string;
+  syncAnonKey: string;
+  syncEmail: string;
+  syncAuto: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -23,6 +28,10 @@ const DEFAULTS: AppSettings = {
   baseCurrency: "EGP",
   backupFolder: "",
   overheadRule: "REVENUE",
+  syncUrl: "",
+  syncAnonKey: "",
+  syncEmail: "",
+  syncAuto: false,
 };
 
 const KEY_MAP: Record<keyof AppSettings, string> = {
@@ -33,6 +42,10 @@ const KEY_MAP: Record<keyof AppSettings, string> = {
   baseCurrency: "base_currency",
   backupFolder: "backup_folder",
   overheadRule: "overhead_rule",
+  syncUrl: "sync_url",
+  syncAnonKey: "sync_anon_key",
+  syncEmail: "sync_email",
+  syncAuto: "sync_auto",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -46,6 +59,10 @@ export async function loadSettings(): Promise<AppSettings> {
     baseCurrency: (map.get("base_currency") as AppSettings["baseCurrency"]) || DEFAULTS.baseCurrency,
     backupFolder: map.get("backup_folder") ?? "",
     overheadRule: (map.get("overhead_rule") as AppSettings["overheadRule"]) || DEFAULTS.overheadRule,
+    syncUrl: map.get("sync_url") ?? "",
+    syncAnonKey: map.get("sync_anon_key") ?? "",
+    syncEmail: map.get("sync_email") ?? "",
+    syncAuto: map.get("sync_auto") === "true",
   };
 }
 
