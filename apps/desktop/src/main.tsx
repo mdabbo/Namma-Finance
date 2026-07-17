@@ -70,8 +70,13 @@ async function bootstrap() {
   runDailyBackupIfDue().catch((err) => console.error("auto-backup failed", err));
 
   // heal certificates marked PAID before payments were enforced: create their
-  // backing payment records so "collected" matches reality (idempotent)
-  void import("./repositories/backfill").then(({ runPaidBackfill }) => runPaidBackfill(queryClient));
+  // backing payment records so "collected" matches reality (idempotent).
+  // Repeats every 10 minutes so a gap left by a failed save-time backfill
+  // closes without waiting for the next app start.
+  void import("./repositories/backfill").then(({ runPaidBackfill }) => {
+    void runPaidBackfill(queryClient);
+    setInterval(() => void runPaidBackfill(queryClient), 10 * 60_000);
+  });
 }
 
 void bootstrap();

@@ -16,6 +16,7 @@ import {
   Briefcase,
 } from "lucide-react";
 import { useSettings, useUpdateSetting } from "../lib/settings";
+import { useAutoSync } from "../repositories/sync";
 import { Button, cx } from "../components/ui";
 import { useSearchPalette } from "../features/search/SearchPalette";
 import logoUrl from "../assets/namaa-logo.png";
@@ -37,6 +38,7 @@ export function Layout() {
   const { data: settings } = useSettings();
   const updateSetting = useUpdateSetting();
   const { openSearch, SearchPortal } = useSearchPalette();
+  useAutoSync();
 
   const theme = settings?.theme ?? "light";
   const language = settings?.language ?? "ar";
@@ -90,6 +92,19 @@ export function Layout() {
               {t("common.search")}
               <kbd className="rounded border border-slate-300 px-1 text-[9px] dark:border-slate-600">Ctrl+K</kbd>
             </button>
+            <Button
+              variant="ghost"
+              title={t("settings.baseCurrency")}
+              className="!px-2 text-xs font-semibold tnum"
+              onClick={() => {
+                const order = ["EGP", "SAR", "USD"] as const;
+                const current = settings?.baseCurrency ?? "EGP";
+                const next = order[(order.indexOf(current) + 1) % order.length]!;
+                updateSetting.mutate({ key: "baseCurrency", value: next });
+              }}
+            >
+              {settings?.baseCurrency ?? "EGP"}
+            </Button>
             <Button
               variant="ghost"
               title={t("settings.language")}

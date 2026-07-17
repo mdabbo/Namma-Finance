@@ -152,12 +152,22 @@ export function useCertificateMutations() {
   };
   // Saving a certificate as PAID must also record the money (see
   // backPaidCertificatesWithPayments) — otherwise "collected" stays 0.
+  // The status write has already landed when this runs, so a transient
+  // failure here must not be silent: retry once, then let the error reach
+  // the mutation state (the periodic heal is the final safety net).
   const backfillIfPaid = async (id: number, status: CertificateStatus) => {
-    if (status === "PAID") {
-      const { backPaidCertificatesWithPayments } = await import("./payments");
+    if (status !== "PAID") return;
+    const { backPaidCertificatesWithPayments } = await import("./payments");
+    try {
+      await backPaidCertificatesWithPayments([id]);
+    } catch (err) {
+      console.error("paid-backfill failed, retrying once", err);
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
       await backPaidCertificatesWithPayments([id]);
     }
   };
+  // invalidate on error too: the status may have been written even when a
+  // later step failed, and the UI must show what the database now says
   return {
     create: useMutation({
       mutationFn: async (input: CertificateInput) => {
@@ -166,22 +176,22 @@ export function useCertificateMutations() {
         await backfillIfPaid(id, input.status);
         return id;
       },
-      onSuccess: invalidate,
+      onSettled: invalidate,
     }),
     update: useMutation({
       mutationFn: async (v: { id: number; input: CertificateInput }) => {
         await updateCertificate(v.id, v.input);
         await backfillIfPaid(v.id, v.input.status);
       },
-      onSuccess: invalidate,
+      onSettled: invalidate,
     }),
     setStatus: useMutation({
       mutationFn: async (v: { id: number; status: CertificateStatus; submissionDate?: string }) => {
         await setCertificateStatus(v.id, v.status, v.submissionDate);
         await backfillIfPaid(v.id, v.status);
       },
-      onSuccess: invalidate,
+      onSettled: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteCertificate, onSuccess: invalidate }),
+    remove: useMutation({ mutationFn: deleteCertificate, onSettled: invalidate }),
   };
 }

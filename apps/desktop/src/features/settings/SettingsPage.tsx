@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { DatabaseBackup, Languages, Coins, Tags, Plus, RefreshCw } from "lucide-react";
+import { CloudUpload, DatabaseBackup, Languages, Coins, Tags, Plus, RefreshCw } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
+import { invalidateSyncClient, useLastSyncReport, useSyncMutations, useSyncSession } from "../../repositories/sync";
 import { Button, Card, Field, Input, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
@@ -179,6 +180,8 @@ export function SettingsPage() {
           </div>
         </Card>
 
+        <SyncSection />
+
         <Card className="p-5">
           <SectionTitle icon={<DatabaseBackup size={16} />} title={t("settings.backup")} />
           <p className="mb-3 text-xs text-slate-400">{t("settings.dailyBackupNote")}</p>
@@ -236,6 +239,149 @@ export function SettingsPage() {
       {/* keep i18n import referenced for language-sensitive rerender */}
       <span className="hidden">{i18n.language}</span>
     </div>
+  );
+}
+
+/** Phase 3: Supabase cloud sync — connection, sign-in, manual & auto sync. */
+function SyncSection() {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const { data: settings } = useSettings();
+  const updateSetting = useUpdateSetting();
+  const { data: session } = useSyncSession();
+  const { data: lastReport } = useLastSyncReport();
+  const sync = useSyncMutations();
+  const [login, setLogin] = useState({ email: "", password: "" });
+
+  const configured = !!settings?.syncUrl && !!settings?.syncAnonKey;
+
+  return (
+    <Card className="p-5">
+      <SectionTitle icon={<CloudUpload size={16} />} title={t("settings.syncTitle")} />
+      <p className="mb-4 text-xs text-slate-400">{t("settings.syncNote")}</p>
+
+      <div className="mb-4 grid grid-cols-2 gap-4">
+        <Field label={t("settings.syncUrl")}>
+          <Input
+            dir="ltr"
+            placeholder="https://xxxx.supabase.co"
+            defaultValue={settings?.syncUrl ?? ""}
+            onBlur={(e) => {
+              const value = e.target.value.trim();
+              if (value !== settings?.syncUrl) {
+                updateSetting.mutate({ key: "syncUrl", value });
+                invalidateSyncClient();
+              }
+            }}
+          />
+        </Field>
+        <Field label={t("settings.syncAnonKey")}>
+          <Input
+            dir="ltr"
+            type="password"
+            placeholder="eyJ…"
+            defaultValue={settings?.syncAnonKey ?? ""}
+            onBlur={(e) => {
+              const value = e.target.value.trim();
+              if (value !== settings?.syncAnonKey) {
+                updateSetting.mutate({ key: "syncAnonKey", value });
+                invalidateSyncClient();
+              }
+            }}
+          />
+        </Field>
+      </div>
+
+      {configured && !session && (
+        <div className="mb-4 flex items-end gap-3">
+          <Field label={t("settings.syncEmail")} className="w-64">
+            <Input
+              dir="ltr"
+              type="email"
+              value={login.email || settings?.syncEmail || ""}
+              onChange={(e) => setLogin((l) => ({ ...l, email: e.target.value }))}
+            />
+          </Field>
+          <Field label={t("settings.syncPassword")} className="w-64">
+            <Input
+              dir="ltr"
+              type="password"
+              value={login.password}
+              onChange={(e) => setLogin((l) => ({ ...l, password: e.target.value }))}
+            />
+          </Field>
+          <Button
+            variant="primary"
+            disabled={sync.signIn.isPending || !login.password || !(login.email || settings?.syncEmail)}
+            onClick={() => {
+              const email = login.email || settings?.syncEmail || "";
+              sync.signIn.mutate(
+                { email, password: login.password },
+                {
+                  onSuccess: () => {
+                    updateSetting.mutate({ key: "syncEmail", value: email });
+                    setLogin({ email: "", password: "" });
+                  },
+                },
+              );
+            }}
+          >
+            {t("settings.syncSignIn")}
+          </Button>
+          {sync.signIn.isError && (
+            <span className="pb-2 text-xs text-red-600">{(sync.signIn.error as Error).message}</span>
+          )}
+        </div>
+      )}
+
+      {session && (
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-sm text-slate-500">
+            {t("settings.syncSignedInAs")} <b dir="ltr">{session.user.email}</b>
+          </span>
+          <Button variant="ghost" onClick={() => sync.signOut.mutate()}>{t("settings.syncSignOut")}</Button>
+        </div>
+      )}
+
+      {session && (
+        <div className="flex flex-wrap items-center gap-4">
+          <Button variant="primary" disabled={sync.run.isPending} onClick={() => sync.run.mutate()}>
+            <RefreshCw size={14} className={sync.run.isPending ? "animate-spin" : ""} />
+            {t("settings.syncNow")}
+          </Button>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings?.syncAuto ?? false}
+              onChange={(e) => updateSetting.mutate({ key: "syncAuto", value: e.target.checked })}
+            />
+            {t("settings.syncAuto")}
+          </label>
+        </div>
+      )}
+
+      {(sync.run.data ?? lastReport) && (
+        <SyncReportLine report={(sync.run.data ?? lastReport)!} dateFmt={(d: string) => `${fmt.date(d.slice(0, 10))} ${d.slice(11, 16)}`} />
+      )}
+    </Card>
+  );
+}
+
+function SyncReportLine({
+  report,
+  dateFmt,
+}: {
+  report: { finishedAt: string; ok: boolean; pulled: number; pushed: number; deletedLocal: number; deletedRemote: number; error?: string };
+  dateFmt: (iso: string) => string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <p className={cx("mt-3 text-xs", report.ok ? "text-slate-400" : "text-red-600")}>
+      {t("settings.syncLast")}: {dateFmt(report.finishedAt)} —{" "}
+      {report.ok
+        ? `${t("settings.syncOk")} · ${t("settings.syncPulled")}: ${report.pulled + report.deletedLocal} · ${t("settings.syncPushed")}: ${report.pushed + report.deletedRemote}`
+        : `${t("settings.syncFailed")}: ${report.error}`}
+    </p>
   );
 }
 
