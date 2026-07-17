@@ -508,6 +508,26 @@ export const en = {
     ACCOUNTANT: "Accountant",
     ENGINEER: "Engineer",
   },
+  lock: {
+    sectionTitle: "App lock",
+    hint: "Ask for a password every time the app opens on this PC. It locks the app's door only — the database file itself is not encrypted. If you forget it, your cloud sync login unlocks the app.",
+    title: "Enter password",
+    recoveryTitle: "Unlock with cloud account",
+    password: "Password",
+    current: "Current password",
+    new: "New password",
+    confirm: "Confirm password",
+    unlock: "Unlock",
+    wrong: "Wrong password",
+    mismatch: "Passwords must match (at least 4 characters)",
+    enable: "Enable lock",
+    change: "Change password",
+    disable: "Disable lock",
+    saved: "App lock updated",
+    disabled: "App lock disabled",
+    forgot: "Forgot password? Unlock with your cloud account",
+    backToPassword: "Back to password",
+  },
 };
 
 export type Dictionary = typeof en;
