@@ -10,7 +10,6 @@ import {
   milestonesTotalBp,
   parseDrawings,
   parseMilestones,
-  ratioBp,
   type Contract,
   type ContractInput,
   type ContractValuationMode,
@@ -197,7 +196,6 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
               <Plus size={14} /> {t("contracts.addMilestone")}
             </Button>
           </div>
-          <AdvanceFirstStage advanceMinor={form.advanceMinor} valueMinor={form.valueMinor} currency={currency} />
           <div className="space-y-2">
             {milestones.map((m, i) => {
               const linkedStage = stages.find((s) => s.id === m.stageId);
@@ -277,7 +275,6 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
             </Button>
           </div>
           <p className="mb-3 text-xs text-slate-400">{t("contracts.valueFromDrawings")}</p>
-          <AdvanceFirstStage advanceMinor={form.advanceMinor} valueMinor={drawingsValueMinor(drawings)} currency={currency} />
           <div className="space-y-2">
             {drawings.map((d, i) => (
               <div key={i} className="flex items-center gap-2">
@@ -341,25 +338,5 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
         <Button variant="primary" onClick={submit} disabled={busy}>{t("common.save")}</Button>
       </div>
     </Modal>
-  );
-}
-
-/**
- * The down payment is ALWAYS the first payment stage of a contract (confirmed
- * rule) — shown pinned above the milestone/drawing plan. Derived from the
- * advance terms; it lives outside the 100% plan because certificates recover
- * it automatically.
- */
-function AdvanceFirstStage({ advanceMinor, valueMinor, currency }: { advanceMinor: number; valueMinor: number; currency: string }) {
-  const { t } = useTranslation();
-  const fmt = useFormat();
-  if (advanceMinor <= 0) return null;
-  return (
-    <div className="mb-3 flex items-center gap-2 rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2 text-sm dark:border-brand-800 dark:bg-brand-900/20">
-      <span className="rounded-full bg-brand-600 px-1.5 text-[10px] font-bold text-white">1</span>
-      <span className="font-medium">{t("paymentKind.ADVANCE")}</span>
-      <span className="ms-auto tnum font-semibold">{fmt.money(advanceMinor, currency, { compactFraction: true })}</span>
-      {valueMinor > 0 && <span className="text-xs text-slate-400 tnum">({fmt.percent(ratioBp(advanceMinor, valueMinor))})</span>}
-    </div>
   );
 }
