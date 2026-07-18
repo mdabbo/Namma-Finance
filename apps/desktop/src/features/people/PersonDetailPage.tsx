@@ -140,7 +140,7 @@ export function PersonDetailPage() {
                       setPaymentModal({
                         assignment: a,
                         amountMinor: stage.amountMinor - stage.paidOutMinor,
-                        note: stage.kind === "ADVANCE" ? t("paymentKind.ADVANCE") : stage.title || t("team.remainder"),
+                        note: stage.title || t("team.remainder"),
                       })
                     }
                   />
@@ -307,7 +307,7 @@ function TeamScheduleTable({
           {payout.stages.map((stage, i) => (
             <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
               <td className="px-3 py-1.5">
-                {stage.kind === "ADVANCE" ? t("paymentKind.ADVANCE") : stage.title || t("team.remainder")}
+                {stage.title || t("team.remainder")}
                 {manyContracts && <span className="ms-1 text-xs text-slate-400 tnum">({stage.contractNumber})</span>}
               </td>
               <td className="py-1.5 text-end tnum">{fmt.money(stage.amountMinor, currency, { compactFraction: true })}</td>
