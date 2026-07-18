@@ -9,7 +9,8 @@ import { usePaymentMutations } from "../../repositories/payments";
 import { todayIso } from "../../lib/format";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
-import { useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
+import { createPersonPayment, useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { assignmentSchema, computeAssignmentAccount, type AssignmentInput } from "@mep/core";
 import { Badge, Button, Card, EmptyState, Field, Input, Modal, RatioBar, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -44,7 +45,31 @@ export function ProjectDetailPage() {
   const [contractModal, setContractModal] = useState<Contract | "new" | null>(null);
   const [deletingContract, setDeletingContract] = useState<{ contract: Contract; details: string[] } | null>(null);
   const [advanceConfirm, setAdvanceConfirm] = useState<{ contract: Contract; amountMinor: number } | null>(null);
+  const [payAllConfirm, setPayAllConfirm] = useState(false);
   const paymentMutations = usePaymentMutations();
+  const qc = useQueryClient();
+
+  // released team shares on THIS project not yet paid out
+  const projectPayables = (financials?.teamPayables ?? []).filter((x) => assignments.some((a) => a.id === x.assignmentId));
+  const payAllTotal = projectPayables.reduce((s, x) => s + x.dueMinor, 0);
+  const payAll = useMutation({
+    mutationFn: async () => {
+      for (const item of projectPayables) {
+        await createPersonPayment({
+          assignmentId: item.assignmentId,
+          date: new Date().toISOString().slice(0, 10),
+          amountMinor: item.dueMinor,
+          note: item.dueTitles.join(" · ") || null,
+        });
+      }
+    },
+    onSuccess: () => {
+      for (const key of ["people", "assignments", "person-payments", "expenses", "financials"]) {
+        void qc.invalidateQueries({ queryKey: [key] });
+      }
+      setPayAllConfirm(false);
+    },
+  });
   const [addingMember, setAddingMember] = useState(false);
   const base = useBaseMoney();
 
@@ -294,7 +319,12 @@ export function ProjectDetailPage() {
 
       {activeTab ==="team" && (
         <Card className="p-4">
-          <div className="mb-3 flex justify-end">
+          <div className="mb-3 flex justify-end gap-2">
+            {payAllTotal > 0 && (
+              <Button variant="primary" className="!bg-emerald-600 hover:!bg-emerald-700" onClick={() => setPayAllConfirm(true)}>
+                {t("projects.payAllDue")}: {fmt.money(payAllTotal, currency, { compactFraction: true })}
+              </Button>
+            )}
             <Button variant="primary" onClick={() => setAddingMember(true)}>
               <Plus size={15} /> {t("projects.addTeamMember")}
             </Button>
@@ -352,6 +382,21 @@ export function ProjectDetailPage() {
             if (contractModal === "new") contractMutations.create.mutate(input, { onSuccess: () => setContractModal(null) });
             else contractMutations.update.mutate({ id: contractModal.id, input }, { onSuccess: () => setContractModal(null) });
           }}
+        />
+      )}
+
+      {payAllConfirm && (
+        <ConfirmDialog
+          title={t("projects.payAllDue")}
+          message={t("projects.payAllDueConfirm", {
+            total: fmt.money(payAllTotal, currency, { compactFraction: true }),
+            count: projectPayables.length,
+          })}
+          details={projectPayables.map((x) => `${x.personName} — ${fmt.money(x.dueMinor, x.currency, { compactFraction: true })} (${x.dueTitles.join(" · ")})`)}
+          confirmLabel={t("common.confirm")}
+          busy={payAll.isPending}
+          onCancel={() => setPayAllConfirm(false)}
+          onConfirm={() => payAll.mutate()}
         />
       )}
 
