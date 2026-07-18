@@ -318,7 +318,6 @@ export const en = {
     advanceRecovered: "Advance recovered",
     advanceReceived: "Advance received",
     advanceNotReceived: "Not received yet",
-    milestonesMustTotalWithAdvance: "With the advance, milestones must total {{target}} (advance + milestones = 100%)",
     recordAdvance: "Record advance receipt",
     recordAdvanceConfirm: "Record receiving {{amount}} as this contract's down payment? It will appear in Incoming Payments and release the team's down-payment stage.",
     advanceRemaining: "Advance remaining",

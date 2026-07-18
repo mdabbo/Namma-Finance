@@ -1,4 +1,4 @@
-import { BP_SCALE, allocate, applyBp, assertMinor, mulDivRound, ratioBp } from "../money/money";
+import { BP_SCALE, allocate, applyBp, assertMinor, mulDivRound } from "../money/money";
 
 /**
  * Contract valuation breakdowns (confirmed rules):
@@ -70,9 +70,8 @@ export function computeReadyToBill(
   milestones: PercentMilestone[],
   completedStageIds: ReadonlySet<number>,
   certifiedBaseMinor: number,
-  advanceBp = 0,
 ): ReadyToBill {
-  const amounts = milestoneAmounts(valueMinor, milestones, advanceBp);
+  const amounts = milestoneAmounts(valueMinor, milestones);
   let achieved = 0;
   const titles: string[] = [];
   milestones.forEach((m, i) => {
@@ -113,36 +112,20 @@ export function milestonesTotalBp(milestones: PercentMilestone[]): number {
   return milestones.reduce((sum, m) => sum + m.percentBp, 0);
 }
 
-/** The advance's share of the contract value, in basis points. */
-export function advanceShareBp(contract: { valueMinor: number; advanceMinor: number }): number {
-  if (contract.valueMinor <= 0 || contract.advanceMinor <= 0) return 0;
-  return ratioBp(Math.min(contract.advanceMinor, contract.valueMinor), contract.valueMinor);
+export function milestonesAreComplete(milestones: PercentMilestone[]): boolean {
+  return milestones.length > 0 && milestonesTotalBp(milestones) === BP_SCALE;
 }
 
 /**
- * A plan is complete when the milestones total 100%, OR — for contracts with
- * a down payment — when advance% + milestones% = 100% (the payment-schedule
- * style: "40% advance, then 20% at each deliverable"). In the second style
- * each milestone's percent is what the CLIENT PAYS at that stage; the
- * certificate base behind it is scaled to the full value, and proportional
- * advance recovery brings its net back to exactly the stated percent.
+ * Derive milestone amounts from the contract value.
+ * When the plan totals exactly 100%, amounts are allocated by largest
+ * remainder so they sum EXACTLY to the contract value; otherwise each is
+ * value × percent (a partial plan preview).
  */
-export function milestonesAreComplete(milestones: PercentMilestone[], advanceBp = 0): boolean {
-  if (milestones.length === 0) return false;
-  const total = milestonesTotalBp(milestones);
-  return total === BP_SCALE || (advanceBp > 0 && total === BP_SCALE - advanceBp);
-}
-
-/**
- * Derive milestone CERTIFICATE BASE amounts from the contract value.
- * Complete plans (either style — see milestonesAreComplete) are allocated by
- * largest remainder over the relative weights so they sum EXACTLY to the
- * contract value; otherwise each is value × percent (a partial plan preview).
- */
-export function milestoneAmounts(valueMinor: number, milestones: PercentMilestone[], advanceBp = 0): number[] {
+export function milestoneAmounts(valueMinor: number, milestones: PercentMilestone[]): number[] {
   assertMinor(valueMinor, "value");
   if (milestones.length === 0) return [];
-  if (milestonesAreComplete(milestones, advanceBp)) {
+  if (milestonesAreComplete(milestones)) {
     return allocate(valueMinor, milestones.map((m) => m.percentBp));
   }
   return milestones.map((m) => applyBp(valueMinor, m.percentBp));

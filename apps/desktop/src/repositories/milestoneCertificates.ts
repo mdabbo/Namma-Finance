@@ -1,4 +1,4 @@
-import { advanceShareBp, isMilestoneAchieved, milestoneAmounts, parseMilestones } from "@mep/core";
+import { isMilestoneAchieved, milestoneAmounts, parseMilestones } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
 import { todayIso } from "../lib/format";
 
@@ -30,7 +30,7 @@ export async function reconcileMilestoneCertificates(contractId?: number): Promi
       [contract.projectId],
     );
     const completed = new Set(completedRows.map((r) => r.id));
-    const amounts = milestoneAmounts(contract.valueMinor, milestones, advanceShareBp(contract));
+    const amounts = milestoneAmounts(contract.valueMinor, milestones);
 
     // Value already covered: billable certificates + linked drafts that still exist.
     let covered = state.certifiedBaseMinor;
