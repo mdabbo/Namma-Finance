@@ -319,6 +319,7 @@ export const ar: Dictionary = {
     retentionHeld: "الضمان المحتجز حاليًا",
     advanceRecovered: "المستَرد من المقدمة",
     advanceReceived: "المستلَم من الدفعة المقدمة",
+    advanceNotReceived: "لم تُستلم بعد",
     recordAdvance: "تسجيل استلام الدفعة المقدمة",
     recordAdvanceConfirm: "تسجيل استلام {{amount}} كدفعة مقدمة لهذا العقد؟ ستظهر في المقبوضات وتُفرِج عن مرحلة الدفعة المقدمة لفريق العمل.",
     advanceRemaining: "المتبقي من المقدمة",

@@ -317,6 +317,7 @@ export const en = {
     retentionHeld: "Retention held",
     advanceRecovered: "Advance recovered",
     advanceReceived: "Advance received",
+    advanceNotReceived: "Not received yet",
     recordAdvance: "Record advance receipt",
     recordAdvanceConfirm: "Record receiving {{amount}} as this contract's down payment? It will appear in Incoming Payments and release the team's down-payment stage.",
     advanceRemaining: "Advance remaining",

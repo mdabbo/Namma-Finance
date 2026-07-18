@@ -546,8 +546,12 @@ function ProjectCertificates({ projectId, currency }: { projectId: number; curre
 
   const states = [...(financials?.contractStates.values() ?? [])].filter((s) => s.contract.projectId === projectId);
   const rows = states.flatMap((s) => s.certificates.map((c) => ({ state: s, cert: c })));
+  // the down payment is the FIRST payment stage of every contract (confirmed
+  // rule) — shown here as a derived row, never stored as a real certificate
+  // (it is not revenue; certificates recover it)
+  const advanceRows = states.filter((s) => s.contract.advanceMinor > 0);
 
-  if (rows.length === 0) return <EmptyState message={t("common.empty")} />;
+  if (rows.length === 0 && advanceRows.length === 0) return <EmptyState message={t("common.empty")} />;
   return (
     <Card className="p-4">
       <table className="w-full text-sm">
@@ -562,6 +566,23 @@ function ProjectCertificates({ projectId, currency }: { projectId: number; curre
           </tr>
         </thead>
         <tbody>
+          {advanceRows.map((s) => {
+            const received = s.advanceReceivedMinor >= s.contract.advanceMinor;
+            return (
+              <tr key={`adv-${s.contract.id}`} className="border-b border-slate-100 bg-brand-50/40 last:border-0 dark:border-slate-800 dark:bg-brand-900/10">
+                <td className="py-2 font-medium">
+                  {t("paymentKind.ADVANCE")} <span className="text-xs text-slate-400 tnum">({s.contract.number})</span>
+                </td>
+                <td className="tnum">—</td>
+                <td className="text-end tnum">{fmt.money(s.contract.advanceMinor, currency)}</td>
+                <td className="text-end tnum font-medium">{fmt.money(s.contract.advanceMinor, currency)}</td>
+                <td className="text-end tnum text-emerald-600 dark:text-emerald-400">{fmt.money(s.advanceReceivedMinor, currency)}</td>
+                <td>
+                  <Badge value={received ? "PAID" : "SUBMITTED"} label={received ? t("status.PAID") : t("contracts.advanceNotReceived")} />
+                </td>
+              </tr>
+            );
+          })}
           {rows.map(({ cert }) => (
             <tr
               key={cert.certificate.id}
