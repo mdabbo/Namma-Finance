@@ -272,8 +272,6 @@ export const en = {
     remaining: "Remaining",
     teamCost: "Team cost",
     addTeamMember: "Add team member",
-    payAllDue: "Pay all team dues",
-    payAllDueConfirm: "Record paying {{total}} to {{count}} team member(s) now? Each payment also records its project expense.",
   },
   contracts: {
     title: "Contracts",

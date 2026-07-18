@@ -274,8 +274,6 @@ export const ar: Dictionary = {
     remaining: "المتبقي",
     teamCost: "تكلفة فريق العمل",
     addTeamMember: "إضافة عضو للفريق",
-    payAllDue: "دفع كل مستحقات الفريق",
-    payAllDueConfirm: "تسجيل دفع {{total}} لعدد {{count}} من أعضاء الفريق الآن؟ كل دفعة تسجل مصروفها على المشروع أيضًا.",
   },
   contracts: {
     title: "العقود",
