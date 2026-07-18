@@ -1,4 +1,38 @@
 import { describe, expect, it } from "vitest";
+import { advanceShareBp, milestoneAmounts as ma, milestonesAreComplete as mac } from "../src/calc/valuation";
+
+describe("payment-schedule style plans (advance + milestones = 100%)", () => {
+  const plan = [
+    { title: "M1", percentBp: 2000 },
+    { title: "M2", percentBp: 2000 },
+    { title: "M3", percentBp: 2000 },
+  ];
+
+  it("advance share derives from contract terms", () => {
+    expect(advanceShareBp({ valueMinor: 3_500_000, advanceMinor: 1_400_000 })).toBe(4000);
+    expect(advanceShareBp({ valueMinor: 3_500_000, advanceMinor: 0 })).toBe(0);
+    expect(advanceShareBp({ valueMinor: 0, advanceMinor: 100 })).toBe(0);
+  });
+
+  it("milestones totaling 100% − advance% are a complete plan", () => {
+    expect(mac(plan, 4000)).toBe(true);
+    expect(mac(plan, 0)).toBe(false); // without an advance, 60% is incomplete
+  });
+
+  it("legacy plans totaling 100% stay complete with or without advance", () => {
+    const legacy = [{ title: "A", percentBp: 6000 }, { title: "B", percentBp: 4000 }];
+    expect(mac(legacy, 0)).toBe(true);
+    expect(mac(legacy, 4000)).toBe(true);
+  });
+
+  it("certificate bases of a payment-style plan cover the FULL value", () => {
+    // 35,000 contract, 40% advance, milestones 20/20/20:
+    // each certificate base = 35,000/3 — recovery brings its net to 7,000
+    const amounts = ma(3_500_000, plan, 4000);
+    expect(amounts.reduce((a, b) => a + b, 0)).toBe(3_500_000);
+    expect(amounts[0]).toBeGreaterThan(1_166_000);
+  });
+});
 import { fromEgpPiasters, toEgpPiasters } from "../src/money";
 import {
   computeReadyToBill,

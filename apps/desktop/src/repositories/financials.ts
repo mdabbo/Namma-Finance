@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  advanceShareBp,
   computeContractState,
   computeProjectFinancials,
   computeReadyToBill,
@@ -153,6 +154,7 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
       milestones,
       completedByProject.get(project.id) ?? new Set(),
       state.certifiedBaseMinor,
+      advanceShareBp(contract),
     );
     if (ready.readyMinor > 0) {
       readyToCollect.push({

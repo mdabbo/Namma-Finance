@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  advanceShareBp,
   computeContractState,
   computeDashboardKpis,
   computeProjectFinancials,
@@ -291,6 +292,7 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
       milestones,
       completedByProject.get(project.id) ?? new Set(),
       state.certifiedBaseMinor,
+      advanceShareBp(contract),
     );
     if (ready.readyMinor > 0) {
       readyToCollect.push({

@@ -1,7 +1,7 @@
 import type { CertificateStatus } from "../domain/types";
 import { allocate, assertMinor, ratioBp } from "../money/money";
 import type { ContractState } from "./contract";
-import { milestoneAmounts, parseMilestones } from "./valuation";
+import { advanceShareBp, milestoneAmounts, parseMilestones } from "./valuation";
 
 /**
  * Team payout schedule (confirmed rule): every person assigned to a project
@@ -92,7 +92,7 @@ export function computeTeamPayout(
     const contractDrafts: StageDraft[] = [];
     const milestones = contract.valuationMode === "MILESTONES" ? parseMilestones(contract.milestones) : [];
     if (milestones.length > 0) {
-      const weights = milestoneAmounts(contract.valueMinor, milestones);
+      const weights = milestoneAmounts(contract.valueMinor, milestones, advanceShareBp(contract));
       milestones.forEach((m, i) => {
         const status = m.certificateId != null ? (statusById.get(m.certificateId) ?? null) : null;
         contractDrafts.push({

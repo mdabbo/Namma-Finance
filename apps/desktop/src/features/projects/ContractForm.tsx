@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import {
   BP_SCALE,
+  advanceShareBp,
+  applyBp,
   contractSchema,
   deriveContractFigures,
   drawingsValueMinor,
-  milestoneAmounts,
+  milestonesAreComplete,
   milestonesTotalBp,
   parseDrawings,
   parseMilestones,
@@ -89,8 +91,13 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
   }
 
   function submit() {
-    if (form.valuationMode === "MILESTONES" && milestonesTotalBp(milestones) !== BP_SCALE) {
-      setErrors({ milestones: t("contracts.milestonesMustTotal") });
+    if (form.valuationMode === "MILESTONES" && !milestonesAreComplete(milestones, advBp)) {
+      setErrors({
+        milestones:
+          advBp > 0
+            ? t("contracts.milestonesMustTotalWithAdvance", { target: fmt.percent(BP_SCALE - advBp) })
+            : t("contracts.milestonesMustTotal"),
+      });
       return;
     }
     const parsed = contractSchema.safeParse({
@@ -115,8 +122,11 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
     onSubmit(parsed.data);
   }
 
+  const advBp = advanceShareBp({ valueMinor: form.valueMinor, advanceMinor: form.advanceMinor });
   const milestoneTotalBp = milestonesTotalBp(milestones);
-  const milestonePreview = milestoneAmounts(form.valueMinor, milestones);
+  // the milestone percent is what the CLIENT PAYS at that stage — preview it
+  // at face value (the certificate base behind it is derived by the engine)
+  const milestonePreview = milestones.map((m) => applyBp(form.valueMinor, m.percentBp));
 
   return (
     <Modal title={initial ? t("common.edit") : t("contracts.newContract")} onClose={onClose} wide>
@@ -260,9 +270,20 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
               );
             })}
           </div>
-          <div className={cx("mt-3 border-t border-slate-100 pt-2 text-sm dark:border-slate-800", milestoneTotalBp === BP_SCALE ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")}>
-            {t("contracts.milestonesTotal")}: <b className="tnum">{fmt.percent(milestoneTotalBp)}</b>
-            {milestoneTotalBp !== BP_SCALE && <span className="ms-2 text-xs">({t("contracts.milestonesMustTotal")})</span>}
+          <div className={cx("mt-3 border-t border-slate-100 pt-2 text-sm dark:border-slate-800", milestonesAreComplete(milestones, advBp) ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")}>
+            {t("contracts.milestonesTotal")}:{" "}
+            {advBp > 0 && milestoneTotalBp !== BP_SCALE ? (
+              <b className="tnum">
+                {fmt.percent(advBp)} + {fmt.percent(milestoneTotalBp)} = {fmt.percent(advBp + milestoneTotalBp)}
+              </b>
+            ) : (
+              <b className="tnum">{fmt.percent(milestoneTotalBp)}</b>
+            )}
+            {!milestonesAreComplete(milestones, advBp) && (
+              <span className="ms-2 text-xs">
+                ({advBp > 0 ? t("contracts.milestonesMustTotalWithAdvance", { target: fmt.percent(BP_SCALE - advBp) }) : t("contracts.milestonesMustTotal")})
+              </span>
+            )}
           </div>
           {errors.milestones && <p className="mt-1 text-xs text-red-600">{errors.milestones}</p>}
         </Card>
