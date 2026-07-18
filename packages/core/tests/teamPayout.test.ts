@@ -147,6 +147,57 @@ describe("team payout — LUMP_SUM contract (certificates are the stages)", () =
   });
 });
 
+describe("team payout — down payment stage", () => {
+  const advancePayment = (amountMinor: number): Payment => ({
+    id: 900, contractId: 1, kind: "ADVANCE", number: "ADV-1", date: "2026-01-05",
+    amountMinor, method: "BANK_TRANSFER", bank: null, reference: null, notes: null,
+    deletedAt: null, createdAt: "2026-01-05",
+  });
+
+  it("prepends the advance as the first stage and scales milestones to the rest", () => {
+    const c = contract({ valuationMode: "MILESTONES", milestones: MILESTONES, advanceMinor: 40_000_000 });
+    const payout = computeTeamPayout(5_000_000, [state(c, [])], 0);
+    expect(payout.stages.map((s) => s.kind)).toEqual(["ADVANCE", "MILESTONE", "MILESTONE", "MILESTONE"]);
+    // fee 50,000: advance 40% = 20,000; the 20/30/50 plan splits the other 60%
+    expect(payout.stages.map((s) => s.amountMinor)).toEqual([2_000_000, 600_000, 900_000, 1_500_000]);
+    expect(payout.stages.reduce((s, x) => s + x.amountMinor, 0)).toBe(5_000_000);
+    expect(payout.stages[0]!.status).toBe("PENDING"); // advance not received yet
+  });
+
+  it("releases the advance stage when the advance money is recorded", () => {
+    const c = contract({ valuationMode: "MILESTONES", milestones: MILESTONES, advanceMinor: 40_000_000 });
+    const payout = computeTeamPayout(5_000_000, [state(c, [], [advancePayment(40_000_000)])], 0);
+    expect(payout.stages[0]!.status).toBe("PAYABLE");
+    expect(payout.dueMinor).toBe(2_000_000);
+  });
+
+  it("partially received advance stays pending", () => {
+    const c = contract({ valuationMode: "MILESTONES", milestones: MILESTONES, advanceMinor: 40_000_000 });
+    const payout = computeTeamPayout(5_000_000, [state(c, [], [advancePayment(10_000_000)])], 0);
+    expect(payout.stages[0]!.status).toBe("PENDING");
+    expect(payout.dueMinor).toBe(0);
+  });
+
+  it("advance + paid milestone certificate release together without double counting", () => {
+    const c = contract({ valuationMode: "MILESTONES", milestones: MILESTONES, advanceMinor: 40_000_000 });
+    const certs = [cert({ id: 11, grossMinor: 20_000_000, status: "PAID" })];
+    const payout = computeTeamPayout(5_000_000, [state(c, certs, [advancePayment(40_000_000)])], 0);
+    // released = advance 2,000,000 + Concept 600,000 (scaled) — NOT the raw 1,000,000
+    expect(payout.releasedMinor).toBe(2_600_000);
+    expect(payout.dueMinor).toBe(2_600_000);
+  });
+
+  it("lump-sum contracts get the advance stage too", () => {
+    const c = contract({ advanceMinor: 40_000_000 });
+    const certs = [cert({ grossMinor: 40_000_000, status: "PAID" })];
+    const payout = computeTeamPayout(10_000_000, [state(c, certs, [advancePayment(40_000_000)])], 0);
+    expect(payout.stages.map((s) => s.kind)).toEqual(["ADVANCE", "CERTIFICATE", "REMAINDER"]);
+    // fee 100,000: advance 40,000; cert 40% of the 60% pool = 24,000; remainder 36,000
+    expect(payout.stages.map((s) => s.amountMinor)).toEqual([4_000_000, 2_400_000, 3_600_000]);
+    expect(payout.dueMinor).toBe(6_400_000);
+  });
+});
+
 describe("team payout — edge cases", () => {
   it("no contracts yet → empty schedule, nothing due", () => {
     const payout = computeTeamPayout(5_000_000, [], 0);

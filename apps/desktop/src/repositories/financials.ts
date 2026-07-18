@@ -202,6 +202,10 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
       paidByAssignment.get(a.id) ?? 0,
     );
     if (payout.dueMinor > 0) {
+      const { default: i18next } = await import("i18next");
+      const dueTitles = payout.stages
+        .filter((s) => s.status === "PAYABLE" && s.amountMinor > s.paidOutMinor)
+        .map((s) => (s.kind === "ADVANCE" ? i18next.t("paymentKind.ADVANCE") : s.title || i18next.t("team.remainder")));
       teamPayables.push({
         assignmentId: a.id,
         personId: a.person_id,
@@ -212,7 +216,7 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
         currency: a.currency,
         dueMinor: payout.dueMinor,
         dueEgp: toEgpPiasters(payout.dueMinor, a.currency, a.fx_rate_micro),
-        dueTitles: payout.dueTitles,
+        dueTitles,
       });
     }
   }

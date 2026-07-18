@@ -5,6 +5,8 @@ import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
 import type { Contract } from "@mep/core";
 import { useProject } from "../../repositories/projects";
 import { useContractMutations, useContractsByProject, contractCascadeInfo } from "../../repositories/contracts";
+import { usePaymentMutations } from "../../repositories/payments";
+import { todayIso } from "../../lib/format";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
 import { useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
@@ -41,6 +43,8 @@ export function ProjectDetailPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [contractModal, setContractModal] = useState<Contract | "new" | null>(null);
   const [deletingContract, setDeletingContract] = useState<{ contract: Contract; details: string[] } | null>(null);
+  const [advanceConfirm, setAdvanceConfirm] = useState<{ contract: Contract; amountMinor: number } | null>(null);
+  const paymentMutations = usePaymentMutations();
   const [addingMember, setAddingMember] = useState(false);
   const base = useBaseMoney();
 
@@ -228,6 +232,24 @@ export function ProjectDetailPage() {
                         </div>
                       ))}
                     </div>
+                    {contract.advanceMinor > 0 && state && (
+                      <div className="mt-3 flex items-center gap-3 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
+                        <span className="text-xs text-slate-400">{t("contracts.advanceReceived")}:</span>
+                        <span className={cx("font-medium tnum", state.advanceReceivedMinor >= contract.advanceMinor ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")}>
+                          {fmt.money(state.advanceReceivedMinor, currency, { compactFraction: true })} / {fmt.money(contract.advanceMinor, currency, { compactFraction: true })}
+                        </span>
+                        {state.advanceReceivedMinor < contract.advanceMinor && (
+                          <Button
+                            variant="primary"
+                            className="!px-2.5 !py-1 !text-xs"
+                            disabled={paymentMutations.create.isPending}
+                            onClick={() => setAdvanceConfirm({ contract, amountMinor: contract.advanceMinor - state.advanceReceivedMinor })}
+                          >
+                            {t("contracts.recordAdvance")}
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </Card>
                 );
               })}
@@ -330,6 +352,37 @@ export function ProjectDetailPage() {
             if (contractModal === "new") contractMutations.create.mutate(input, { onSuccess: () => setContractModal(null) });
             else contractMutations.update.mutate({ id: contractModal.id, input }, { onSuccess: () => setContractModal(null) });
           }}
+        />
+      )}
+
+      {advanceConfirm && (
+        <ConfirmDialog
+          title={t("contracts.recordAdvance")}
+          message={t("contracts.recordAdvanceConfirm", {
+            amount: fmt.money(advanceConfirm.amountMinor, currency, { compactFraction: true }),
+          })}
+          confirmLabel={t("common.confirm")}
+          busy={paymentMutations.create.isPending}
+          onCancel={() => setAdvanceConfirm(null)}
+          onConfirm={() =>
+            paymentMutations.create.mutate(
+              {
+                input: {
+                  contractId: advanceConfirm.contract.id,
+                  kind: "ADVANCE",
+                  number: `ADV-${advanceConfirm.contract.number}`,
+                  date: todayIso(),
+                  amountMinor: advanceConfirm.amountMinor,
+                  method: "BANK_TRANSFER",
+                  bank: null,
+                  reference: null,
+                  notes: null,
+                },
+                allocations: [],
+              },
+              { onSuccess: () => setAdvanceConfirm(null) },
+            )
+          }
         />
       )}
 
