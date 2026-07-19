@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Payment, PaymentAllocation, PaymentInput } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { withLock } from "../lib/mutex";
 
 export interface PaymentRow {
   id: number;
@@ -140,7 +141,11 @@ export async function promoteFullyPaidCertificates(certificateIds: number[]): Pr
  * import. Runs for specific certificates after saves, and for everything at
  * app startup (heals data created before this rule existed). Idempotent.
  */
-export async function backPaidCertificatesWithPayments(onlyIds?: number[]): Promise<number> {
+export function backPaidCertificatesWithPayments(onlyIds?: number[]): Promise<number> {
+  return withLock(() => backPaidImpl(onlyIds));
+}
+
+async function backPaidImpl(onlyIds?: number[]): Promise<number> {
   const { loadWorkspaceFinancials } = await import("./financials");
   const { todayIso } = await import("../lib/format");
   const ws = await loadWorkspaceFinancials();
@@ -175,7 +180,11 @@ export async function backPaidCertificatesWithPayments(onlyIds?: number[]): Prom
  * contract's open certificates oldest-first. This is what makes "outstanding
  * receivables" and "remaining balance" agree with the cash actually received.
  */
-export async function allocateUnallocatedPayments(): Promise<number> {
+export function allocateUnallocatedPayments(): Promise<number> {
+  return withLock(() => allocateUnallocatedImpl());
+}
+
+async function allocateUnallocatedImpl(): Promise<number> {
   const { loadWorkspaceFinancials } = await import("./financials");
   const { suggestAllocation } = await import("@mep/core");
   const ws = await loadWorkspaceFinancials();
