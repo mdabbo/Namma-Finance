@@ -173,14 +173,21 @@ async function milestonesToLocal(json: unknown, maps: IdMaps): Promise<string | 
   return JSON.stringify(out);
 }
 
-/** After everything is pulled, resolve milestone refs that arrived before their targets. */
-async function fixupMilestoneRefs(maps: IdMaps): Promise<void> {
+/**
+ * After everything is pulled, resolve milestone refs that arrived before their
+ * targets. MUST use FRESH id maps: during the pull pass, idOf(stageUuid) /
+ * idOf(certUuid) were queried before those rows existed and the IdMap cached
+ * the null result. Reusing that map here would keep returning the cached null,
+ * leaving every synced milestone's stageId/certificateId permanently broken.
+ */
+async function fixupMilestoneRefs(): Promise<void> {
+  const freshMaps: IdMaps = new Map();
   const rows = await select<{ id: number; milestones: string }>(
     `SELECT id, milestones FROM contracts
      WHERE milestones LIKE '%Uuid%' AND (milestones LIKE '%"certificateId":null%' OR milestones LIKE '%"stageId":null%')`,
   );
   for (const row of rows) {
-    const resolved = await milestonesToLocal(row.milestones, maps);
+    const resolved = await milestonesToLocal(row.milestones, freshMaps);
     if (resolved !== null && resolved !== row.milestones) {
       await execute("UPDATE contracts SET milestones = $1 WHERE id = $2", [resolved, row.id]);
     }
@@ -383,7 +390,7 @@ export async function runSync(): Promise<SyncReport> {
 
     await alignSeededCategories(client);
     for (const spec of SYNC_TABLES) await pullTable(client, spec, maps, report, purgedUuids);
-    await fixupMilestoneRefs(maps);
+    await fixupMilestoneRefs();
 
     // tombstones created by applying remote deletions are echoes, not user
     // deletes — drop them so they don't bounce back
