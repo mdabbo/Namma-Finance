@@ -5,6 +5,7 @@ import {
   Banknote,
   BarChart3,
   Building2,
+  Clock,
   FileSpreadsheet,
   LayoutDashboard,
   Moon,
@@ -32,6 +33,7 @@ const NAV = [
   { to: "/payments", key: "nav.payments", icon: Banknote },
   { to: "/expenses", key: "nav.expenses", icon: Wallet },
   { to: "/people", key: "nav.people", icon: Users },
+  { to: "/time", key: "nav.time", icon: Clock },
   { to: "/reports", key: "nav.reports", icon: BarChart3 },
   { to: "/settings", key: "nav.settings", icon: Settings },
 ];

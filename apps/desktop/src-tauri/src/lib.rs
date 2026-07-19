@@ -169,6 +169,12 @@ pub fn run() {
             sql: include_str!("../migrations/0006_sync_tracking.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "time_tracking",
+            sql: include_str!("../migrations/0007_time_tracking.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

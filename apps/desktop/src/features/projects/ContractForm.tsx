@@ -20,6 +20,8 @@ import { Button, Card, Field, Input, Modal, Select, Textarea, cx } from "../../c
 import { MoneyInput } from "../../components/MoneyInput";
 import { bpToInput, parseToBp, useFormat } from "../../lib/format";
 import { useStagesByProject } from "../../repositories/stages";
+import { nextContractNumber } from "../../repositories/contracts";
+import { useProject } from "../../repositories/projects";
 
 interface ContractFormProps {
   projectId: number;
@@ -34,6 +36,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
   const { t } = useTranslation();
   const fmt = useFormat();
   const { data: stages = [] } = useStagesByProject(projectId);
+  const { data: project } = useProject(projectId);
 
   const [form, setForm] = useState({
     number: initial?.number ?? "",
@@ -56,6 +59,25 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
   const [milestones, setMilestones] = useState<PercentMilestone[]>(() => parseMilestones(initial?.milestones));
   const [drawings, setDrawings] = useState<DrawingLine[]>(() => parseDrawings(initial?.drawings));
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // New contract: auto-generate the number (project code + per-project counter)
+  // and default the title to the project name; both stay editable.
+  useEffect(() => {
+    if (initial || !project) return;
+    let cancelled = false;
+    void nextContractNumber(projectId).then((number) => {
+      if (cancelled) return;
+      setForm((f) => ({
+        ...f,
+        number: f.number || number,
+        title: f.title || project.name,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id, initial]);
 
   // DRAWINGS mode derives the contract value from the drawing lines.
   useEffect(() => {
@@ -121,7 +143,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
     <Modal title={initial ? t("common.edit") : t("contracts.newContract")} onClose={onClose} wide>
       <div className="grid grid-cols-3 gap-3">
         <Field label={t("contracts.number")} error={errors.number}>
-          <Input value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))} autoFocus className="tnum" />
+          <Input value={form.number} readOnly className="tnum" />
         </Field>
         <Field label={t("contracts.contractTitle")} className="col-span-2">
           <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />

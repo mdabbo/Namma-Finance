@@ -7,5 +7,6 @@ export * from "./valuation";
 export * from "./teamPayout";
 export * from "./overhead";
 export * from "./profitability";
+export * from "./labor";
 export * from "./cashflow";
 export * from "./aging";

@@ -253,6 +253,44 @@ describe("milestone references across devices", () => {
   });
 });
 
+describe("time entries sync", () => {
+  it("round-trip a time entry with person/project/stage FK translation", async () => {
+    newDevice("A");
+    const clientId = await createClient({ name: "T Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-2026-050", {
+      name: "Timed Project", clientId, country: null, city: null, manager: null, discipline: "MULTI",
+      projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000,
+      startDate: null, endDate: null, progressBp: 0, description: null,
+    });
+    const stageId = await createStage({
+      projectId, name: "Design", sortOrder: 0, startDate: null, endDate: null,
+      status: "IN_PROGRESS", completionBp: 5000, engineers: null, notes: null,
+    });
+    const personId = (await execute(
+      "INSERT INTO people (type, name, hourly_rate_minor, currency) VALUES ('EMPLOYEE','Eng A', 10000, 'EGP')",
+    )).lastInsertId!;
+    await execute(
+      "INSERT INTO time_entries (person_id, project_id, stage_id, date, minutes, billable) VALUES ($1,$2,$3,'2026-07-19',90,1)",
+      [personId, projectId, stageId],
+    );
+
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+
+    const bEntry = rawOneOn<{ minutes: number; person_id: number; project_id: number; stage_id: number }>(
+      "B", "SELECT minutes, person_id, project_id, stage_id FROM time_entries",
+    )!;
+    const bPerson = rawOneOn<{ id: number }>("B", "SELECT id FROM people WHERE name='Eng A'")!.id;
+    const bProject = rawOneOn<{ id: number }>("B", "SELECT id FROM projects WHERE code='PRJ-2026-050'")!.id;
+    const bStage = rawOneOn<{ id: number }>("B", "SELECT id FROM project_stages WHERE name='Design'")!.id;
+    expect(bEntry.minutes).toBe(90);
+    expect(bEntry.person_id).toBe(bPerson);
+    expect(bEntry.project_id).toBe(bProject);
+    expect(bEntry.stage_id).toBe(bStage);
+  });
+});
+
 describe("keyset cursor tie-break", () => {
   it("pulls every row when a batch boundary falls inside identical timestamps", async () => {
     // PULL_BATCH is 500; put 600 clients at the SAME updated_at so the naive

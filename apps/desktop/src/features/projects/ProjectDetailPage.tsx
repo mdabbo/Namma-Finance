@@ -15,12 +15,15 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { useRole } from "../../lib/roles";
+import { laborCostMinor, minutesToHours } from "@mep/core";
+import { useTimeEntriesByProject, useTimeEntryMutations } from "../../repositories/timeEntries";
 import { ContractForm } from "./ContractForm";
 import { PersonForm } from "../people/PeoplePage";
 import { StagesTab } from "./StagesTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { TimeEntryForm } from "../time/TimePage";
 
-type Tab = "overview" | "stages" | "contracts" | "certificates" | "payments" | "expenses" | "team" | "documents";
+type Tab = "overview" | "stages" | "contracts" | "certificates" | "payments" | "expenses" | "team" | "time" | "documents";
 
 export function ProjectDetailPage() {
   const { id } = useParams();
@@ -62,7 +65,7 @@ export function ProjectDetailPage() {
   );
 
   // engineers see the delivery side only — no money tabs
-  const ENGINEER_TABS: Tab[] = ["stages", "documents"];
+  const ENGINEER_TABS: Tab[] = ["stages", "documents", "time"];
   const ALL_TABS: { key: Tab; label: string }[] = [
     { key: "overview", label: t("projects.overview") },
     { key: "stages", label: t("stages.title") },
@@ -71,6 +74,7 @@ export function ProjectDetailPage() {
     { key: "payments", label: t("payments.title") },
     { key: "expenses", label: t("expenses.title") },
     { key: "team", label: t("projects.team") },
+    { key: "time", label: t("time.title") },
     { key: "documents", label: t("documents.title") },
   ];
   const TABS = role === "ENGINEER" ? ALL_TABS.filter((x) => ENGINEER_TABS.includes(x.key)) : ALL_TABS;
@@ -238,6 +242,7 @@ export function ProjectDetailPage() {
 
       {activeTab ==="stages" && <StagesTab projectId={projectId} />}
       {activeTab ==="documents" && <DocumentsTab projectId={projectId} />}
+      {activeTab ==="time" && <ProjectTime projectId={projectId} />}
       {activeTab ==="certificates" && <ProjectCertificates projectId={projectId} currency={currency} />}
       {activeTab ==="payments" && <ProjectPayments projectId={projectId} currency={currency} />}
 
@@ -532,5 +537,69 @@ function ProjectPayments({ projectId, currency }: { projectId: number; currency:
         <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.cashIn, currency, { compactFraction: true })}</p>
       </Card>
     </div>
+  );
+}
+
+/** Time entries logged against this project, with a project-locked log form. */
+function ProjectTime({ projectId }: { projectId: number }) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const { data: entries = [] } = useTimeEntriesByProject(projectId);
+  const mutations = useTimeEntryMutations();
+  const [logging, setLogging] = useState(false);
+
+  const totalMinutes = entries.reduce((s, e) => s + e.minutes, 0);
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm text-slate-500">
+          {t("time.totalHours")}: <b className="tnum">{minutesToHours(totalMinutes)}{t("time.hoursShort")}</b>
+        </p>
+        <Button variant="primary" onClick={() => setLogging(true)}>
+          <Plus size={15} /> {t("time.newEntry")}
+        </Button>
+      </div>
+      {entries.length === 0 ? (
+        <EmptyState message={t("common.empty")} />
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800">
+              <th className="py-2 text-start">{t("common.date")}</th>
+              <th className="text-start">{t("time.person")}</th>
+              <th className="text-start">{t("time.stage")}</th>
+              <th className="text-start">{t("common.notes")}</th>
+              <th className="text-end">{t("time.hours")}</th>
+              <th className="text-end">{t("time.laborCost")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr key={e.id} className="group border-b border-slate-100 last:border-0 dark:border-slate-800">
+                <td className="py-1.5 tnum">{fmt.date(e.date)}</td>
+                <td>{e.personName}</td>
+                <td className="text-slate-500">{e.stageName ?? "—"}</td>
+                <td className="text-slate-500">{e.note}</td>
+                <td className="text-end tnum">{minutesToHours(e.minutes)}{t("time.hoursShort")}</td>
+                <td className="text-end tnum text-slate-500">
+                  {e.hourlyRateMinor ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {logging && (
+        <TimeEntryForm
+          initial={null}
+          lockProjectId={projectId}
+          busy={mutations.create.isPending}
+          onClose={() => setLogging(false)}
+          onSubmit={(input) => mutations.create.mutate(input, { onSuccess: () => setLogging(false) })}
+        />
+      )}
+    </Card>
   );
 }

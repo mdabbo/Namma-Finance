@@ -4,6 +4,7 @@ import {
   computeProjectFinancials,
   computeReadyToBill,
   computeTeamPayout,
+  laborCostMinor,
   parseMilestones,
   toEgpPiasters,
   type Contract,
@@ -81,6 +82,9 @@ export interface WorkspaceFinancials {
   readyToCollect: ReadyToCollectItem[];
   /** Paid certificates whose team-member share has not been paid out yet. */
   teamPayables: TeamPayableItem[];
+  /** Analytical labor cost per project (EGP) from logged time — costing only,
+   *  deliberately NOT part of cash net profit (salaries stay overhead). */
+  laborByProjectEgp: Map<number, number>;
 }
 
 /** Load everything and compute the full financial state of the office. */
@@ -218,7 +222,25 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
   }
   teamPayables.sort((a, b) => b.dueEgp - a.dueEgp);
 
-  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables };
+  // analytical labor cost per project: Σ (minutes × person hourly rate),
+  // each entry converted to EGP at the person currency's stored rate
+  const rateByCurrency = new Map<string, number>([["EGP", 1_000_000]]);
+  for (const c of await select<{ code: string; fx_rate_micro: number }>("SELECT code, fx_rate_micro FROM currencies")) {
+    rateByCurrency.set(c.code, c.fx_rate_micro);
+  }
+  const laborRows = await select<{ project_id: number; minutes: number; hourly_rate_minor: number | null; currency: string }>(
+    `SELECT te.project_id, te.minutes, pe.hourly_rate_minor, pe.currency
+     FROM time_entries te JOIN people pe ON pe.id = te.person_id`,
+  );
+  const laborByProjectEgp = new Map<number, number>();
+  for (const row of laborRows) {
+    const costMinor = laborCostMinor(row.minutes, row.hourly_rate_minor);
+    if (costMinor === 0) continue;
+    const egp = toEgpPiasters(costMinor, row.currency, rateByCurrency.get(row.currency) ?? 1_000_000);
+    laborByProjectEgp.set(row.project_id, (laborByProjectEgp.get(row.project_id) ?? 0) + egp);
+  }
+
+  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables, laborByProjectEgp };
 }
 
 export function useWorkspaceFinancials() {

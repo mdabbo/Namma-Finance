@@ -29,6 +29,7 @@ const MIGRATIONS = [
   "0004_phase2.sql",
   "0005_backfill_team_expenses.sql",
   "0006_sync_tracking.sql",
+  "0007_time_tracking.sql",
 ];
 
 export function buildMigratedDb(through: number = MIGRATIONS.length): DatabaseSync {

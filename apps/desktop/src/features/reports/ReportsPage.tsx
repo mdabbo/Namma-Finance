@@ -3,10 +3,11 @@ import { useTranslation } from "react-i18next";
 import { cx } from "../../components/ui";
 import { CashflowView } from "./CashflowView";
 import { ProfitabilityView } from "./ProfitabilityView";
+import { CostingView } from "./CostingView";
 import { ReportsCenter } from "./ReportsCenter";
 import { ImportWizard } from "./ImportWizard";
 
-type Tab = "cashflow" | "profitability" | "center" | "import";
+type Tab = "cashflow" | "profitability" | "costing" | "center" | "import";
 
 export function ReportsPage() {
   const { t } = useTranslation();
@@ -15,6 +16,7 @@ export function ReportsPage() {
   const TABS: { key: Tab; label: string }[] = [
     { key: "cashflow", label: t("reports.cashflow") },
     { key: "profitability", label: t("reports.profitability") },
+    { key: "costing", label: t("reports.costing") },
     { key: "center", label: t("reports.center") },
     { key: "import", label: t("importer.title") },
   ];
@@ -40,6 +42,7 @@ export function ReportsPage() {
       </div>
       {tab === "cashflow" && <CashflowView />}
       {tab === "profitability" && <ProfitabilityView />}
+      {tab === "costing" && <CostingView />}
       {tab === "center" && <ReportsCenter />}
       {tab === "import" && <ImportWizard />}
     </div>

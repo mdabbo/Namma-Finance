@@ -247,6 +247,20 @@ create table recurring_expenses (
   deleted_at timestamptz
 );
 
+create table time_entries (
+  uuid uuid primary key,
+  person_id uuid not null references people(uuid) on delete cascade,
+  project_id uuid not null references projects(uuid) on delete cascade,
+  stage_id uuid references project_stages(uuid) on delete set null,
+  date text not null,
+  minutes int not null,
+  billable int not null default 1,
+  note text,
+  created_at text,
+  updated_at timestamptz not null,
+  deleted_at timestamptz
+);
+
 -- ─── cursors, guard, security ──────────────────────────────────────────────
 
 do $$
@@ -254,7 +268,7 @@ declare t text;
 begin
   foreach t in array array[
     'clients','people','expense_categories','projects','contracts',
-    'project_stages','documents','project_assignments','payment_certificates',
+    'project_stages','documents','time_entries','project_assignments','payment_certificates',
     'payments','payment_certificate_allocations','person_payments',
     'expenses','recurring_expenses'
   ] loop

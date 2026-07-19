@@ -67,6 +67,27 @@ export async function getContract(id: number): Promise<Contract | null> {
   return row ? mapContract(row) : null;
 }
 
+/**
+ * Next contract number for a project: the project's own code plus a per-project
+ * counter, e.g. PRJ-2026-001-C1, PRJ-2026-001-C2. The counter is the highest
+ * existing -C<n> suffix + 1 (robust to deletions and manual numbers).
+ */
+export async function nextContractNumber(projectId: number): Promise<string> {
+  const project = await selectOne<{ code: string }>("SELECT code FROM projects WHERE id = $1", [projectId]);
+  const prefix = project?.code ?? "PRJ";
+  const rows = await select<{ number: string }>(
+    "SELECT number FROM contracts WHERE project_id = $1",
+    [projectId],
+  );
+  let max = 0;
+  const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-C(\\d+)$`);
+  for (const r of rows) {
+    const m = r.number.match(re);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `${prefix}-C${max + 1}`;
+}
+
 export async function createContract(input: ContractInput): Promise<number> {
   const r = await execute(
     `INSERT INTO contracts (project_id, number, title, value_minor, vat_bp, retention_bp, withholding_bp,

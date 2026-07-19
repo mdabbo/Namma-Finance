@@ -167,6 +167,17 @@ export const recurringExpenseSchema = z.object({
   notes: z.string().nullish(),
 });
 
+export const timeEntrySchema = z.object({
+  personId: z.number().int().positive("required"),
+  projectId: z.number().int().positive("required"),
+  stageId: z.number().int().positive().nullish(),
+  date: isoDate,
+  minutes: z.number().int().min(1, "required").max(24 * 60),
+  billable: z.boolean(),
+  note: z.string().nullish(),
+});
+export type TimeEntryInput = z.infer<typeof timeEntrySchema>;
+
 export type StageInput = z.infer<typeof stageSchema>;
 export type DocumentInput = z.infer<typeof documentSchema>;
 export type RecurringExpenseInput = z.infer<typeof recurringExpenseSchema>;

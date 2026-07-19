@@ -19,6 +19,7 @@ import { PaymentsPage } from "./features/payments/PaymentsPage";
 import { ExpensesPage } from "./features/expenses/ExpensesPage";
 import { PeoplePage } from "./features/people/PeoplePage";
 import { PersonDetailPage } from "./features/people/PersonDetailPage";
+import { TimePage } from "./features/time/TimePage";
 import { ReportsPage } from "./features/reports/ReportsPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
 
@@ -41,6 +42,7 @@ const router = createHashRouter([
       { path: "expenses", element: <ExpensesPage /> },
       { path: "people", element: <PeoplePage /> },
       { path: "people/:id", element: <PersonDetailPage /> },
+      { path: "time", element: <TimePage /> },
       { path: "reports", element: <ReportsPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],

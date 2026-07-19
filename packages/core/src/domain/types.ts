@@ -227,6 +227,20 @@ export interface RecurringExpense {
   createdAt: string;
 }
 
+export interface TimeEntry {
+  id: number;
+  personId: number;
+  projectId: number;
+  /** Optional project stage the hours are attributed to. */
+  stageId: number | null;
+  date: string;
+  /** Duration in whole minutes (integer — never floating hours). */
+  minutes: number;
+  billable: boolean;
+  note: string | null;
+  createdAt: string;
+}
+
 /** The standard stage template (i18n keys under `stages.template.*`). */
 export const STANDARD_STAGE_KEYS = [
   "proposal",
