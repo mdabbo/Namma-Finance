@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSyncSession, resetSyncClient, syncSignIn, syncSignOut } from "../lib/sync/client";
 import { getLastSyncReport, runSync } from "../lib/sync/engine";
+import { refreshRole } from "../lib/roles";
 import { useSettings } from "../lib/settings";
 
 const AUTO_SYNC_MINUTES = 15;
@@ -21,8 +22,14 @@ export function useSyncMutations() {
   };
   return {
     signIn: useMutation({
-      mutationFn: (v: { email: string; password: string }) => syncSignIn(v.email, v.password),
-      onSuccess: () => void qc.invalidateQueries({ queryKey: ["sync"] }),
+      mutationFn: async (v: { email: string; password: string }) => {
+        await syncSignIn(v.email, v.password);
+        await refreshRole(); // fetch (or bootstrap) this user's role right away
+      },
+      onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: ["sync"] });
+        void qc.invalidateQueries({ queryKey: ["role"] });
+      },
     }),
     signOut: useMutation({
       mutationFn: syncSignOut,

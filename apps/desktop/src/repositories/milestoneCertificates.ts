@@ -1,6 +1,7 @@
 import { isMilestoneAchieved, milestoneAmounts, parseMilestones } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
 import { todayIso } from "../lib/format";
+import { withLock } from "../lib/mutex";
 
 /**
  * Confirmed rule (feedback round 3): the moment a milestone becomes achieved
@@ -11,8 +12,17 @@ import { todayIso } from "../lib/format";
  * achieved value that is NOT already covered by billable certificates
  * (including manual ones) or by previously prepared drafts. Idempotent:
  * each milestone stores the id of the certificate it generated.
+ *
+ * Runs under the global reconcile lock: this is a read-modify-write of the
+ * contract's milestone JSON, and concurrent invocations (mutation trigger +
+ * background sweep) would otherwise double-create certificates and wipe their
+ * certificateId links.
  */
-export async function reconcileMilestoneCertificates(contractId?: number): Promise<number> {
+export function reconcileMilestoneCertificates(contractId?: number): Promise<number> {
+  return withLock(() => reconcileImpl(contractId));
+}
+
+async function reconcileImpl(contractId?: number): Promise<number> {
   const { loadWorkspaceFinancials } = await import("./financials");
   const { nextCertificateSeq } = await import("./certificates");
   const ws = await loadWorkspaceFinancials();
@@ -61,11 +71,24 @@ export async function reconcileMilestoneCertificates(contractId?: number): Promi
         if (existing) continue; // its draft (or approved descendant) already exists
       }
 
+      const number = `${contract.number}-M${i + 1}`;
+      // defensive: never create a second live certificate for the same
+      // milestone number, even if the certificateId link was somehow lost
+      const dup = await selectOne<{ id: number }>(
+        "SELECT id FROM payment_certificates WHERE contract_id = $1 AND number = $2 AND deleted_at IS NULL",
+        [contract.id, number],
+      );
+      if (dup) {
+        milestone.certificateId = dup.id;
+        changed = true;
+        continue;
+      }
+
       const seq = await nextCertificateSeq(contract.id);
       const r = await execute(
         `INSERT INTO payment_certificates (contract_id, seq, number, date, description, gross_minor, discount_minor, status)
          VALUES ($1,$2,$3,$4,$5,$6,0,'DRAFT')`,
-        [contract.id, seq, `${contract.number}-M${i + 1}`, todayIso(), milestone.title, amount],
+        [contract.id, seq, number, todayIso(), milestone.title, amount],
       );
       milestone.certificateId = r.lastInsertId ?? 0;
       remaining -= amount;

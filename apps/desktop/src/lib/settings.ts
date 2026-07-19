@@ -18,6 +18,8 @@ export interface AppSettings {
   syncAnonKey: string;
   syncEmail: string;
   syncAuto: boolean;
+  /** Cached cloud role (ADMIN/ACCOUNTANT/ENGINEER); empty = never fetched. */
+  syncRole: string;
 }
 
 const DEFAULTS: AppSettings = {
@@ -32,6 +34,7 @@ const DEFAULTS: AppSettings = {
   syncAnonKey: "",
   syncEmail: "",
   syncAuto: false,
+  syncRole: "",
 };
 
 const KEY_MAP: Record<keyof AppSettings, string> = {
@@ -46,6 +49,7 @@ const KEY_MAP: Record<keyof AppSettings, string> = {
   syncAnonKey: "sync_anon_key",
   syncEmail: "sync_email",
   syncAuto: "sync_auto",
+  syncRole: "sync_role",
 };
 
 export async function loadSettings(): Promise<AppSettings> {
@@ -63,6 +67,7 @@ export async function loadSettings(): Promise<AppSettings> {
     syncAnonKey: map.get("sync_anon_key") ?? "",
     syncEmail: map.get("sync_email") ?? "",
     syncAuto: map.get("sync_auto") === "true",
+    syncRole: map.get("sync_role") ?? "",
   };
 }
 

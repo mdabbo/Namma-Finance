@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CloudUpload, DatabaseBackup, Languages, Coins, Tags, Plus, RefreshCw } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CloudUpload, DatabaseBackup, Languages, Coins, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
+import { useRole, type Role } from "../../lib/roles";
+import { getSyncClient } from "../../lib/sync/client";
+import { disableLock, isLockEnabled, setLockPassword, verifyLockPassword } from "../../lib/lock";
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
@@ -25,6 +29,9 @@ export function SettingsPage() {
 
   const [newCategory, setNewCategory] = useState({ nameAr: "", nameEn: "" });
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const role = useRole();
+  // engineers: personal preferences only
+  const full = role !== "ENGINEER";
 
   return (
     <div className="max-w-4xl">
@@ -76,6 +83,7 @@ export function SettingsPage() {
           </div>
         </Card>
 
+        {full && (
         <Card className="p-5">
           <SectionTitle icon={<Coins size={16} />} title={t("settings.currencies")} />
           <div className="mb-4 flex items-center gap-3">
@@ -117,7 +125,9 @@ export function SettingsPage() {
             ))}
           </div>
         </Card>
+        )}
 
+        {full && (
         <Card className="p-5">
           <SectionTitle icon={<Tags size={16} />} title={t("settings.expenseCategories")} />
           <div className="space-y-2">
@@ -180,8 +190,15 @@ export function SettingsPage() {
           </div>
         </Card>
 
+        )}
+
+        <SecuritySection />
+
         <SyncSection />
 
+        {role === "ADMIN" && <UsersSection />}
+
+        {full && (
         <Card className="p-5">
           <SectionTitle icon={<DatabaseBackup size={16} />} title={t("settings.backup")} />
           <p className="mb-3 text-xs text-slate-400">{t("settings.dailyBackupNote")}</p>
@@ -224,6 +241,7 @@ export function SettingsPage() {
             </div>
           )}
         </Card>
+        )}
       </div>
 
       {confirmRestore && (
@@ -239,6 +257,140 @@ export function SettingsPage() {
       {/* keep i18n import referenced for language-sensitive rerender */}
       <span className="hidden">{i18n.language}</span>
     </div>
+  );
+}
+
+/**
+ * App lock: password gate at launch (per device). Stored as a salted
+ * PBKDF2 hash in local settings; the cloud login doubles as recovery.
+ */
+function SecuritySection() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: enabled = false } = useQuery({ queryKey: ["app-lock"], queryFn: isLockEnabled });
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const reset = () => {
+    setCurrent("");
+    setNext("");
+    setConfirm("");
+    void qc.invalidateQueries({ queryKey: ["app-lock"] });
+  };
+
+  async function save(disable: boolean) {
+    setMessage(null);
+    if (enabled && !(await verifyLockPassword(current))) {
+      setMessage({ ok: false, text: t("lock.wrong") });
+      return;
+    }
+    if (disable) {
+      await disableLock();
+      setMessage({ ok: true, text: t("lock.disabled") });
+    } else {
+      if (next.length < 4 || next !== confirm) {
+        setMessage({ ok: false, text: t("lock.mismatch") });
+        return;
+      }
+      await setLockPassword(next);
+      setMessage({ ok: true, text: t("lock.saved") });
+    }
+    reset();
+  }
+
+  return (
+    <Card className="p-5">
+      <SectionTitle icon={<Lock size={16} />} title={t("lock.sectionTitle")} />
+      <p className="mb-3 text-xs text-slate-400">{t("lock.hint")}</p>
+      <div className="flex flex-wrap items-end gap-3">
+        {enabled && (
+          <Field label={t("lock.current")} className="w-56">
+            <Input dir="ltr" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+          </Field>
+        )}
+        <Field label={enabled ? t("lock.new") : t("lock.password")} className="w-56">
+          <Input dir="ltr" type="password" value={next} onChange={(e) => setNext(e.target.value)} />
+        </Field>
+        <Field label={t("lock.confirm")} className="w-56">
+          <Input dir="ltr" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </Field>
+        <Button variant="primary" disabled={next === ""} onClick={() => void save(false)}>
+          {enabled ? t("lock.change") : t("lock.enable")}
+        </Button>
+        {enabled && (
+          <Button className="!text-red-600" onClick={() => void save(true)}>
+            {t("lock.disable")}
+          </Button>
+        )}
+      </div>
+      {message && <p className={cx("mt-2 text-xs", message.ok ? "text-emerald-600" : "text-red-600")}>{message.text}</p>}
+    </Card>
+  );
+}
+
+/**
+ * Phase 5: office users & roles (admin only). Logins themselves are created
+ * in the Supabase dashboard (Authentication → Users); this panel assigns
+ * each login its app role.
+ */
+interface UserRoleRow {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: Role;
+}
+
+function UsersSection() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data: rows = [], error } = useQuery({
+    queryKey: ["user-roles"],
+    queryFn: async (): Promise<UserRoleRow[]> => {
+      const client = await getSyncClient();
+      const { data, error: qError } = await client.from("user_roles").select("user_id, email, display_name, role").order("email");
+      if (qError) throw new Error(qError.message);
+      return (data ?? []) as UserRoleRow[];
+    },
+    retry: 0,
+  });
+  const setRole = useMutation({
+    mutationFn: async (v: { userId: string; role: Role }) => {
+      const client = await getSyncClient();
+      const { error: uError } = await client
+        .from("user_roles")
+        .update({ role: v.role, updated_at: new Date().toISOString() })
+        .eq("user_id", v.userId);
+      if (uError) throw new Error(uError.message);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["user-roles"] }),
+  });
+
+  return (
+    <Card className="p-5">
+      <SectionTitle icon={<UsersRound size={16} />} title={t("settings.usersTitle")} />
+      <p className="mb-3 text-xs text-slate-400">{t("settings.usersHint")}</p>
+      {error && <p className="mb-2 text-xs text-red-600">{(error as Error).message}</p>}
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.user_id} className="flex items-center gap-3">
+            <span className="w-72 truncate text-sm" dir="ltr">{row.email}</span>
+            <Select
+              className="!w-44"
+              value={row.role}
+              disabled={setRole.isPending}
+              onChange={(e) => setRole.mutate({ userId: row.user_id, role: e.target.value as Role })}
+            >
+              {(["ADMIN", "ACCOUNTANT", "ENGINEER"] as const).map((r) => (
+                <option key={r} value={r}>{t(`roles.${r}`)}</option>
+              ))}
+            </Select>
+          </div>
+        ))}
+        {rows.length === 0 && !error && <p className="text-xs text-slate-400">{t("common.empty")}</p>}
+      </div>
+    </Card>
   );
 }
 

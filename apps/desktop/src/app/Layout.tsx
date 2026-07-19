@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   Banknote,
@@ -16,8 +17,10 @@ import {
   Briefcase,
 } from "lucide-react";
 import { useSettings, useUpdateSetting } from "../lib/settings";
+import { allowedPath, homePath, useRole } from "../lib/roles";
 import { useAutoSync } from "../repositories/sync";
 import { Button, cx } from "../components/ui";
+import { NotificationBell } from "../components/NotificationBell";
 import { useSearchPalette } from "../features/search/SearchPalette";
 import logoUrl from "../assets/namaa-logo.png";
 
@@ -38,8 +41,17 @@ export function Layout() {
   const { data: settings } = useSettings();
   const updateSetting = useUpdateSetting();
   const { openSearch, SearchPortal } = useSearchPalette();
+  const role = useRole();
+  const location = useLocation();
+  const navigate = useNavigate();
   useAutoSync();
 
+  // role gate: engineers only reach projects & settings
+  useEffect(() => {
+    if (!allowedPath(role, location.pathname)) navigate(homePath(role), { replace: true });
+  }, [role, location.pathname, navigate]);
+
+  const nav = NAV.filter((item) => allowedPath(role, item.to));
   const theme = settings?.theme ?? "light";
   const language = settings?.language ?? "ar";
 
@@ -54,7 +66,7 @@ export function Layout() {
           </div>
         </div>
         <nav className="mt-2 flex-1 space-y-0.5 px-2">
-          {NAV.map(({ to, key, icon: Icon }) => (
+          {nav.map(({ to, key, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -92,6 +104,7 @@ export function Layout() {
               {t("common.search")}
               <kbd className="rounded border border-slate-300 px-1 text-[9px] dark:border-slate-600">Ctrl+K</kbd>
             </button>
+            {role !== "ENGINEER" && <NotificationBell />}
             <Button
               variant="ghost"
               title={t("settings.baseCurrency")}

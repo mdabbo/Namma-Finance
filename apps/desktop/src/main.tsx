@@ -1,10 +1,12 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 import "./styles.css";
 import { initI18n } from "./lib/i18n";
 import { applyTheme, loadSettings } from "./lib/settings";
+import { isLockEnabled } from "./lib/lock";
+import { LockScreen } from "./components/LockScreen";
 import { runDailyBackupIfDue } from "./repositories/backups";
 import { Layout } from "./app/Layout";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
@@ -45,6 +47,17 @@ const router = createHashRouter([
   },
 ]);
 
+/** Launch gate: the router only mounts once the app lock (if set) is passed. */
+function Root() {
+  const [locked, setLocked] = useState<boolean | null>(null);
+  useEffect(() => {
+    void isLockEnabled().then(setLocked).catch(() => setLocked(false));
+  }, []);
+  if (locked === null) return null;
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+  return <RouterProvider router={router} />;
+}
+
 async function bootstrap() {
   let language = "ar";
   let theme: "light" | "dark" = "light";
@@ -61,7 +74,7 @@ async function bootstrap() {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <Root />
       </QueryClientProvider>
     </React.StrictMode>,
   );

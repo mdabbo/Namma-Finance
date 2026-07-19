@@ -24,6 +24,13 @@ stored in this repository — you paste them into the app's Settings once.
 3. Still under Authentication → **Sign In / Up → disable "Allow new users to sign up"**
    so nobody else can register into your project.
 
+## 3b. (Phase 5) Enable roles
+
+Run [`supabase-roles.sql`](./supabase-roles.sql) in the SQL Editor the same
+way. The first account that signs into the app becomes **Admin**; add more
+logins under Authentication → Users and assign their role (Admin /
+Accountant / Engineer) from the app's Settings → Users & roles panel.
+
 ## 4. Get the two values the app needs
 
 Sidebar → **Project Settings** → **API Keys**:

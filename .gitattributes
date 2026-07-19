@@ -1,0 +1,12 @@
+# Migration files are checksummed by sqlx (tauri-plugin-sql): the EXACT bytes
+# at build time are recorded in every installed database, and any later change
+# — including a silent CRLF/LF flip by git — makes the app refuse to open
+# existing databases ("migration was modified"). Pin the endings forever:
+#
+#  * 0001–0005 were first applied with CRLF endings  → force CRLF everywhere
+#  * 0006 was first applied with LF endings          → keep repo bytes (LF)
+#  * future migrations inherit the *.sql rule        → CRLF, deterministic
+#
+# NEVER edit an applied migration file; add a new numbered migration instead.
+apps/desktop/src-tauri/migrations/*.sql text eol=crlf
+apps/desktop/src-tauri/migrations/0006_sync_tracking.sql -text
