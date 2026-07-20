@@ -172,7 +172,7 @@ export const timeEntrySchema = z.object({
   projectId: z.number().int().positive("required"),
   stageId: z.number().int().positive().nullish(),
   date: isoDate,
-  minutes: z.number().int().min(1, "required").max(24 * 60),
+  minutes: z.number().int().min(1, "required").max(60_000, "max_hours"), // up to 1000 h per entry
   billable: z.boolean(),
   note: z.string().nullish(),
 });

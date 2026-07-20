@@ -216,6 +216,7 @@ export const ar: Dictionary = {
     invalid_currency: "عملة غير معروفة",
     advance_exceeds_value: "الدفعة المقدمة لا يمكن أن تتجاوز قيمة العقد",
     discount_exceeds_gross: "الخصم لا يمكن أن يتجاوز إجمالي المستخلص",
+    max_hours: "أدخل 1000 ساعة أو أقل لكل سجل",
     allocation_exceeds_payment: "التوزيع يتجاوز مبلغ الدفعة",
     allocation_exceeds_unpaid: "التوزيع يتجاوز الرصيد غير المسدد للمستخلص",
     release_exceeds_retention: "الإفراج يتجاوز قيمة الضمان المحتجز",

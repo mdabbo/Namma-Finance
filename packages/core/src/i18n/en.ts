@@ -214,6 +214,7 @@ export const en = {
     invalid_currency: "Unknown currency",
     advance_exceeds_value: "Advance cannot exceed the contract value",
     discount_exceeds_gross: "Discount cannot exceed the gross amount",
+    max_hours: "Enter 1000 hours or fewer per entry",
     allocation_exceeds_payment: "Allocations exceed the payment amount",
     allocation_exceeds_unpaid: "Allocation exceeds the certificate's unpaid balance",
     release_exceeds_retention: "Release exceeds the retention held",
