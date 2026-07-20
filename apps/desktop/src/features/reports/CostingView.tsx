@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { AlertTriangle } from "lucide-react";
 import { computeCosting, computeProfitability, toEgpPiasters } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
+import { useTimeEntries } from "../../repositories/timeEntries";
 import { useSettings } from "../../lib/settings";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { useFormat } from "../../lib/format";
@@ -13,11 +15,21 @@ import { Card, EmptyState, cx } from "../../components/ui";
  * changes the cash net profit (salaries stay counted as overhead only).
  */
 export function CostingView() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const fmt = useFormat();
   const base = useBaseMoney();
   const { data: financials } = useWorkspaceFinancials();
   const { data: settings } = useSettings();
+  const { data: timeEntries = [] } = useTimeEntries();
+
+  /** People with logged time but no hourly rate set — their hours cost 0 by design; make that visible. */
+  const missingRateNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const e of timeEntries) {
+      if (!e.hourlyRateMinor) names.add(e.personName);
+    }
+    return [...names];
+  }, [timeEntries]);
 
   const rows = useMemo(() => {
     if (!financials) return [];
@@ -33,6 +45,14 @@ export function CostingView() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-slate-400">{t("reports.costingNote")}</p>
+      {missingRateNames.length > 0 && (
+        <Card className="flex items-start gap-2 border-amber-200 bg-amber-50/60 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-300">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>
+            {t("reports.noRateWarning")}: <b>{missingRateNames.join(i18n.language === "ar" ? "، " : ", ")}</b>
+          </span>
+        </Card>
+      )}
       <Card className="overflow-x-auto p-4">
         <table className="w-full text-sm">
           <thead>

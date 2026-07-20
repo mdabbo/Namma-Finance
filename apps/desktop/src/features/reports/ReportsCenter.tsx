@@ -6,6 +6,8 @@ import {
   computeAging,
   computeProfitability,
   isBillable,
+  laborCostMinor,
+  minutesToHours,
   toEgpPiasters,
 } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
@@ -14,6 +16,7 @@ import { useCertificates } from "../../repositories/certificates";
 import { usePayments } from "../../repositories/payments";
 import { useExpenses } from "../../repositories/expenses";
 import { listAllAssignments, listAllPersonPayments, usePeople } from "../../repositories/people";
+import { listTimeEntries } from "../../repositories/timeEntries";
 import { useSettings } from "../../lib/settings";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { todayIso, useFormat } from "../../lib/format";
@@ -23,9 +26,9 @@ import { PrintPortal } from "../../components/PrintPortal";
 
 type ReportKey =
   | "projects" | "clients" | "certificates" | "payments" | "expenses"
-  | "people" | "profitability" | "aging" | "annual";
+  | "people" | "time" | "profitability" | "aging" | "annual";
 
-const REPORTS: ReportKey[] = ["projects", "clients", "certificates", "payments", "expenses", "people", "profitability", "aging", "annual"];
+const REPORTS: ReportKey[] = ["projects", "clients", "certificates", "payments", "expenses", "people", "time", "profitability", "aging", "annual"];
 
 export function ReportsCenter() {
   const { t, i18n } = useTranslation();
@@ -124,6 +127,21 @@ export function ReportsCenter() {
             [t("people.remainingAmount")]: fmt.money(agreed - paid, person.currency),
           };
         });
+      }
+      case "time": {
+        const entries = await listTimeEntries();
+        return entries.map((e) => ({
+          [t("common.date")]: e.date,
+          [t("time.person")]: e.personName,
+          [t("projects.single")]: e.projectName,
+          [t("time.stage")]: e.stageName ?? "",
+          [t("common.notes")]: e.note ?? "",
+          [t("time.hours")]: minutesToHours(e.minutes),
+          [t("time.billable")]: e.billable ? t("time.billable") : t("time.nonBillable"),
+          [t("time.laborCost")]: e.hourlyRateMinor
+            ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency)
+            : t("reports.noRate"),
+        }));
       }
       case "profitability": {
         const overhead = financials.allExpenses
