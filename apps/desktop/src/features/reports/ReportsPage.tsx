@@ -6,8 +6,9 @@ import { ProfitabilityView } from "./ProfitabilityView";
 import { CostingView } from "./CostingView";
 import { ReportsCenter } from "./ReportsCenter";
 import { ImportWizard } from "./ImportWizard";
+import { PaymentIntegrityView } from "./PaymentIntegrityView";
 
-type Tab = "cashflow" | "profitability" | "costing" | "center" | "import";
+type Tab = "cashflow" | "profitability" | "costing" | "center" | "import" | "integrity";
 
 export function ReportsPage() {
   const { t } = useTranslation();
@@ -19,6 +20,7 @@ export function ReportsPage() {
     { key: "costing", label: t("reports.costing") },
     { key: "center", label: t("reports.center") },
     { key: "import", label: t("importer.title") },
+    { key: "integrity", label: t("reports.paymentIntegrity") },
   ];
 
   return (
@@ -45,6 +47,7 @@ export function ReportsPage() {
       {tab === "costing" && <CostingView />}
       {tab === "center" && <ReportsCenter />}
       {tab === "import" && <ImportWizard />}
+      {tab === "integrity" && <PaymentIntegrityView />}
     </div>
   );
 }

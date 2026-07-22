@@ -1,4 +1,5 @@
 import { isMilestoneAchieved, milestoneAmounts, parseMilestones } from "@mep/core";
+import { invoke } from "@tauri-apps/api/core";
 import { execute, select, selectOne } from "../lib/db";
 import { todayIso } from "../lib/format";
 import { withLock } from "../lib/mutex";
@@ -15,7 +16,7 @@ import { withLock } from "../lib/mutex";
  *
  * Runs under the global reconcile lock: this is a read-modify-write of the
  * contract's milestone JSON, and concurrent invocations (mutation trigger +
- * background sweep) would otherwise double-create certificates and wipe their
+ * concurrent contract/stage edits) would otherwise double-create certificates and wipe their
  * certificateId links.
  */
 export function reconcileMilestoneCertificates(contractId?: number): Promise<number> {
@@ -25,6 +26,9 @@ export function reconcileMilestoneCertificates(contractId?: number): Promise<num
 async function reconcileImpl(contractId?: number): Promise<number> {
   const { loadWorkspaceFinancials } = await import("./financials");
   const { nextCertificateSeq } = await import("./certificates");
+  const { loadSettings } = await import("../lib/settings");
+  const { reserveNextNumberWithinExistingLock } = await import("./numbering");
+  const certificatePrefix = (await loadSettings()).certificateNumberPrefix;
   const ws = await loadWorkspaceFinancials();
   let created = 0;
 
@@ -56,7 +60,7 @@ async function reconcileImpl(contractId?: number): Promise<number> {
       0,
     );
     let remaining = achieved - covered;
-    let changed = false;
+    const drafts: Array<{ milestoneIndex: number; number: string; date: string; description: string; grossMinor: number }> = [];
 
     for (let i = 0; i < milestones.length && remaining > 0; i++) {
       const milestone = milestones[i]!;
@@ -64,40 +68,49 @@ async function reconcileImpl(contractId?: number): Promise<number> {
       if (!isMilestoneAchieved(milestone, completed) || amount <= 0) continue;
 
       if (milestone.certificateId) {
-        const existing = await selectOne<{ id: number }>(
-          "SELECT id FROM payment_certificates WHERE id = $1 AND deleted_at IS NULL",
-          [milestone.certificateId],
-        );
-        if (existing) continue; // its draft (or approved descendant) already exists
+        const existing = await selectOne<{ id: number }>("SELECT id FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL", [milestone.certificateId]);
+        if (existing) continue;
       }
 
-      const number = `${contract.number}-M${i + 1}`;
-      // defensive: never create a second live certificate for the same
-      // milestone number, even if the certificateId link was somehow lost
-      const dup = await selectOne<{ id: number }>(
-        "SELECT id FROM payment_certificates WHERE contract_id = $1 AND number = $2 AND deleted_at IS NULL",
-        [contract.id, number],
-      );
-      if (dup) {
-        milestone.certificateId = dup.id;
-        changed = true;
-        continue;
-      }
-
-      const seq = await nextCertificateSeq(contract.id);
-      const r = await execute(
-        `INSERT INTO payment_certificates (contract_id, seq, number, date, description, gross_minor, discount_minor, status)
-         VALUES ($1,$2,$3,$4,$5,$6,0,'DRAFT')`,
-        [contract.id, seq, number, todayIso(), milestone.title, amount],
-      );
-      milestone.certificateId = r.lastInsertId ?? 0;
+      const date = todayIso();
+      const number = await reserveNextNumberWithinExistingLock("CERTIFICATE", certificatePrefix, new Date(`${date}T00:00:00Z`));
+      drafts.push({ milestoneIndex: i, number, date, description: milestone.title, grossMinor: amount });
       remaining -= amount;
-      changed = true;
-      created += 1;
     }
 
-    if (changed) {
-      await execute("UPDATE contracts SET milestones = $1 WHERE id = $2", [JSON.stringify(milestones), contract.id]);
+    if (drafts.length === 0) continue;
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      created += await invoke<number>("create_milestone_certificates_atomic", {
+        contractId: contract.id,
+        drafts,
+      });
+    } else {
+      await execute("BEGIN IMMEDIATE");
+      try {
+        for (const draft of drafts) {
+          const duplicate = await selectOne<{ id: number }>(
+            "SELECT id FROM payment_certificates WHERE contract_id=$1 AND number=$2 AND deleted_at IS NULL",
+            [contract.id, draft.number],
+          );
+          let certificateId = duplicate?.id;
+          if (!certificateId) {
+            const seq = await nextCertificateSeq(contract.id);
+            const result = await execute(
+              `INSERT INTO payment_certificates (contract_id,seq,number,date,description,gross_minor,discount_minor,status)
+               VALUES ($1,$2,$3,$4,$5,$6,0,'DRAFT')`,
+              [contract.id, seq, draft.number, draft.date, draft.description, draft.grossMinor],
+            );
+            certificateId = result.lastInsertId ?? 0;
+            created += 1;
+          }
+          milestones[draft.milestoneIndex]!.certificateId = certificateId;
+        }
+        await execute("UPDATE contracts SET milestones=$1 WHERE id=$2", [JSON.stringify(milestones), contract.id]);
+        await execute("COMMIT");
+      } catch (error) {
+        await execute("ROLLBACK");
+        throw error;
+      }
     }
   }
   return created;

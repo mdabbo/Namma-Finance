@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   certificateSchema,
@@ -14,8 +14,10 @@ import { useWorkspaceFinancials } from "../../repositories/financials";
 import { Button, Card, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
+import { useSettings } from "../../lib/settings";
+import { nextCertificateNumber } from "../../repositories/certificates";
 
-const STATUSES: CertificateStatus[] = ["DRAFT", "SUBMITTED", "APPROVED", "PAID"];
+const STATUSES: CertificateStatus[] = ["DRAFT", "SUBMITTED", "APPROVED"];
 
 interface CertificateFormProps {
   initial?: CertificateListItem | null;
@@ -29,6 +31,7 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
   const fmt = useFormat();
   const { data: projects = [] } = useProjects();
   const { data: financials } = useWorkspaceFinancials();
+  const { data: settings } = useSettings();
 
   const [projectId, setProjectId] = useState(initial?.projectId ?? 0);
   const { data: contracts = [] } = useContractsByProject(projectId);
@@ -46,8 +49,20 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
     status: initial?.status ?? ("DRAFT" as CertificateStatus),
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (initial || form.number) return;
+    void nextCertificateNumber(settings?.certificateNumberPrefix ?? "CERT", new Date(`${form.date}T00:00:00Z`)).then((number) => setForm((current) => current.number ? current : { ...current, number }));
+  }, [initial, form.number, form.date, settings?.certificateNumberPrefix]);
 
   const contract = contracts.find((c) => c.id === form.contractId);
+  const terms = initial && initial.contractId === form.contractId ? {
+    valueMinor: initial.contractValueMinorSnapshot ?? contract?.valueMinor ?? 0,
+    vatBp: initial.vatBpSnapshot ?? contract?.vatBp ?? 0,
+    retentionBp: initial.retentionBpSnapshot ?? contract?.retentionBp ?? 0,
+    withholdingBp: initial.withholdingBpSnapshot ?? contract?.withholdingBp ?? 0,
+    advanceMinor: initial.advanceMinorSnapshot ?? contract?.advanceMinor ?? 0,
+    advanceRecoveryMethod: initial.advanceMethodSnapshot ?? contract?.advanceRecoveryMethod ?? "PROPORTIONAL",
+  } : contract;
   const state = form.contractId ? financials?.contractStates.get(form.contractId) : undefined;
   const currency = projects.find((p) => p.id === projectId)?.currency ?? initial?.currency ?? "EGP";
 
@@ -60,18 +75,18 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
   }, [state, initial]);
 
   const breakdown = useMemo(() => {
-    if (!contract || form.discountMinor > form.grossMinor) return null;
+    if (!terms || form.discountMinor > form.grossMinor) return null;
     try {
       return computeCertificate({
         grossMinor: form.grossMinor,
         discountMinor: form.discountMinor,
-        vatBp: contract.vatBp,
-        retentionBp: contract.retentionBp,
-        withholdingBp: contract.withholdingBp,
+        vatBp: terms.vatBp,
+        retentionBp: terms.retentionBp,
+        withholdingBp: terms.withholdingBp,
         advance: {
-          method: contract.advanceRecoveryMethod,
-          contractValueMinor: contract.valueMinor,
-          advanceMinor: contract.advanceMinor,
+          method: terms.advanceRecoveryMethod,
+          contractValueMinor: terms.valueMinor,
+          advanceMinor: terms.advanceMinor,
           recoveredBeforeMinor: recoveredBefore,
           manualRecoveryMinor: form.manualAdvanceRecoveryMinor,
         },
@@ -79,15 +94,21 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
     } catch {
       return null;
     }
-  }, [contract, form.grossMinor, form.discountMinor, form.manualAdvanceRecoveryMinor, recoveredBefore]);
+  }, [terms, form.grossMinor, form.discountMinor, form.manualAdvanceRecoveryMinor, recoveredBefore]);
 
   function submit() {
+    const dueBeforeSubmission=!!form.submissionDate && !!form.dueDateOverride && form.dueDateOverride<form.submissionDate;
+    if(dueBeforeSubmission && !window.confirm(t("validation.confirm_due_before_submission"))){
+      setErrors({dueDateOverride:t("validation.due_before_submission")});
+      return;
+    }
     const parsed = certificateSchema.safeParse({
       ...form,
       submissionDate: form.submissionDate || null,
       dueDateOverride: form.dueDateOverride || null,
       description: form.description || null,
       manualAdvanceRecoveryMinor: form.manualAdvanceRecoveryMinor,
+      dueDateConfirmed: dueBeforeSubmission,
     });
     if (!parsed.success) {
       const errs: Record<string, string> = {};
@@ -95,7 +116,7 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
       setErrors(errs);
       return;
     }
-    onSubmit(parsed.data);
+    onSubmit(initial?.status === "PAID" ? { ...parsed.data, status: "APPROVED" } : parsed.data);
   }
 
   return (
@@ -149,11 +170,15 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
           <MoneyInput currency={currency} valueMinor={form.discountMinor} onChange={(v) => setForm((f) => ({ ...f, discountMinor: v ?? 0 }))} />
         </Field>
         <Field label={t("common.status")}>
-          <Select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as CertificateStatus }))}>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>{t(`status.${s}`)}</option>
-            ))}
-          </Select>
+          {initial?.status === "PAID" ? (
+            <Select value="PAID" disabled><option value="PAID">{t("status.PAID")}</option></Select>
+          ) : (
+            <Select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as CertificateStatus }))}>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>{t(`status.${s}`)}</option>
+              ))}
+            </Select>
+          )}
         </Field>
 
         {contract?.advanceRecoveryMethod === "MANUAL" && (
@@ -171,7 +196,7 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
         </Field>
       </div>
 
-      {breakdown && contract && (
+      {breakdown && terms && (
         <Card className="mt-4 bg-slate-50 p-4 text-sm dark:bg-slate-800/50">
           <p className="mb-2 font-semibold">{t("certificates.breakdown")}</p>
           <table className="w-full max-w-md">
@@ -181,11 +206,11 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
                 <Row label={t("certificates.discount")} value={`− ${fmt.money(breakdown.discountMinor, currency)}`} />
               )}
               {breakdown.discountMinor > 0 && <Row label={t("certificates.base")} value={fmt.money(breakdown.baseMinor, currency)} strong />}
-              <Row label={`${t("certificates.vat")} (${fmt.percent(contract.vatBp)})`} value={`+ ${fmt.money(breakdown.vatMinor, currency)}`} />
-              <Row label={`${t("certificates.retention")} (${fmt.percent(contract.retentionBp)})`} value={`− ${fmt.money(breakdown.retentionMinor, currency)}`} />
+              <Row label={`${t("certificates.vat")} (${fmt.percent(terms.vatBp)})`} value={`+ ${fmt.money(breakdown.vatMinor, currency)}`} />
+              <Row label={`${t("certificates.retention")} (${fmt.percent(terms.retentionBp)})`} value={`− ${fmt.money(breakdown.retentionMinor, currency)}`} />
               <Row label={t("certificates.advanceRecovery")} value={`− ${fmt.money(breakdown.advanceRecoveryMinor, currency)}`} />
-              {contract.withholdingBp > 0 && (
-                <Row label={`${t("certificates.withholding")} (${fmt.percent(contract.withholdingBp)})`} value={`− ${fmt.money(breakdown.withholdingMinor, currency)}`} />
+              {terms.withholdingBp > 0 && (
+                <Row label={`${t("certificates.withholding")} (${fmt.percent(terms.withholdingBp)})`} value={`− ${fmt.money(breakdown.withholdingMinor, currency)}`} />
               )}
               <tr className="border-t border-slate-300 dark:border-slate-600">
                 <td className="pt-2 font-semibold">{t("certificates.netPayable")}</td>

@@ -65,10 +65,10 @@ describe("milestone (%) valuation", () => {
     expect(milestoneAmounts(10_000_000, partial)).toEqual([1_000_000]);
   });
 
-  it("parses valid JSON and rejects malformed entries", () => {
-    const parsed = parseMilestones(JSON.stringify([...plan, { bad: true }, { title: "neg", percentBp: -5 }]));
-    expect(parsed).toHaveLength(5);
-    expect(parseMilestones("not json")).toEqual([]);
+  it("parses valid JSON and visibly rejects malformed structured data", () => {
+    expect(parseMilestones(JSON.stringify(plan))).toHaveLength(5);
+    expect(() => parseMilestones(JSON.stringify([...plan, { bad: true }, { title: "neg", percentBp: -5 }]))).toThrow();
+    expect(() => parseMilestones("not json")).toThrow();
     expect(parseMilestones(null)).toEqual([]);
   });
 });
@@ -120,9 +120,9 @@ describe("drawing-rate valuation", () => {
     expect(drawingsValueMinor([])).toBe(0);
   });
 
-  it("parses valid JSON and rejects malformed entries", () => {
-    const parsed = parseDrawings(JSON.stringify([{ title: "ok", count: 2, rateMinor: 100 }, { title: "bad", count: 1.5, rateMinor: 100 }]));
-    expect(parsed).toHaveLength(1);
+  it("parses valid JSON and visibly rejects malformed entries", () => {
+    expect(parseDrawings(JSON.stringify([{ title: "ok", count: 2, rateMinor: 100 }]))).toHaveLength(1);
+    expect(() => parseDrawings(JSON.stringify([{ title: "ok", count: 2, rateMinor: 100 }, { title: "bad", count: 1.5, rateMinor: 100 }]))).toThrow();
     expect(parseDrawings(null)).toEqual([]);
   });
 });

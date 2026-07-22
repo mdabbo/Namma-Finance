@@ -34,6 +34,7 @@ export function ExpensesPage() {
   );
 
   const columns: Column<ExpenseListItem>[] = [
+    { key: "number", header: t("expenses.number"), value: (e) => e.number, render: (e) => <span className="tnum">{e.number}</span>, width: "150px" },
     { key: "date", header: t("common.date"), value: (e) => e.date, render: (e) => <span className="tnum">{fmt.date(e.date)}</span>, width: "110px" },
     { key: "category", header: t("expenses.category"), value: catName },
     { key: "description", header: t("common.description"), value: (e) => e.description, render: (e) => (

@@ -4,11 +4,11 @@ import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { Client } from "@mep/core";
 import { computeClientFinancials } from "@mep/core";
-import { useClientMutations, useClients, clientCascadeInfo } from "../../repositories/clients";
+import { useClientMutations, useClients, clientCascadeInfo, type ClientListItem } from "../../repositories/clients";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Button } from "../../components/ui";
+import { Badge, Button } from "../../components/ui";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { ClientForm } from "./ClientForm";
 
@@ -16,38 +16,46 @@ export function ClientsPage() {
   const { t } = useTranslation();
   const base = useBaseMoney();
   const navigate = useNavigate();
-  const { data: clients = [], isLoading } = useClients();
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const { data: clients = [], isLoading } = useClients(includeArchived);
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useClientMutations();
 
   const [editing, setEditing] = useState<Client | null | "new">(null);
-  const [deleting, setDeleting] = useState<{ client: Client; details: string[] } | null>(null);
+  const [deleting, setDeleting] = useState<{ client: ClientListItem; details: string[] } | null>(null);
 
   const rollup = (clientId: number) =>
     financials ? computeClientFinancials(clientId, financials.projects) : null;
 
-  const columns: Column<Client & { projectCount: number }>[] = [
+  const columns: Column<ClientListItem>[] = [
     { key: "name", header: t("common.name"), value: (c) => c.name, render: (c) => <span className="font-medium">{c.name}</span> },
     { key: "company", header: t("clients.company"), value: (c) => c.company },
     { key: "phone", header: t("common.phone"), value: (c) => c.phone, render: (c) => <span className="tnum">{c.phone}</span> },
     { key: "projects", header: t("clients.projects"), value: (c) => c.projectCount, align: "end" },
     {
       key: "contracts",
-      header: t("clients.totalContracts"),
+      header: t("cash.contractValueExcludingVat"),
       value: (c) => rollup(c.id)?.contractValueEgp ?? 0,
       render: (c) => <span className="tnum">{base.format(rollup(c.id)?.contractValueEgp ?? 0)}</span>,
       align: "end",
     },
     {
-      key: "collected",
-      header: t("clients.totalCollected"),
-      value: (c) => rollup(c.id)?.collectedEgp ?? 0,
-      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.collectedEgp ?? 0)}</span>,
+      key: "certificateCollections",
+      header: t("cash.certificateCollections"),
+      value: (c) => rollup(c.id)?.certificateCollectionsEgp ?? 0,
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.certificateCollectionsEgp ?? 0)}</span>,
+      align: "end",
+    },
+    {
+      key: "totalCashIn",
+      header: t("cash.totalActualCashIn"),
+      value: (c) => rollup(c.id)?.totalActualCashInEgp ?? 0,
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.totalActualCashInEgp ?? 0)}</span>,
       align: "end",
     },
     {
       key: "outstanding",
-      header: t("clients.outstanding"),
+      header: t("cash.outstandingReceivables"),
       value: (c) => rollup(c.id)?.outstandingEgp ?? 0,
       render: (c) => {
         const v = rollup(c.id)?.outstandingEgp ?? 0;
@@ -60,7 +68,7 @@ export function ClientsPage() {
       header: "",
       sortable: false,
       width: "120px",
-      render: (c) => (
+      render: (c) => c.archivedAt ? <Badge value="CANCELLED" label={t("lifecycle.archived")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(c)}>
             {t("common.edit")}
@@ -96,11 +104,16 @@ export function ClientsPage() {
         </Button>
       </div>
 
+      <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
+        <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
+        {t("lifecycle.includeArchived")}
+      </label>
+
       <DataTable
         rows={clients}
         columns={columns}
         rowKey={(c) => c.id}
-        onRowClick={(c) => navigate(`/clients/${c.id}`)}
+        onRowClick={(c) => { if (!c.archivedAt) navigate(`/clients/${c.id}`); }}
         emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
       />

@@ -4,6 +4,7 @@ import { execute, select } from "../lib/db";
 
 interface ExpenseRow {
   id: number;
+  number: string | null;
   date: string;
   category_id: number;
   description: string;
@@ -22,6 +23,7 @@ interface ExpenseRow {
 }
 
 export interface ExpenseListItem extends Expense {
+  number: string;
   categoryEn: string;
   categoryAr: string;
   projectName: string | null;
@@ -33,6 +35,7 @@ export interface ExpenseListItem extends Expense {
 function mapExpense(r: ExpenseRow): ExpenseListItem {
   return {
     id: r.id,
+    number: r.number ?? "",
     date: r.date,
     categoryId: r.category_id,
     description: r.description,
@@ -57,6 +60,7 @@ export async function listExpenses(): Promise<ExpenseListItem[]> {
      FROM expenses e
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
+     WHERE e.voided_at IS NULL AND e.archived_at IS NULL
      ORDER BY e.date DESC, e.id DESC`,
   );
   return rows.map(mapExpense);
@@ -68,7 +72,7 @@ export async function listExpensesByProject(projectId: number): Promise<ExpenseL
      FROM expenses e
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
-     WHERE e.project_id = $1
+     WHERE e.project_id = $1 AND e.voided_at IS NULL AND e.archived_at IS NULL
      ORDER BY e.date DESC, e.id DESC`,
     [projectId],
   );
@@ -76,10 +80,13 @@ export async function listExpensesByProject(projectId: number): Promise<ExpenseL
 }
 
 export async function createExpense(input: ExpenseInput): Promise<number> {
+  const { reserveNextNumber } = await import("./numbering");
+  const { loadSettings } = await import("../lib/settings");
+  const number = await reserveNextNumber("EXPENSE", (await loadSettings()).expenseNumberPrefix, new Date(`${input.date}T00:00:00Z`));
   const r = await execute(
-    `INSERT INTO expenses (date, category_id, description, project_id, supplier, amount_minor, currency, fx_rate_micro, attachment_path)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [input.date, input.categoryId, input.description, input.projectId ?? null, input.supplier ?? null,
+    `INSERT INTO expenses (number,date, category_id, description, project_id, supplier, amount_minor, currency, fx_rate_micro, attachment_path)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [number,input.date, input.categoryId, input.description, input.projectId ?? null, input.supplier ?? null,
      input.amountMinor, input.currency, input.fxRateMicro, input.attachmentPath ?? null],
   );
   return r.lastInsertId ?? 0;
@@ -96,7 +103,8 @@ export async function updateExpense(id: number, input: ExpenseInput): Promise<vo
 }
 
 export async function deleteExpense(id: number): Promise<void> {
-  await execute("DELETE FROM expenses WHERE id = $1", [id]);
+  const result = await execute("UPDATE expenses SET voided_at=datetime('now'), void_reason='Voided by user' WHERE id=$1 AND voided_at IS NULL AND person_payment_id IS NULL", [id]);
+  if (result.rowsAffected !== 1) throw new Error("EXPENSE_NOT_FOUND_VOIDED_OR_LINKED");
 }
 
 // --- categories ---

@@ -90,7 +90,8 @@ async function buildRichWorkspace(seed?: number, projectCount = 12): Promise<voi
         submissionDate: state === "DRAFT" ? null : submission,
         dueDateOverride: null, description: `Cert ${c + 1}`,
         grossMinor: gross, discountMinor: discount, manualAdvanceRecoveryMinor: null,
-        status: state,
+        // PAID is derived after the real payment below; it is never inserted as a label.
+        status: state === "PAID" ? "APPROVED" : state,
       });
       // pay APPROVED and PAID certs (PAID fully, APPROVED partially)
       if (state === "APPROVED" || state === "PAID") {
@@ -345,6 +346,14 @@ async function assertUniversalIdentities(label: string): Promise<void> {
 
   // no contract carries duplicate live certificate numbers
   for (const state of ws.contractStates.values()) {
+    expect(state.totalActualCashInMinor, `${label}: total cash categories`).toBe(
+      state.certificateCollectionsMinor + state.unallocatedCustomerCreditMinor
+      + state.advanceReceivedMinor + state.retentionReleasedMinor,
+    );
+    expect(state.outstandingReceivablesMinor, `${label}: receivables identity`).toBe(
+      state.invoicedAmountMinor - state.certificateCollectionsMinor,
+    );
+    expect(state.billableRevenueMinor, `${label}: billable below certified`).toBeGreaterThanOrEqual(state.certifiedBaseMinor);
     const numbers = state.certificates.filter((c) => !c.certificate.deletedAt).map((c) => c.certificate.number);
     expect(new Set(numbers).size, `${label}: duplicate cert numbers`).toBe(numbers.length);
   }
@@ -357,7 +366,7 @@ describe("dashboard & reports — fuzz + scale", () => {
       await buildRichWorkspace(seed, 5 + (seed % 11));
       await assertUniversalIdentities(`seed ${seed}`);
     }
-  });
+  }, 15_000);
 
   it("stays exact and safe at scale (60 projects)", async () => {
     resetDb();

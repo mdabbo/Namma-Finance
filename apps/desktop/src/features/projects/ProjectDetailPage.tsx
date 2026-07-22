@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
 import type { Contract } from "@mep/core";
 import { useProject } from "../../repositories/projects";
-import { useContractMutations, useContractsByProject, contractCascadeInfo } from "../../repositories/contracts";
+import { useContractMutations, useContractsByProject, contractCascadeInfo, useContractRevisions } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
 import { useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
@@ -50,6 +50,7 @@ export function ProjectDetailPage() {
   if (!project) return <EmptyState message={t("common.loading")} />;
 
   const fin = financials?.projects.find((f) => f.project.id === projectId);
+  const costProfile = financials?.costsByProject.get(projectId);
   const BackIcon = i18n.dir() === "rtl" ? ArrowRight : ArrowLeft;
   const currency = project.currency;
 
@@ -120,25 +121,25 @@ export function ProjectDetailPage() {
       {activeTab ==="overview" && (
         <div className="grid grid-cols-4 gap-3">
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("clients.totalContracts")}</p>
+            <p className="text-xs text-slate-500">{t("cash.contractValueExcludingVat")}</p>
             <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.contractValueMinor ?? 0, currency, { compactFraction: true })}</p>
           </Card>
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("projects.certified")}</p>
+            <p className="text-xs text-slate-500">{t("cash.certifiedRevenue")}</p>
             <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.certifiedBaseMinor ?? 0, currency, { compactFraction: true })}</p>
             <p className="text-xs text-slate-400 tnum">{fmt.percent(fin?.certifiedRatioBp ?? 0)}</p>
           </Card>
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("projects.collected")}</p>
+            <p className="text-xs text-slate-500">{t("cash.certificateCollections")}</p>
             <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">
-              {fmt.money(fin?.totalPaidMinor ?? 0, currency, { compactFraction: true })}
+              {fmt.money(fin?.certificateCollectionsMinor ?? 0, currency, { compactFraction: true })}
             </p>
             <p className="text-xs text-slate-400 tnum">{fmt.percent(fin?.collectionRatioBp ?? 0)}</p>
           </Card>
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("clients.outstanding")}</p>
+            <p className="text-xs text-slate-500">{t("cash.outstandingReceivables")}</p>
             <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-              {fmt.money(fin?.outstandingMinor ?? 0, currency, { compactFraction: true })}
+              {fmt.money(fin?.outstandingReceivablesMinor ?? 0, currency, { compactFraction: true })}
             </p>
           </Card>
 
@@ -146,23 +147,54 @@ export function ProjectDetailPage() {
             <p className="mb-2 text-sm font-semibold">{t("dashboard.certifiedVsCollected")}</p>
             <RatioBar ratioBp={fin?.collectionRatioBp ?? 0} secondaryBp={fin?.certifiedRatioBp ?? 0} className="!h-3" />
             <div className="mt-2 flex justify-between text-xs text-slate-500">
-              <span>{t("projects.collected")}: <b className="tnum">{fmt.percent(fin?.collectionRatioBp ?? 0)}</b></span>
-              <span>{t("projects.certified")}: <b className="tnum">{fmt.percent(fin?.certifiedRatioBp ?? 0)}</b></span>
+              <span>{t("cash.certificateCollections")}: <b className="tnum">{fmt.percent(fin?.collectionRatioBp ?? 0)}</b></span>
+              <span>{t("cash.certifiedRevenue")}: <b className="tnum">{fmt.percent(fin?.certifiedRatioBp ?? 0)}</b></span>
             </div>
           </Card>
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("dashboard.kpiExpenses")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{base.format(fin?.expensesEgp ?? 0)}</p>
+            <p className="text-xs text-slate-500">{t("costs.actualPaid")}</p>
+            <p className="mt-1 text-lg font-semibold tnum">{base.format(costProfile?.actualPaidCostEgp ?? 0)}</p>
             <p className="text-xs text-slate-400 tnum">
               {t("projects.teamCost")}: {fmt.money(teamCost.paid, base.code, { compactFraction: true })} / {fmt.money(teamCost.agreed, base.code, { compactFraction: true })}
             </p>
           </Card>
+
           <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("dashboard.kpiProfit")}</p>
-            <p className={cx("mt-1 text-lg font-semibold tnum", (fin?.profitEgp ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
-              {base.format(fin?.profitEgp ?? 0)}
+            <p className="text-xs text-slate-500">{t("cash.billableRevenue")}</p>
+            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.billableRevenueMinor ?? 0, currency, { compactFraction: true })}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("cash.invoicedAmount")}</p>
+            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.invoicedAmountMinor ?? 0, currency, { compactFraction: true })}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("cash.totalActualCashIn")}</p>
+            <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">{fmt.money(fin?.totalActualCashInMinor ?? 0, currency, { compactFraction: true })}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("cash.customerCredit")}</p>
+            <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">{fmt.money(fin?.unallocatedCustomerCreditMinor ?? 0, currency, { compactFraction: true })}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("costs.accrued")}</p>
+            <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
+              {base.format(costProfile?.accruedCostEgp ?? 0)}
             </p>
-            <p className="text-xs text-slate-400 tnum">{t("dashboard.kpiMargin")}: {fmt.percent(fin?.marginBp ?? 0)}</p>
+            <p className="text-xs text-slate-400 tnum">{t("costs.committed")}: {base.format(costProfile?.committedCostEgp ?? 0)}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("costs.actualGrossProfit")}</p>
+            <p className={cx("mt-1 text-lg font-semibold tnum", (costProfile?.actualProfitEgp ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
+              {base.format(costProfile?.actualProfitEgp ?? 0)}
+            </p>
+            <p className="text-xs text-slate-400 tnum">{t("dashboard.kpiMargin")}: {fmt.percent(costProfile?.actualMarginBp ?? 0)}</p>
+          </Card>
+          <Card className="p-4">
+            <p className="text-xs text-slate-500">{t("costs.forecastProfitBeforeOverhead")}</p>
+            <p className={cx("mt-1 text-lg font-semibold tnum", (costProfile?.forecastProfitEgp ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
+              {base.format(costProfile?.forecastProfitEgp ?? 0)}
+            </p>
+            <p className="text-xs text-slate-400 tnum">{t("costs.forecast")}: {base.format(costProfile?.forecastCostEgp ?? 0)}</p>
           </Card>
 
           {project.description && (
@@ -219,12 +251,13 @@ export function ProjectDetailPage() {
                       {[
                         [t("contracts.value"), fmt.money(contract.valueMinor, currency, { compactFraction: true })],
                         [t("contracts.vatAmount"), fmt.money(state?.figures.vatMinor ?? 0, currency, { compactFraction: true })],
-                        [t("contracts.netValue"), fmt.money(state?.figures.netContractMinor ?? 0, currency, { compactFraction: true })],
-                        [t("contracts.certifiedToDate"), fmt.money(state?.certifiedBaseMinor ?? 0, currency, { compactFraction: true })],
-                        [t("contracts.remainingValue"), fmt.money(state?.remainingUncertifiedMinor ?? 0, currency, { compactFraction: true })],
-                        [t("contracts.retentionHeld"), fmt.money(state?.retentionHeldMinor ?? 0, currency, { compactFraction: true })],
+                        [t("cash.contractValueIncludingVat"), fmt.money(state?.figures.contractValueIncludingVatMinor ?? 0, currency, { compactFraction: true })],
+                        [t("cash.certifiedRevenue"), fmt.money(state?.certifiedBaseMinor ?? 0, currency, { compactFraction: true })],
+                        [t("cash.currentNetPayable"), fmt.money(state?.invoicedAmountMinor ?? 0, currency, { compactFraction: true })],
+                        [t("cash.uncertifiedContractValue"), fmt.money(state?.remainingUncertifiedMinor ?? 0, currency, { compactFraction: true })],
+                        [t("cash.retentionHeld"), fmt.money(state?.retentionHeldMinor ?? 0, currency, { compactFraction: true })],
                         [t("contracts.advanceRecovered"), `${fmt.money(state?.advanceRecoveredMinor ?? 0, currency, { compactFraction: true })} / ${fmt.money(contract.advanceMinor, currency, { compactFraction: true })}`],
-                        [t("contracts.collection"), fmt.percent(state?.collectionRatioBp ?? 0)],
+                        [t("cash.certificateCollectionRate"), fmt.percent(state?.collectionRatioBp ?? 0)],
                       ].map(([label, value]) => (
                         <div key={label as string}>
                           <p className="text-xs text-slate-400">{label}</p>
@@ -232,6 +265,7 @@ export function ProjectDetailPage() {
                         </div>
                       ))}
                     </div>
+                    <ContractRevisionHistory contractId={contract.id} currency={currency} />
                   </Card>
                 );
               })}
@@ -331,9 +365,9 @@ export function ProjectDetailPage() {
           initial={contractModal === "new" ? null : contractModal}
           busy={contractMutations.create.isPending || contractMutations.update.isPending}
           onClose={() => setContractModal(null)}
-          onSubmit={(input) => {
+          onSubmit={(input, revision) => {
             if (contractModal === "new") contractMutations.create.mutate(input, { onSuccess: () => setContractModal(null) });
-            else contractMutations.update.mutate({ id: contractModal.id, input }, { onSuccess: () => setContractModal(null) });
+            else contractMutations.update.mutate({ id: contractModal.id, input, revision }, { onSuccess: () => setContractModal(null) });
           }}
         />
       )}
@@ -348,6 +382,29 @@ export function ProjectDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+function ContractRevisionHistory({ contractId, currency }: { contractId: number; currency: string }) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const { data: revisions = [] } = useContractRevisions(contractId);
+  if (revisions.length === 0) return null;
+  return (
+    <details className="mt-3 border-t border-slate-100 pt-2 text-xs dark:border-slate-800">
+      <summary className="cursor-pointer font-medium text-slate-500">{t("contracts.revisionHistory")} ({revisions.length})</summary>
+      <div className="mt-2 space-y-1.5">
+        {revisions.map((revision) => (
+          <div key={revision.id} className="grid grid-cols-5 gap-2 rounded bg-slate-50 px-2 py-1.5 dark:bg-slate-800/60">
+            <span>R{revision.revisionNumber}</span>
+            <span className="tnum">{fmt.date(revision.effectiveDate)}</span>
+            <span className="tnum">{fmt.money(revision.contractValueMinor, currency, { compactFraction: true })}</span>
+            <span className="tnum">VAT {fmt.percent(revision.vatBp)}</span>
+            <span className="truncate" title={revision.reason}>{revision.reason}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -504,37 +561,53 @@ function ProjectPayments({ projectId, currency }: { projectId: number; currency:
   const totals = states.reduce(
     (acc, s) => ({
       due: acc.due + s.totalDueMinor,
-      paid: acc.paid + s.totalPaidMinor,
-      cashIn: acc.cashIn + s.totalCashInMinor,
+      paid: acc.paid + s.certificateCollectionsMinor,
+      advance: acc.advance + s.advanceReceivedMinor,
+      retention: acc.retention + s.retentionReleasedMinor,
+      cashIn: acc.cashIn + s.totalActualCashInMinor,
+      credit: acc.credit + s.unallocatedCustomerCreditMinor,
       // what the contract will bring in over its whole life: value + VAT
       // (retention is inside that — withheld now, released at the end)
       lifetime: acc.lifetime + s.contract.valueMinor + s.figures.vatMinor,
     }),
-    { due: 0, paid: 0, cashIn: 0, lifetime: 0 },
+    { due: 0, paid: 0, advance: 0, retention: 0, cashIn: 0, credit: 0, lifetime: 0 },
   );
-  const remaining = Math.max(0, totals.lifetime - totals.cashIn);
   const dueNow = Math.max(0, totals.due - totals.paid);
 
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-4 gap-3">
       <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("payments.totalPaid")}</p>
+        <p className="text-xs text-slate-500">{t("cash.certificateCollections")}</p>
         <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">
           {fmt.money(totals.paid, currency, { compactFraction: true })}
         </p>
       </Card>
       <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("payments.remainingBalance")}</p>
+        <p className="text-xs text-slate-500">{t("cash.lifetimeContractEntitlement")}</p>
         <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-          {fmt.money(remaining, currency, { compactFraction: true })}
+          {fmt.money(totals.lifetime, currency, { compactFraction: true })}
         </p>
         <p className="text-xs text-slate-400 tnum">
-          {t("payments.remainingHint", { due: fmt.money(dueNow, currency, { compactFraction: true }) })}
+          {t("cash.outstandingReceivables")}: {fmt.money(dueNow, currency, { compactFraction: true })}
         </p>
       </Card>
       <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("dashboard.cashIn")}</p>
+        <p className="text-xs text-slate-500">{t("cash.totalActualCashIn")}</p>
         <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.cashIn, currency, { compactFraction: true })}</p>
+      </Card>
+      <Card className="p-4">
+        <p className="text-xs text-slate-500">{t("cash.customerCredit")}</p>
+        <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
+          {fmt.money(totals.credit, currency, { compactFraction: true })}
+        </p>
+      </Card>
+      <Card className="p-4">
+        <p className="text-xs text-slate-500">{t("cash.advanceReceived")}</p>
+        <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.advance, currency, { compactFraction: true })}</p>
+      </Card>
+      <Card className="p-4">
+        <p className="text-xs text-slate-500">{t("cash.retentionReleased")}</p>
+        <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.retention, currency, { compactFraction: true })}</p>
       </Card>
     </div>
   );

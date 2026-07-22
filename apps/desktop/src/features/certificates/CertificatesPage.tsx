@@ -31,6 +31,13 @@ export function CertificatesPage() {
   const stateOf = (cert: CertificateListItem) =>
     financials?.contractStates.get(cert.contractId)?.certificates.find((cs) => cs.certificate.id === cert.id);
 
+  function submitDraft(c: CertificateListItem) {
+    const submissionDate = todayIso();
+    const dueBeforeSubmission = !!c.dueDateOverride && c.dueDateOverride < submissionDate;
+    if (dueBeforeSubmission && !window.confirm(t("validation.confirm_due_before_submission"))) return;
+    mutations.setStatus.mutate({ id: c.id, status: "SUBMITTED", submissionDate, dueDateConfirmed: dueBeforeSubmission });
+  }
+
   const filtered = useMemo(
     () => certificates.filter((c) => !statusFilter || c.status === statusFilter),
     [certificates, statusFilter],
@@ -88,7 +95,7 @@ export function CertificatesPage() {
       render: (c) => (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           {c.status === "DRAFT" && (
-            <Button variant="ghost" onClick={() => mutations.setStatus.mutate({ id: c.id, status: "SUBMITTED", submissionDate: todayIso() })}>
+            <Button variant="ghost" onClick={() => submitDraft(c)}>
               {t("certificates.markSubmitted")}
             </Button>
           )}

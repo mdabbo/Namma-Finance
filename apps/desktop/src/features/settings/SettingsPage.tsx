@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, DatabaseBackup, Languages, Coins, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
+import { CloudUpload, DatabaseBackup, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
 import { getSyncClient } from "../../lib/sync/client";
-import { disableLock, isLockEnabled, setLockPassword, verifyLockPassword } from "../../lib/lock";
+import { disableLock, isLockEnabled, setLockPassword } from "../../lib/lock";
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
@@ -14,6 +14,8 @@ import { invalidateSyncClient, useLastSyncReport, useSyncMutations, useSyncSessi
 import { Button, Card, Field, Input, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
+import { listOpenSyncConflicts, resolveSyncConflict, type SyncConflictResolution } from "../../repositories/syncConflicts";
+import { loadReleaseInfo } from "../../lib/release";
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -26,6 +28,7 @@ export function SettingsPage() {
   const expenseMutations = useExpenseMutations();
   const { data: backups = [] } = useBackups();
   const backupMutations = useBackupMutations();
+  const { data: releaseInfo } = useQuery({ queryKey: ["release-info"], queryFn: loadReleaseInfo, staleTime: Infinity });
 
   const [newCategory, setNewCategory] = useState({ nameAr: "", nameEn: "" });
   const [confirmRestore, setConfirmRestore] = useState(false);
@@ -69,6 +72,19 @@ export function SettingsPage() {
                 }}
               />
             </Field>
+            {(["contractNumberPrefix", "certificateNumberPrefix", "paymentNumberPrefix", "expenseNumberPrefix"] as const).map((key) => (
+              <Field key={key} label={t(`settings.${key}`)}>
+                <Input
+                  defaultValue={settings?.[key] ?? ""}
+                  dir="ltr"
+                  maxLength={12}
+                  onBlur={(e) => {
+                    const value = e.target.value.trim().toUpperCase();
+                    if (/^[A-Z0-9]{1,12}$/.test(value) && value !== settings?.[key]) updateSetting.mutate({ key, value });
+                  }}
+                />
+              </Field>
+            ))}
             <Field label={t("settings.baseCurrency")}>
               <Select
                 value={settings?.baseCurrency ?? "EGP"}
@@ -81,6 +97,20 @@ export function SettingsPage() {
               <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
             </Field>
           </div>
+        </Card>
+
+        <Card className="p-5">
+          <SectionTitle icon={<Info size={16} />} title={t("settings.releaseInfo")} />
+          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+            <ReleaseValue label={t("settings.applicationVersion")} value={releaseInfo?.appVersion ?? "—"} />
+            <ReleaseValue label={t("settings.releaseChannel")} value={releaseInfo ? t(`settings.releaseChannels.${releaseInfo.channel}`) : "—"} />
+            <ReleaseValue label={t("settings.databaseSchemaVersion")} value={releaseInfo ? String(releaseInfo.schemaVersion) : "—"} />
+          </dl>
+          {releaseInfo && releaseInfo.schemaVersion !== releaseInfo.expectedSchemaVersion && (
+            <p className="mt-3 text-xs font-medium text-red-600" role="alert">
+              {t("settings.schemaMismatch", { expected: releaseInfo.expectedSchemaVersion, actual: releaseInfo.schemaVersion })}
+            </p>
+          )}
         </Card>
 
         {full && (
@@ -221,6 +251,9 @@ export function SettingsPage() {
             </div>
           </Field>
           <p className="mb-4 text-xs text-slate-400">{t("settings.backupFolderNote")}</p>
+          <Field label={t("settings.backupRetention")} className="mb-4 max-w-xs">
+            <Input key={settings?.backupRetentionCount ?? 14} type="number" min={1} max={365} defaultValue={settings?.backupRetentionCount ?? 14} onBlur={(e) => { const value=Math.min(365,Math.max(1,Number(e.target.value)||14)); if(value!==settings?.backupRetentionCount) updateSetting.mutate({key:"backupRetentionCount",value}); }} />
+          </Field>
           <div className="mb-4 flex gap-2">
             <Button variant="primary" onClick={() => backupMutations.backupNow.mutate()} disabled={backupMutations.backupNow.isPending}>
               {t("settings.backupNow")}
@@ -233,12 +266,15 @@ export function SettingsPage() {
               <ul className="space-y-1 text-slate-400">
                 {backups.map((b) => (
                   <li key={b.id} className="flex justify-between gap-4">
-                    <span dir="ltr" className="truncate">{b.path}</span>
-                    <span className="shrink-0 tnum">{fmt.date(b.createdAt.slice(0, 10))} · {b.kind}</span>
+                    <span dir="ltr" className="truncate" title={b.sha256Checksum??undefined}>{b.filename}</span>
+                    <span className="shrink-0 tnum">{fmt.date(b.createdAt.slice(0, 10))} · {b.backupType} · v{b.databaseVersion??"?"}</span>
                   </li>
                 ))}
               </ul>
             </div>
+          )}
+          {(backupMutations.backupNow.error || backupMutations.restore.error) && (
+            <p className="mt-3 text-xs text-red-600" dir="ltr">{String((backupMutations.backupNow.error ?? backupMutations.restore.error) instanceof Error ? (backupMutations.backupNow.error ?? backupMutations.restore.error as Error).message : (backupMutations.backupNow.error ?? backupMutations.restore.error))}</p>
           )}
         </Card>
         )}
@@ -260,9 +296,18 @@ export function SettingsPage() {
   );
 }
 
+function ReleaseValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-slate-400">{label}</dt>
+      <dd className="mt-1 font-semibold tnum" dir="auto">{value}</dd>
+    </div>
+  );
+}
+
 /**
- * App lock: password gate at launch (per device). Stored as a salted
- * PBKDF2 hash in local settings; the cloud login doubles as recovery.
+ * App lock: password gate at launch (per device), derived with Argon2id in
+ * Rust. This is explicitly not database encryption.
  */
 function SecuritySection() {
   const { t } = useTranslation();
@@ -282,22 +327,22 @@ function SecuritySection() {
 
   async function save(disable: boolean) {
     setMessage(null);
-    if (enabled && !(await verifyLockPassword(current))) {
-      setMessage({ ok: false, text: t("lock.wrong") });
-      return;
-    }
-    if (disable) {
-      await disableLock();
-      setMessage({ ok: true, text: t("lock.disabled") });
-    } else {
-      if (next.length < 4 || next !== confirm) {
-        setMessage({ ok: false, text: t("lock.mismatch") });
-        return;
+    try {
+      if (disable) {
+        await disableLock(current);
+        setMessage({ ok: true, text: t("lock.disabled") });
+      } else {
+        if (next.length < 8 || next !== confirm) {
+          setMessage({ ok: false, text: t("lock.mismatch") });
+          return;
+        }
+        await setLockPassword(next, enabled ? current : undefined);
+        setMessage({ ok: true, text: t("lock.saved") });
       }
-      await setLockPassword(next);
-      setMessage({ ok: true, text: t("lock.saved") });
+      reset();
+    } catch {
+      setMessage({ ok: false, text: t("lock.wrong") });
     }
-    reset();
   }
 
   return (
@@ -397,7 +442,15 @@ function UsersSection() {
 /** Phase 3: Supabase cloud sync — connection, sign-in, manual & auto sync. */
 function SyncSection() {
   const { t } = useTranslation();
+  const role = useRole();
   const fmt = useFormat();
+  const queryClient = useQueryClient();
+  const { data: conflicts = [] } = useQuery({ queryKey: ["sync-conflicts"], queryFn: listOpenSyncConflicts });
+  const [conflictNote, setConflictNote] = useState("");
+  const resolveConflict = useMutation({
+    mutationFn: ({ id, resolution }: { id: number; resolution: SyncConflictResolution }) => resolveSyncConflict(id, resolution, conflictNote),
+    onSuccess: () => { setConflictNote(""); queryClient.invalidateQueries({ queryKey: ["sync-conflicts"] }); },
+  });
   const { data: settings } = useSettings();
   const updateSetting = useUpdateSetting();
   const { data: session } = useSyncSession();
@@ -514,6 +567,31 @@ function SyncSection() {
 
       {(sync.run.data ?? lastReport) && (
         <SyncReportLine report={(sync.run.data ?? lastReport)!} dateFmt={(d: string) => `${fmt.date(d.slice(0, 10))} ${d.slice(11, 16)}`} />
+      )}
+      {role !== "ENGINEER" && conflicts.length > 0 && (
+        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:bg-amber-950/20">
+          <p className="mb-2 text-sm font-semibold text-amber-800 dark:text-amber-200">{t("settings.syncConflicts")}</p>
+          <Input value={conflictNote} onChange={(e) => setConflictNote(e.target.value)} placeholder={t("settings.syncConflictReason")} />
+          {conflicts.map((conflict) => (
+            <div key={conflict.id} className="mt-2 rounded-lg border border-amber-200 p-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span dir="ltr">{conflict.table_name} · {conflict.row_uuid.slice(0, 8)} · {conflict.conflict_kind}</span>
+                <div className="flex gap-2">
+                  <Button disabled={!conflictNote.trim()} onClick={() => resolveConflict.mutate({ id: conflict.id, resolution: "KEEP_LOCAL" })}>{conflict.conflict_kind === "DUPLICATE_RECORD" ? t("settings.syncRenumberKeepBoth") : t("settings.syncKeepLocal")}</Button>
+                  {conflict.conflict_kind !== "DUPLICATE_RECORD" && <Button disabled={!conflictNote.trim()} onClick={() => resolveConflict.mutate({ id: conflict.id, resolution: "KEEP_REMOTE" })}>{t("settings.syncKeepRemote")}</Button>}
+                </div>
+              </div>
+              <details className="mt-2">
+                <summary className="cursor-pointer">{t("settings.syncCompareVersions")}</summary>
+                <div className="mt-2 grid gap-2 md:grid-cols-2" dir="ltr">
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white p-2 dark:bg-slate-900">{JSON.stringify(JSON.parse(conflict.local_json), null, 2)}</pre>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white p-2 dark:bg-slate-900">{JSON.stringify(JSON.parse(conflict.remote_json), null, 2)}</pre>
+                </div>
+              </details>
+            </div>
+          ))}
+          {resolveConflict.isError && <p className="mt-2 text-xs text-red-600">{(resolveConflict.error as Error).message}</p>}
+        </div>
       )}
     </Card>
   );

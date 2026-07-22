@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   HandCoins,
   FileSpreadsheet,
-  Percent,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -29,7 +28,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { computeDashboardKpis, isBillable, ratioBp, toEgpPiasters, type ProjectFinancials } from "@mep/core";
+import { aggregateProjectCostTotals, computeDashboardKpis, isBillable, toEgpPiasters, type ProjectFinancials } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useCategories } from "../../repositories/expenses";
 import { Badge, Card, EmptyState, RatioBar } from "../../components/ui";
@@ -63,19 +62,39 @@ export function DashboardPage() {
       );
     const contractValue = sumProjects((p) => p.contractValueMinor);
     const revenue = sumProjects((p) => p.certifiedBaseMinor);
-    const expenses = financials.allExpenses.reduce(
-      (s, e) => s + base.convertFrom(e.amountMinor, e.currency, e.fxRateMicro),
-      0,
-    );
-    const profit = revenue - expenses;
+    const billableRevenue = sumProjects((p) => p.billableRevenueMinor);
+    const invoicedAmount = sumProjects((p) => p.invoicedAmountMinor);
+    const profiles = [...financials.costsByProject.values()];
+    const overheadEgp = financials.allExpenses.filter((expense) => expense.projectId === null)
+      .reduce((sum, expense) => sum + toEgpPiasters(expense.amountMinor, expense.currency, expense.fxRateMicro), 0);
+    const costTotals = aggregateProjectCostTotals(profiles, overheadEgp);
+    const actualPaid = base.convert(costTotals.actualPaidCostEgp);
+    const directPaid = base.convert(costTotals.directActualPaidCostEgp);
+    const accrued = base.convert(costTotals.accruedCostEgp);
+    const committed = base.convert(costTotals.committedCostEgp);
+    const forecastCost = base.convert(costTotals.forecastCostEgp);
+    const actualCashIn = base.convert(profiles.reduce((sum, profile) => sum + profile.actualCashInEgp, 0));
     return {
       contractValue,
+      billableRevenue,
       revenue,
-      collected: sumProjects((p) => p.totalPaidMinor),
-      outstanding: sumProjects((p) => p.outstandingMinor),
-      expenses,
-      profit,
-      marginBp: ratioBp(profit, revenue),
+      invoicedAmount,
+      certificateCollections: sumProjects((p) => p.certificateCollectionsMinor),
+      advanceReceived: sumProjects((p) => p.advanceReceivedMinor),
+      retentionReleased: sumProjects((p) => p.retentionReleasedMinor),
+      totalActualCashIn: sumProjects((p) => p.totalActualCashInMinor),
+      customerCredit: sumProjects((p) => p.unallocatedCustomerCreditMinor),
+      outstanding: sumProjects((p) => p.outstandingReceivablesMinor),
+      uncertified: sumProjects((p) => p.remainingUncertifiedMinor),
+      retentionHeld: sumProjects((p) => p.retentionHeldMinor),
+      actualPaid,
+      accrued,
+      committed,
+      forecastCost,
+      actualGrossProfit: revenue - directPaid - accrued,
+      actualNetProfit: revenue - actualPaid - accrued,
+      cashProfit: actualCashIn - actualPaid,
+      forecastProfit: contractValue - forecastCost,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, base.code]);
@@ -83,12 +102,13 @@ export function DashboardPage() {
   /** Face-value totals per currency — no conversion at all. */
   const byCurrency = useMemo(() => {
     if (!financials) return [];
-    const groups = new Map<string, { value: number; collected: number; outstanding: number }>();
+    const groups = new Map<string, { value: number; certificateCollections: number; totalCashIn: number; outstanding: number }>();
     for (const p of financials.projects) {
-      const g = groups.get(p.project.currency) ?? { value: 0, collected: 0, outstanding: 0 };
+      const g = groups.get(p.project.currency) ?? { value: 0, certificateCollections: 0, totalCashIn: 0, outstanding: 0 };
       g.value += p.contractValueMinor;
-      g.collected += p.totalPaidMinor;
-      g.outstanding += p.outstandingMinor;
+      g.certificateCollections += p.certificateCollectionsMinor;
+      g.totalCashIn += p.totalActualCashInMinor;
+      g.outstanding += p.outstandingReceivablesMinor;
       groups.set(p.project.currency, g);
     }
     return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -160,23 +180,32 @@ export function DashboardPage() {
       </div>
 
       <div className="mb-4 grid grid-cols-5 gap-3">
-        <KpiCard label={t("dashboard.kpiContractValue")} value={fmt.money(money!.contractValue, base.code, { compactFraction: true })} icon={Briefcase} />
-        <KpiCard label={t("dashboard.kpiRevenue")} value={fmt.money(money!.revenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
-        <KpiCard label={t("dashboard.kpiCollected")} value={fmt.money(money!.collected, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.contractValueExcludingVat")} value={fmt.money(money!.contractValue, base.code, { compactFraction: true })} icon={Briefcase} />
+        <KpiCard label={t("cash.billableRevenue")} hint={t("cash.billableRevenueHint")} value={fmt.money(money.billableRevenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
+        <KpiCard label={t("cash.certifiedRevenue")} hint={t("cash.certifiedRevenueHint")} value={fmt.money(money!.revenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
+        <KpiCard label={t("cash.invoicedAmount")} hint={t("cash.invoicedAmountHint")} value={fmt.money(money.invoicedAmount, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
+        <KpiCard label={t("cash.certificateCollections")} hint={t("cash.certificateCollectionsHint")} value={fmt.money(money.certificateCollections, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.advanceReceived")} value={fmt.money(money.advanceReceived, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.retentionReleased")} value={fmt.money(money.retentionReleased, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.totalActualCashIn")} hint={t("cash.totalActualCashInHint")} value={fmt.money(money.totalActualCashIn, base.code, { compactFraction: true })} icon={Wallet} tone="positive" />
+        <KpiCard label={t("cash.customerCredit")} hint={t("cash.customerCreditHint")} value={fmt.money(money.customerCredit, base.code, { compactFraction: true })} icon={Wallet} tone={money.customerCredit > 0 ? "warning" : "default"} />
         <KpiCard
           label={t("dashboard.kpiOutstanding")}
+          hint={t("cash.outstandingReceivablesHint")}
           value={fmt.money(money!.outstanding, base.code, { compactFraction: true })}
           icon={Wallet}
           tone={money!.outstanding > 0 ? "warning" : "default"}
         />
-        <KpiCard label={t("dashboard.kpiExpenses")} value={fmt.money(money!.expenses, base.code, { compactFraction: true })} icon={TrendingDown} tone="negative" />
-        <KpiCard
-          label={t("dashboard.kpiProfit")}
-          value={fmt.money(money!.profit, base.code, { compactFraction: true })}
-          icon={TrendingUp}
-          tone={money!.profit >= 0 ? "positive" : "negative"}
-        />
-        <KpiCard label={t("dashboard.kpiMargin")} value={fmt.percent(money!.marginBp)} icon={Percent} />
+        <KpiCard label={t("cash.uncertifiedContractValue")} value={fmt.money(money.uncertified, base.code, { compactFraction: true })} icon={Briefcase} />
+        <KpiCard label={t("cash.retentionHeld")} value={fmt.money(money.retentionHeld, base.code, { compactFraction: true })} icon={Wallet} />
+        <KpiCard label={t("costs.actualPaid")} value={fmt.money(money.actualPaid, base.code, { compactFraction: true })} icon={TrendingDown} />
+        <KpiCard label={t("costs.accrued")} value={fmt.money(money.accrued, base.code, { compactFraction: true })} icon={AlarmClock} tone={money.accrued > 0 ? "warning" : "default"} />
+        <KpiCard label={t("costs.committed")} value={fmt.money(money.committed, base.code, { compactFraction: true })} icon={Briefcase} />
+        <KpiCard label={t("costs.forecast")} value={fmt.money(money.forecastCost, base.code, { compactFraction: true })} icon={TrendingDown} />
+        <KpiCard label={t("costs.actualGrossProfit")} value={fmt.money(money.actualGrossProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.actualGrossProfit >= 0 ? "positive" : "negative"} />
+        <KpiCard label={t("costs.actualNetProfit")} value={fmt.money(money.actualNetProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.actualNetProfit >= 0 ? "positive" : "negative"} />
+        <KpiCard label={t("costs.cashProfit")} value={fmt.money(money.cashProfit, base.code, { compactFraction: true })} icon={Wallet} tone={money.cashProfit >= 0 ? "positive" : "negative"} />
+        <KpiCard label={t("costs.forecastProfit")} value={fmt.money(money.forecastProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.forecastProfit >= 0 ? "positive" : "negative"} />
         <KpiCard label={t("dashboard.kpiActiveProjects")} value={String(kpis.activeProjects)} icon={Briefcase} />
         <KpiCard label={t("dashboard.kpiCompletedProjects")} value={String(kpis.completedProjects)} icon={CheckCircle2} />
         <KpiCard
@@ -196,7 +225,8 @@ export function DashboardPage() {
                 <span className="font-semibold tnum">{code}</span>
                 <span className="text-xs text-slate-500 tnum">
                   {t("dashboard.kpiContractValue")}: <b>{fmt.money(g.value, code, { compactFraction: true })}</b>
-                  {" · "}{t("dashboard.kpiCollected")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.collected, code, { compactFraction: true })}</b>
+                  {" · "}{t("cash.certificateCollections")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.certificateCollections, code, { compactFraction: true })}</b>
+                  {" · "}{t("cash.totalActualCashIn")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.totalCashIn, code, { compactFraction: true })}</b>
                   {" · "}{t("dashboard.kpiOutstanding")}: <b className="text-amber-600 dark:text-amber-400">{fmt.money(g.outstanding, code, { compactFraction: true })}</b>
                 </span>
               </div>
@@ -288,7 +318,7 @@ export function DashboardPage() {
               <YAxis tick={{ fontSize: 11 }} tickFormatter={currencyTick} orientation={i18n.dir() === "rtl" ? "right" : "left"} />
               <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
               <Legend />
-              <Line type="monotone" dataKey="cashIn" name={t("dashboard.cashIn")} stroke="#2563eb" strokeWidth={1.5} dot={false} />
+              <Line type="monotone" dataKey="cashIn" name={t("cash.totalActualCashIn")} stroke="#2563eb" strokeWidth={1.5} dot={false} />
               <Line type="monotone" dataKey="expenses" name={t("dashboard.cashOut")} stroke="#ef4444" strokeWidth={1.5} dot={false} />
               <Line type="monotone" dataKey="net" name={t("dashboard.net")} stroke="#10b981" strokeWidth={2} dot={false} />
             </LineChart>
@@ -351,7 +381,7 @@ export function DashboardPage() {
               </p>
               <RatioBar ratioBp={fin.collectionRatioBp} secondaryBp={fin.certifiedRatioBp} className="!h-2.5" />
               <div className="mt-1.5 flex justify-between text-[11px] text-slate-500">
-                <span>{t("projects.collected")}: <b className="tnum">{fmt.percent(fin.collectionRatioBp)}</b></span>
+                <span>{t("cash.certificateCollections")}: <b className="tnum">{fmt.percent(fin.collectionRatioBp)}</b></span>
                 <span>{t("projects.certified")}: <b className="tnum">{fmt.percent(fin.certifiedRatioBp)}</b></span>
               </div>
             </Card>

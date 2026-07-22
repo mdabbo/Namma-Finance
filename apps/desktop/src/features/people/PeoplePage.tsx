@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
-import { usePeople, usePeopleMutations } from "../../repositories/people";
+import { usePeople, usePeopleMutations, type PersonListItem } from "../../repositories/people";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, Field, Input, Modal, Select, Textarea } from "../../components/ui";
@@ -14,16 +14,17 @@ export function PeoplePage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const navigate = useNavigate();
-  const { data: people = [], isLoading } = usePeople();
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const { data: people = [], isLoading } = usePeople(includeArchived);
   const mutations = usePeopleMutations();
 
   const [typeFilter, setTypeFilter] = useState("");
   const [editing, setEditing] = useState<Person | "new" | null>(null);
-  const [deleting, setDeleting] = useState<Person | null>(null);
+  const [deleting, setDeleting] = useState<PersonListItem | null>(null);
 
   const filtered = people.filter((p) => !typeFilter || p.type === typeFilter);
 
-  const columns: Column<Person>[] = [
+  const columns: Column<PersonListItem>[] = [
     { key: "name", header: t("common.name"), value: (p) => p.name, render: (p) => <span className="font-medium">{p.name}</span> },
     { key: "type", header: t("payments.kind"), value: (p) => p.type, render: (p) => <Badge value={p.type === "EMPLOYEE" ? "APPROVED" : "SUBMITTED"} label={t(`personType.${p.type}`)} /> },
     { key: "specialization", header: t("people.specialization"), value: (p) => p.specialization },
@@ -53,7 +54,7 @@ export function PeoplePage() {
       header: "",
       sortable: false,
       width: "120px",
-      render: (p) => (
+      render: (p) => p.archivedAt ? <Badge value="CANCELLED" label={t("lifecycle.archived")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
           <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("common.delete")}</Button>
@@ -75,16 +76,20 @@ export function PeoplePage() {
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        onRowClick={(p) => navigate(`/people/${p.id}`)}
+        onRowClick={(p) => { if (!p.archivedAt) navigate(`/people/${p.id}`); }}
         emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
-        toolbar={
+        toolbar={<>
           <Select className="!w-40" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
             <option value="">{t("common.all")}</option>
             <option value="EMPLOYEE">{t("personType.EMPLOYEE")}</option>
             <option value="FREELANCER">{t("personType.FREELANCER")}</option>
           </Select>
-        }
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
+            {t("lifecycle.includeArchived")}
+          </label>
+        </>}
       />
 
       {editing !== null && (

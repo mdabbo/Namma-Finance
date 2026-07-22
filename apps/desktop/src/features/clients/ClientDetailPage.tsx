@@ -38,11 +38,12 @@ export function ClientDetailPage() {
         </div>
       </div>
 
-      <div className="mb-4 grid grid-cols-3 gap-3">
-        <KpiCard label={t("clients.totalContracts")} value={base.format(rollup?.contractValueEgp ?? 0)} icon={Briefcase} />
-        <KpiCard label={t("clients.totalCollected")} value={base.format(rollup?.collectedEgp ?? 0)} icon={Banknote} tone="positive" />
+      <div className="mb-4 grid grid-cols-4 gap-3">
+        <KpiCard label={t("cash.contractValueExcludingVat")} value={base.format(rollup?.contractValueEgp ?? 0)} icon={Briefcase} />
+        <KpiCard label={t("cash.certificateCollections")} value={base.format(rollup?.certificateCollectionsEgp ?? 0)} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.totalActualCashIn")} value={base.format(rollup?.totalActualCashInEgp ?? 0)} icon={Banknote} tone="positive" />
         <KpiCard
-          label={t("clients.outstanding")}
+          label={t("cash.outstandingReceivables")}
           value={base.format(rollup?.outstandingEgp ?? 0)}
           icon={Wallet}
           tone={(rollup?.outstandingEgp ?? 0) > 0 ? "warning" : "default"}

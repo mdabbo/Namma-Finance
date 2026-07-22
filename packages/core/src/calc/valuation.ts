@@ -1,4 +1,5 @@
 import { BP_SCALE, allocate, applyBp, assertMinor, mulDivRound } from "../money/money";
+import { z } from "zod";
 
 /**
  * Contract valuation breakdowns (confirmed rules):
@@ -10,6 +11,7 @@ import { BP_SCALE, allocate, applyBp, assertMinor, mulDivRound } from "../money/
  */
 
 export interface PercentMilestone {
+  [key: string]: unknown;
   title: string;
   percentBp: number;
   /** Linked project stage — the milestone is achieved when that stage completes. */
@@ -21,28 +23,49 @@ export interface PercentMilestone {
 }
 
 export interface DrawingLine {
+  [key: string]: unknown;
   title: string;
   count: number;
   rateMinor: number;
 }
 
+export type StructuredParseResult<T> = { ok:true; value:T } | { ok:false; code:"invalid_json"|"invalid_shape"; raw:string };
+export class StructuredDataError extends Error {
+  constructor(public readonly field:string,public readonly code:string,public readonly raw:string){super(`${field}:${code}`);}
+}
+
+const milestoneSchema=z.object({
+  title:z.string(),percentBp:z.number().int().safe().min(0),stageId:z.number().int().safe().nullable().default(null),
+  done:z.boolean().default(false),certificateId:z.number().int().safe().nullable().default(null),
+}).passthrough();
+const drawingSchema=z.object({title:z.string(),count:z.number().int().safe().min(0),rateMinor:z.number().int().safe().min(0)}).passthrough();
+const attachmentsSchema=z.array(z.string().min(1));
+
+function parseStructured<T>(raw:string|null|undefined,schema:z.ZodType<T>):StructuredParseResult<T>{
+  if(raw==null)return {ok:true,value:schema.parse([])};
+  if(raw.trim()==="")return {ok:false,code:"invalid_json",raw};
+  let decoded:unknown;
+  try{decoded=JSON.parse(raw);}catch{return {ok:false,code:"invalid_json",raw};}
+  const parsed=schema.safeParse(decoded);
+  return parsed.success?{ok:true,value:parsed.data}:{ok:false,code:"invalid_shape",raw};
+}
+
+export function parseMilestonesResult(raw:string|null|undefined):StructuredParseResult<PercentMilestone[]>{
+  return parseStructured(raw,z.array(milestoneSchema) as z.ZodType<PercentMilestone[]>);
+}
+
+export function parseDrawingsResult(raw:string|null|undefined):StructuredParseResult<DrawingLine[]>{
+  return parseStructured(raw,z.array(drawingSchema) as z.ZodType<DrawingLine[]>);
+}
+
+export function parseAttachmentsResult(raw:string|null|undefined):StructuredParseResult<string[]>{
+  return parseStructured(raw,attachmentsSchema);
+}
+
 export function parseMilestones(json: string | null | undefined): PercentMilestone[] {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((m) => m && typeof m.title === "string" && Number.isSafeInteger(m.percentBp) && m.percentBp >= 0)
-      .map((m) => ({
-        title: m.title,
-        percentBp: m.percentBp,
-        stageId: Number.isSafeInteger(m.stageId) ? m.stageId : null,
-        done: m.done === true,
-        certificateId: Number.isSafeInteger(m.certificateId) ? m.certificateId : null,
-      }));
-  } catch {
-    return [];
-  }
+  const result=parseMilestonesResult(json);
+  if(!result.ok)throw new StructuredDataError("milestones",result.code,result.raw);
+  return result.value;
 }
 
 /**
@@ -88,24 +111,9 @@ export function computeReadyToBill(
 }
 
 export function parseDrawings(json: string | null | undefined): DrawingLine[] {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter(
-        (d) =>
-          d &&
-          typeof d.title === "string" &&
-          Number.isSafeInteger(d.count) &&
-          d.count >= 0 &&
-          Number.isSafeInteger(d.rateMinor) &&
-          d.rateMinor >= 0,
-      )
-      .map((d) => ({ title: d.title, count: d.count, rateMinor: d.rateMinor }));
-  } catch {
-    return [];
-  }
+  const result=parseDrawingsResult(json);
+  if(!result.ok)throw new StructuredDataError("drawings",result.code,result.raw);
+  return result.value;
 }
 
 export function milestonesTotalBp(milestones: PercentMilestone[]): number {

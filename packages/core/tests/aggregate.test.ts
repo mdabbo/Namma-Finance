@@ -142,6 +142,39 @@ describe("project financials with FX consolidation", () => {
     expect(fin.marginBp).toBe(0);
     expect(fin.profitEgp).toBe(-10_000_000);
   });
+
+  it("keeps project cash categories distinct", () => {
+    const p = project();
+    const c = contract({ advanceMinor: 0, vatBp: 0, retentionBp: 0 });
+    const certificate = cert({ grossMinor: 50_000_000 });
+    const state = computeContractState({
+      contract: c,
+      certificates: [certificate],
+      payments: [{ id: 1, contractId: 1, kind: "CERTIFICATE", number: "P-1", date: "2026-03-01",
+        amountMinor: 30_000_000, method: "BANK_TRANSFER", bank: null, reference: null, notes: null,
+        deletedAt: null, createdAt: "2026-03-01" }],
+      allocations: [{ id: 1, paymentId: 1, certificateId: 1, amountMinor: 20_000_000 }],
+      todayIso: TODAY,
+    });
+    const fin = computeProjectFinancials(p, [state], []);
+    expect(fin.certificateCollectionsMinor).toBe(20_000_000);
+    expect(fin.unallocatedCustomerCreditMinor).toBe(10_000_000);
+    expect(fin.totalActualCashInMinor).toBe(30_000_000);
+    expect(fin.outstandingReceivablesMinor).toBe(30_000_000);
+  });
+
+  it("sums uncertified value per contract without netting over-certification", () => {
+    const overCertified = stateOf(contract({ id: 1, valueMinor: 100_000_000 }), [
+      cert({ id: 1, contractId: 1, grossMinor: 120_000_000 }),
+    ]);
+    const underCertified = stateOf(contract({ id: 2, valueMinor: 100_000_000 }), [
+      cert({ id: 2, contractId: 2, grossMinor: 20_000_000 }),
+    ]);
+    const fin = computeProjectFinancials(project(), [overCertified, underCertified], []);
+    expect(overCertified.remainingUncertifiedMinor).toBe(0);
+    expect(underCertified.remainingUncertifiedMinor).toBe(80_000_000);
+    expect(fin.remainingUncertifiedMinor).toBe(80_000_000);
+  });
 });
 
 describe("client rollup", () => {

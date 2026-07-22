@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FileText, FolderOpen, Trash2, UploadCloud } from "lucide-react";
+import { CloudDownload, CloudUpload, FilePlus2, FileText, FolderOpen, Trash2, UploadCloud } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { exists } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir, openPath } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DocumentCategory, ProjectDocument } from "@mep/core";
@@ -11,11 +11,6 @@ import { Badge, Button, Card, EmptyState, Select, cx } from "../../components/ui
 import { useFormat } from "../../lib/format";
 
 const CATEGORIES: DocumentCategory[] = ["CONTRACT", "BOQ", "PROPOSAL", "INVOICE", "DRAWING", "OTHER"];
-
-function fileTitle(path: string): string {
-  const name = path.split(/[\\/]/).pop() ?? path;
-  return name;
-}
 
 export function DocumentsTab({ projectId }: { projectId: number }) {
   const { t } = useTranslation();
@@ -28,7 +23,7 @@ export function DocumentsTab({ projectId }: { projectId: number }) {
   const addFiles = useCallback(
     (paths: string[]) => {
       for (const path of paths) {
-        mutations.create.mutate({ projectId, category: "OTHER", title: fileTitle(path), path });
+        mutations.importFile.mutate({ projectId, category: "OTHER", path });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -56,7 +51,7 @@ export function DocumentsTab({ projectId }: { projectId: number }) {
       const gone = new Set<number>();
       for (const doc of documents) {
         try {
-          if (!(await exists(doc.path))) gone.add(doc.id);
+          if (!doc.localCachePath || !(await invoke<boolean>("document_file_exists",{path:doc.localCachePath}))) gone.add(doc.id);
         } catch {
           gone.add(doc.id);
         }
@@ -90,10 +85,16 @@ export function DocumentsTab({ projectId }: { projectId: number }) {
       ) : (
         <Card className="p-2">
           {documents.map((doc) => (
-            <DocumentRow key={doc.id} doc={doc} missing={missing.has(doc.id)} onDelete={() => mutations.remove.mutate(doc.id)} onCategory={(category) => mutations.update.mutate({ id: doc.id, category, title: doc.title })} dateLabel={fmt.date(doc.addedAt.slice(0, 10))} />
+            <DocumentRow key={doc.id} doc={doc} missing={missing.has(doc.id)}
+              onArchive={() => mutations.archive.mutate(doc.id)}
+              onCategory={(category) => mutations.update.mutate({ id: doc.id, category, title: doc.title })}
+              onUpload={() => mutations.upload.mutate(doc)} onDownload={() => mutations.download.mutate(doc)}
+              onVersion={async()=>{const path=await open({multiple:false});if(typeof path==="string")mutations.addVersion.mutate({document:doc,path});}}
+              dateLabel={fmt.date(doc.addedAt.slice(0, 10))} />
           ))}
         </Card>
       )}
+      {[mutations.importFile.error,mutations.addVersion.error,mutations.upload.error,mutations.download.error].find(Boolean) instanceof Error&&(()=>{const message=([mutations.importFile.error,mutations.addVersion.error,mutations.upload.error,mutations.download.error].find(Boolean) as Error).message;return <p className="mt-2 text-sm text-red-600">{t(`documents.errors.${message}`,message)}</p>;})()}
     </div>
   );
 }
@@ -101,14 +102,20 @@ export function DocumentsTab({ projectId }: { projectId: number }) {
 function DocumentRow({
   doc,
   missing,
-  onDelete,
+  onArchive,
   onCategory,
+  onUpload,
+  onDownload,
+  onVersion,
   dateLabel,
 }: {
   doc: ProjectDocument;
   missing: boolean;
-  onDelete: () => void;
+  onArchive: () => void;
   onCategory: (category: DocumentCategory) => void;
+  onUpload: () => void;
+  onDownload: () => void;
+  onVersion: () => void;
   dateLabel: string;
 }) {
   const { t } = useTranslation();
@@ -116,10 +123,10 @@ function DocumentRow({
     <div className="group flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/50">
       <FileText size={16} className="shrink-0 text-slate-400" />
       <div className="min-w-0 flex-1">
-        <p className={cx("truncate text-sm font-medium", missing && "text-red-500 line-through")} title={doc.path}>
+        <p className={cx("truncate text-sm font-medium", missing && "text-amber-600")} title={doc.originalFilename}>
           {doc.title}
         </p>
-        <p className="truncate text-xs text-slate-400" dir="ltr">{doc.path}</p>
+        <p className="truncate text-xs text-slate-400" dir="ltr">{doc.originalFilename} · v{doc.versionNumber} · {doc.storageProvider}</p>
         {missing && <p className="text-xs text-red-500">{t("documents.missing")}</p>}
       </div>
       <span className="text-xs text-slate-400 tnum">{dateLabel}</span>
@@ -130,13 +137,16 @@ function DocumentRow({
       </Select>
       <Badge value={doc.category === "CONTRACT" ? "APPROVED" : "DRAFT"} label={t(`docCategory.${doc.category}`)} />
       <div className="flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <Button variant="ghost" disabled={missing} title={t("documents.openFile")} onClick={() => void openPath(doc.path)}>
+        <Button variant="ghost" disabled={missing||!doc.localCachePath} title={t("documents.openFile")} onClick={() => doc.localCachePath&&void openPath(doc.localCachePath)}>
           <FileText size={14} />
         </Button>
-        <Button variant="ghost" disabled={missing} onClick={() => void revealItemInDir(doc.path)}>
+        <Button variant="ghost" disabled={missing||!doc.localCachePath} onClick={() => doc.localCachePath&&void revealItemInDir(doc.localCachePath)}>
           <FolderOpen size={14} />
         </Button>
-        <Button variant="ghost" className="!text-red-600" onClick={onDelete}>
+        <Button variant="ghost" title={t("documents.newVersion")} onClick={onVersion}><FilePlus2 size={14}/></Button>
+        {doc.storageProvider!=="SUPABASE"&&<Button variant="ghost" title={t("documents.uploadCloud")} onClick={onUpload}><CloudUpload size={14}/></Button>}
+        {missing&&doc.cloudStorageKey&&<Button variant="ghost" title={t("documents.downloadCloud")} onClick={onDownload}><CloudDownload size={14}/></Button>}
+        <Button variant="ghost" className="!text-red-600" onClick={onArchive}>
           <Trash2 size={14} />
         </Button>
       </div>

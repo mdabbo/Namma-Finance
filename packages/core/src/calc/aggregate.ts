@@ -14,9 +14,19 @@ export interface ProjectFinancials {
   // In project currency:
   contractValueMinor: number;
   certifiedBaseMinor: number;
+  billableRevenueMinor: number;
+  invoicedAmountMinor: number;
   totalDueMinor: number;
+  /** @deprecated Use certificateCollectionsMinor. */
   totalPaidMinor: number;
+  certificateCollectionsMinor: number;
+  advanceReceivedMinor: number;
+  retentionReleasedMinor: number;
+  totalActualCashInMinor: number;
+  unallocatedCustomerCreditMinor: number;
   outstandingMinor: number;
+  outstandingReceivablesMinor: number;
+  remainingUncertifiedMinor: number;
   retentionHeldMinor: number;
   certifiedRatioBp: number;
   collectionRatioBp: number;
@@ -24,7 +34,15 @@ export interface ProjectFinancials {
   // Consolidated to EGP piasters:
   contractValueEgp: number;
   revenueEgp: number; // certified base (excl. VAT)
+  billableRevenueEgp: number;
+  invoicedAmountEgp: number;
+  /** @deprecated Use certificateCollectionsEgp. */
   collectedEgp: number;
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  totalActualCashInEgp: number;
+  unallocatedCustomerCreditEgp: number;
   outstandingEgp: number;
   expensesEgp: number; // direct project expenses
   profitEgp: number; // revenue − direct expenses
@@ -39,8 +57,15 @@ export function computeProjectFinancials(
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
   const certifiedBase = sum(contractStates.map((c) => c.certifiedBaseMinor));
+  const billableRevenue = sum(contractStates.map((c) => c.billableRevenueMinor));
+  const invoicedAmount = sum(contractStates.map((c) => c.invoicedAmountMinor));
   const totalDue = sum(contractStates.map((c) => c.totalDueMinor));
   const totalPaid = sum(contractStates.map((c) => c.totalPaidMinor));
+  const advanceReceived = sum(contractStates.map((c) => c.advanceReceivedMinor));
+  const retentionReleased = sum(contractStates.map((c) => c.retentionReleasedMinor));
+  const totalActualCashIn = sum(contractStates.map((c) => c.totalActualCashInMinor));
+  const unallocatedCustomerCredit = sum(contractStates.map((c) => c.unallocatedCustomerCreditMinor));
+  const remainingUncertified = sum(contractStates.map((c) => c.remainingUncertifiedMinor));
   const retentionHeld = sum(contractStates.map((c) => c.retentionHeldMinor));
 
   const toEgp = (minor: number) => toEgpPiasters(minor, project.currency, project.fxRateMicro);
@@ -53,15 +78,31 @@ export function computeProjectFinancials(
     contracts: contractStates,
     contractValueMinor: contractValue,
     certifiedBaseMinor: certifiedBase,
+    billableRevenueMinor: billableRevenue,
+    invoicedAmountMinor: invoicedAmount,
     totalDueMinor: totalDue,
     totalPaidMinor: totalPaid,
+    certificateCollectionsMinor: totalPaid,
+    advanceReceivedMinor: advanceReceived,
+    retentionReleasedMinor: retentionReleased,
+    totalActualCashInMinor: totalActualCashIn,
+    unallocatedCustomerCreditMinor: unallocatedCustomerCredit,
     outstandingMinor: totalDue - totalPaid,
+    outstandingReceivablesMinor: totalDue - totalPaid,
+    remainingUncertifiedMinor: remainingUncertified,
     retentionHeldMinor: retentionHeld,
     certifiedRatioBp: ratioBp(certifiedBase, contractValue),
     collectionRatioBp: ratioBp(totalPaid, totalDue),
     contractValueEgp: toEgp(contractValue),
     revenueEgp,
+    billableRevenueEgp: toEgp(billableRevenue),
+    invoicedAmountEgp: toEgp(invoicedAmount),
     collectedEgp: toEgp(totalPaid),
+    certificateCollectionsEgp: toEgp(totalPaid),
+    advanceReceivedEgp: toEgp(advanceReceived),
+    retentionReleasedEgp: toEgp(retentionReleased),
+    totalActualCashInEgp: toEgp(totalActualCashIn),
+    unallocatedCustomerCreditEgp: toEgp(unallocatedCustomerCredit),
     outstandingEgp: toEgp(totalDue - totalPaid),
     expensesEgp,
     profitEgp,
@@ -75,6 +116,11 @@ export interface ClientFinancials {
   projectCount: number;
   contractValueEgp: number;
   collectedEgp: number;
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  totalActualCashInEgp: number;
+  unallocatedCustomerCreditEgp: number;
   outstandingEgp: number;
 }
 
@@ -85,6 +131,11 @@ export function computeClientFinancials(clientId: number, projects: ProjectFinan
     projectCount: own.length,
     contractValueEgp: sum(own.map((p) => p.contractValueEgp)),
     collectedEgp: sum(own.map((p) => p.collectedEgp)),
+    certificateCollectionsEgp: sum(own.map((p) => p.certificateCollectionsEgp)),
+    advanceReceivedEgp: sum(own.map((p) => p.advanceReceivedEgp)),
+    retentionReleasedEgp: sum(own.map((p) => p.retentionReleasedEgp)),
+    totalActualCashInEgp: sum(own.map((p) => p.totalActualCashInEgp)),
+    unallocatedCustomerCreditEgp: sum(own.map((p) => p.unallocatedCustomerCreditEgp)),
     outstandingEgp: sum(own.map((p) => p.outstandingEgp)),
   };
 }
@@ -93,6 +144,11 @@ export interface DashboardKpis {
   contractValueEgp: number;
   revenueEgp: number;
   collectedEgp: number;
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  totalActualCashInEgp: number;
+  unallocatedCustomerCreditEgp: number;
   outstandingEgp: number;
   expensesEgp: number; // ALL expenses incl. overhead
   profitEgp: number; // revenue − all expenses
@@ -110,6 +166,11 @@ export function computeDashboardKpis(projects: ProjectFinancials[], allExpenses:
     contractValueEgp: sum(projects.map((p) => p.contractValueEgp)),
     revenueEgp,
     collectedEgp: sum(projects.map((p) => p.collectedEgp)),
+    certificateCollectionsEgp: sum(projects.map((p) => p.certificateCollectionsEgp)),
+    advanceReceivedEgp: sum(projects.map((p) => p.advanceReceivedEgp)),
+    retentionReleasedEgp: sum(projects.map((p) => p.retentionReleasedEgp)),
+    totalActualCashInEgp: sum(projects.map((p) => p.totalActualCashInEgp)),
+    unallocatedCustomerCreditEgp: sum(projects.map((p) => p.unallocatedCustomerCreditEgp)),
     outstandingEgp: sum(projects.map((p) => p.outstandingEgp)),
     expensesEgp,
     profitEgp,

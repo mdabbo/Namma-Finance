@@ -26,6 +26,22 @@ const MIGRATIONS = [
   "0005_backfill_team_expenses.sql",
   "0006_sync_tracking.sql",
   "0007_time_tracking.sql",
+  "0008_financial_record_lifecycle.sql",
+  "0009_contract_revisions.sql",
+  "0010_contract_revision_integrity.sql",
+  "0011_payment_allocation_integrity.sql",
+  "0012_audit_log.sql",
+  "0013_audit_remediation.sql",
+  "0014_backup_hardening.sql",
+  "0015_backup_audit_hardening.sql",
+  "0016_domain_validation.sql",
+  "0017_domain_validation_audit.sql",
+  "0018_managed_documents.sql",
+  "0019_document_cache_isolation.sql",
+  "0020_sync_conflict_safety.sql",
+  "0021_sync_conflict_remediation.sql",
+  "0022_numbering_safety.sql",
+  "0023_numbering_remediation.sql",
 ];
 
 let db: DatabaseSync | null = null;
@@ -94,4 +110,9 @@ export function raw<T = Record<string, unknown>>(sql: string): T[] {
 
 export function rawOne<T = Record<string, unknown>>(sql: string): T | undefined {
   return requireDb().prepare(sql).get() as T | undefined;
+}
+
+/** Execute DDL or failure-injection triggers in integration tests. */
+export function rawExec(sql: string): void {
+  requireDb().exec(sql);
 }

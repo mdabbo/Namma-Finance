@@ -15,7 +15,10 @@ export function CertificateDocument({ cert, contract, breakdown }: CertificateDo
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
   const currency = cert.currency;
-  const dueDate = certificateDueDate(cert, contract.paymentTermsDays);
+  const dueDate = certificateDueDate(cert, cert.paymentTermsDaysSnapshot ?? contract.paymentTermsDays);
+  const vatBp = cert.vatBpSnapshot ?? contract.vatBp;
+  const retentionBp = cert.retentionBpSnapshot ?? contract.retentionBp;
+  const withholdingBp = cert.withholdingBpSnapshot ?? contract.withholdingBp;
 
   return (
     <div dir={i18n.dir()} className="mx-auto max-w-3xl text-[13px] leading-relaxed text-black">
@@ -63,11 +66,11 @@ export function CertificateDocument({ cert, contract, breakdown }: CertificateDo
               <DocRow label={t("certificates.base")} value={fmt.money(breakdown.baseMinor, currency)} />
             </>
           )}
-          <DocRow label={`${t("certificates.vat")} (${fmt.percent(contract.vatBp)})`} value={fmt.money(breakdown.vatMinor, currency)} />
-          <DocRow label={`${t("certificates.retention")} (${fmt.percent(contract.retentionBp)})`} value={`(${fmt.money(breakdown.retentionMinor, currency)})`} />
+          <DocRow label={`${t("certificates.vat")} (${fmt.percent(vatBp)})`} value={fmt.money(breakdown.vatMinor, currency)} />
+          <DocRow label={`${t("certificates.retention")} (${fmt.percent(retentionBp)})`} value={`(${fmt.money(breakdown.retentionMinor, currency)})`} />
           <DocRow label={t("certificates.advanceRecovery")} value={`(${fmt.money(breakdown.advanceRecoveryMinor, currency)})`} />
-          {contract.withholdingBp > 0 && (
-            <DocRow label={`${t("certificates.withholding")} (${fmt.percent(contract.withholdingBp)})`} value={`(${fmt.money(breakdown.withholdingMinor, currency)})`} />
+          {withholdingBp > 0 && (
+            <DocRow label={`${t("certificates.withholding")} (${fmt.percent(withholdingBp)})`} value={`(${fmt.money(breakdown.withholdingMinor, currency)})`} />
           )}
           <tr className="bg-slate-100 font-bold">
             <td className="border border-slate-300 px-3 py-2">{t("certificates.netPayable")}</td>

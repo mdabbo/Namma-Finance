@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import type { Project, ProjectStatus } from "@mep/core";
-import { useProjectMutations, useProjects, nextProjectCode, projectCascadeInfo } from "../../repositories/projects";
+import type { ProjectStatus } from "@mep/core";
+import { useProjectMutations, useProjects, nextProjectCode, projectCascadeInfo, type ProjectListItem } from "../../repositories/projects";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings } from "../../lib/settings";
 import { DataTable, type Column } from "../../components/DataTable";
@@ -13,14 +13,13 @@ import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { ProjectForm } from "./ProjectForm";
 
-type ProjectListItem = Project & { clientName: string };
-
 export function ProjectsPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const base = useBaseMoney();
   const navigate = useNavigate();
-  const { data: projects = [], isLoading } = useProjects();
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const { data: projects = [], isLoading } = useProjects(includeArchived);
   const { data: financials } = useWorkspaceFinancials();
   const { data: settings } = useSettings();
   const mutations = useProjectMutations();
@@ -44,14 +43,14 @@ export function ProjectsPage() {
     { key: "discipline", header: t("projects.discipline"), value: (p) => t(`discipline.${p.discipline}`) },
     {
       key: "value",
-      header: t("clients.totalContracts"),
+      header: t("cash.contractValueExcludingVat"),
       value: (p) => finOf(p.id)?.contractValueEgp ?? 0,
       render: (p) => <span className="tnum">{base.format(finOf(p.id)?.contractValueEgp ?? 0)}</span>,
       align: "end",
     },
     {
       key: "certified",
-      header: t("projects.certified"),
+      header: t("cash.certifiedRevenue"),
       value: (p) => finOf(p.id)?.certifiedRatioBp ?? 0,
       render: (p) => {
         const fin = finOf(p.id);
@@ -77,7 +76,7 @@ export function ProjectsPage() {
       header: "",
       sortable: false,
       width: "120px",
-      render: (p) => (
+      render: (p) => p.archivedAt ? <Badge value="CANCELLED" label={t("lifecycle.archived")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
           <Button
@@ -120,7 +119,7 @@ export function ProjectsPage() {
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        onRowClick={(p) => navigate(`/projects/${p.id}`)}
+        onRowClick={(p) => { if (!p.archivedAt) navigate(`/projects/${p.id}`); }}
         emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
         toolbar={
           <>
@@ -136,6 +135,10 @@ export function ProjectsPage() {
                 <option key={d} value={d}>{t(`discipline.${d}`)}</option>
               ))}
             </Select>
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
+              {t("lifecycle.includeArchived")}
+            </label>
           </>
         }
       />
@@ -153,7 +156,7 @@ export function ProjectsPage() {
           initial={editing}
           busy={mutations.update.isPending}
           onClose={() => setEditing(null)}
-          onSubmit={(input) => mutations.update.mutate({ id: editing.id, input }, { onSuccess: () => setEditing(null) })}
+          onSubmit={(input, revision) => mutations.update.mutate({ id: editing.id, input, revision }, { onSuccess: () => setEditing(null) })}
         />
       )}
       {deleting && (

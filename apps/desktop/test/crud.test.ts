@@ -230,8 +230,8 @@ describe("delete: soft-delete modules keep history", () => {
 
 // ─── DELETE: RESTRICT guard ──────────────────────────────────────────────
 
-describe("delete: expense category RESTRICT guard", () => {
-  it("refuses to delete a category in use, then succeeds once the expense is gone", async () => {
+describe("archive: expense category history guard", () => {
+  it("keeps a category referenced by active or voided expense history", async () => {
     await createCategory("Fuel", "وقود");
     const cat = (await listCategories()).find((c) => c.nameEn === "Fuel")!;
     const expId = await createExpense({ date: "2026-07-01", categoryId: cat.id, description: "Diesel", projectId: null, supplier: null, amountMinor: 1_000_00, currency: "EGP", fxRateMicro: 1_000_000, attachmentPath: null });
@@ -241,9 +241,9 @@ describe("delete: expense category RESTRICT guard", () => {
     expect((await listCategories(true)).some((c) => c.id === cat.id)).toBe(true);
 
     await deleteExpense(expId);
-    const freed = await deleteCategory(cat.id);
-    expect(freed).toEqual({ ok: true });
-    expect((await listCategories(true)).some((c) => c.id === cat.id)).toBe(false);
+    const stillBlocked = await deleteCategory(cat.id);
+    expect(stillBlocked).toEqual({ ok: false });
+    expect((await listCategories(true)).some((c) => c.id === cat.id)).toBe(true);
   });
 });
 
@@ -320,8 +320,8 @@ describe("cascade-info helpers match what will actually be destroyed", () => {
 
 // ─── DELETE: full cascade from the top of the tree ──────────────────────
 
-describe("delete: cascading a project removes every project-owned row", () => {
-  it("contract, certificates, payments, allocations, stages, documents, assignments, person payments, their auto-expense, project expenses, and time entries all vanish", async () => {
+describe("archive: project and client preserve descendants", () => {
+  it("keeps every project-owned record when the project is archived", async () => {
     const clientId = await createClient(client());
     const projectId = await createProject("PRJ-2026-920", project(clientId));
     const contractId = await createContract(contract(projectId));
@@ -357,16 +357,16 @@ describe("delete: cascading a project removes every project-owned row", () => {
 
     await deleteProject(projectId);
 
-    expect(raw(`SELECT id FROM contracts WHERE project_id=${projectId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM payment_certificates WHERE contract_id=${contractId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM payments WHERE contract_id=${contractId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM payment_certificate_allocations WHERE payment_id=${paymentId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM project_stages WHERE project_id=${projectId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM documents WHERE project_id=${projectId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM project_assignments WHERE project_id=${projectId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM person_payments WHERE id=${personPaymentId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM expenses WHERE project_id=${projectId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM time_entries WHERE project_id=${projectId}`)).toHaveLength(0);
+    expect(raw(`SELECT id FROM contracts WHERE project_id=${projectId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM payment_certificates WHERE contract_id=${contractId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM payments WHERE contract_id=${contractId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM payment_certificate_allocations WHERE payment_id=${paymentId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM project_stages WHERE project_id=${projectId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM documents WHERE project_id=${projectId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM project_assignments WHERE project_id=${projectId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM person_payments WHERE id=${personPaymentId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM expenses WHERE project_id=${projectId}`)).toHaveLength(2);
+    expect(raw(`SELECT id FROM time_entries WHERE project_id=${projectId}`)).toHaveLength(1);
 
     // the project itself is gone, but its client and the unrelated person survive
     expect(await getProject(projectId)).toBeNull();
@@ -374,15 +374,15 @@ describe("delete: cascading a project removes every project-owned row", () => {
     expect(await getPerson(personId)).not.toBeNull();
   });
 
-  it("deleting the client cascades through everything below it too", async () => {
+  it("archiving the client keeps everything below it", async () => {
     const clientId = await createClient(client());
     const projectId = await createProject("PRJ-2026-921", project(clientId));
     await createContract(contract(projectId));
 
     await deleteClient(clientId);
 
-    expect(raw(`SELECT id FROM projects WHERE client_id=${clientId}`)).toHaveLength(0);
-    expect(raw(`SELECT id FROM contracts WHERE project_id=${projectId}`)).toHaveLength(0);
+    expect(raw(`SELECT id FROM projects WHERE client_id=${clientId}`)).toHaveLength(1);
+    expect(raw(`SELECT id FROM contracts WHERE project_id=${projectId}`)).toHaveLength(1);
     expect(await getClient(clientId)).toBeNull();
   });
 });

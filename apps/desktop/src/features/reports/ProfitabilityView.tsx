@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { computeProfitability, toEgpPiasters, type OverheadRule } from "@mep/core";
+import { computeProfitability, toEgpPiasters, withAllocatedOverhead, type OverheadRule } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useBaseMoney } from "../../lib/baseCurrency";
@@ -22,7 +22,11 @@ export function ProfitabilityView() {
     const overheadTotal = financials.allExpenses
       .filter((e) => e.projectId === null)
       .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);
-    return computeProfitability(financials.projects, overheadTotal, rule);
+    return computeProfitability(financials.projects, overheadTotal, rule).map((row) => ({
+      ...row,
+      costs: financials.costsByProject.get(row.projectId)!,
+      loadedCosts: withAllocatedOverhead(financials.costsByProject.get(row.projectId)!, row.overheadEgp),
+    })).sort((a, b) => b.loadedCosts.forecastProfitEgp - a.loadedCosts.forecastProfitEgp);
   }, [financials, rule]);
 
   if (!financials) return <EmptyState message={t("common.loading")} />;
@@ -48,13 +52,19 @@ export function ProfitabilityView() {
             <tr className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800">
               <th className="py-2 text-start">#</th>
               <th className="text-start">{t("projects.single")}</th>
-              <th className="text-end">{t("reports.revenue")}</th>
-              <th className="text-end">{t("reports.directCosts")}</th>
-              <th className="text-end">{t("reports.grossProfit")}</th>
-              <th className="text-end">{t("reports.grossMargin")}</th>
+              <th className="text-end">{t("costs.certifiedRevenue")}</th>
+              <th className="text-end">{t("costs.actualCashIn")}</th>
+              <th className="text-end">{t("costs.actualPaid")}</th>
+              <th className="text-end">{t("costs.accrued")}</th>
+              <th className="text-end">{t("costs.committed")}</th>
+              <th className="text-end">{t("costs.forecast")}</th>
               <th className="text-end">{t("reports.overheadShare")}</th>
-              <th className="text-end">{t("reports.netProfit")}</th>
-              <th className="text-end">{t("reports.netMargin")}</th>
+              <th className="text-end">{t("costs.actualGrossProfit")}</th>
+              <th className="text-end">{t("costs.actualNetProfit")}</th>
+              <th className="text-end">{t("costs.cashProfit")}</th>
+              <th className="text-end">{t("costs.committedProfit")}</th>
+              <th className="text-end">{t("costs.forecastProfitBeforeOverhead")}</th>
+              <th className="text-end">{t("costs.forecastNetProfit")}</th>
             </tr>
           </thead>
           <tbody>
@@ -65,15 +75,23 @@ export function ProfitabilityView() {
                   <p className="font-medium">{row.projectName}</p>
                   <p className="text-xs text-slate-400 tnum">{row.projectCode}</p>
                 </td>
-                <td className="text-end tnum">{base.format(row.revenueEgp)}</td>
-                <td className="text-end tnum">{base.format(row.directCostEgp)}</td>
-                <td className={cx("text-end tnum", row.grossProfitEgp < 0 && "text-red-600")}>{base.format(row.grossProfitEgp)}</td>
-                <td className="text-end tnum text-slate-500">{fmt.percent(row.grossMarginBp)}</td>
+                <td className="text-end tnum">{base.format(row.costs.recognizedRevenueEgp)}</td>
+                <td className="text-end tnum">{base.format(row.costs.actualCashInEgp)}</td>
+                <td className="text-end tnum">{base.format(row.costs.actualPaidCostEgp)}</td>
+                <td className="text-end tnum text-amber-600">{base.format(row.costs.accruedCostEgp)}</td>
+                <td className="text-end tnum">{base.format(row.costs.committedCostEgp)}</td>
+                <td className="text-end tnum">{base.format(row.costs.forecastCostEgp)}</td>
                 <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(row.overheadEgp)}</td>
-                <td className={cx("text-end tnum font-semibold", row.netProfitEgp >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
-                  {base.format(row.netProfitEgp)}
+                <td className={cx("text-end tnum font-semibold", row.costs.actualProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.costs.actualProfitEgp)}</td>
+                <td className={cx("text-end tnum font-semibold", row.loadedCosts.actualProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.loadedCosts.actualProfitEgp)}</td>
+                <td className={cx("text-end tnum", row.costs.cashProfitEgp < 0 && "text-red-600")}>{base.format(row.costs.cashProfitEgp)}</td>
+                <td className={cx("text-end tnum", row.costs.committedProfitEgp < 0 && "text-red-600")}>{base.format(row.costs.committedProfitEgp)}</td>
+                <td className={cx("text-end tnum font-semibold", row.costs.forecastProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  {base.format(row.costs.forecastProfitEgp)} <span className="text-xs text-slate-400">({fmt.percent(row.costs.forecastMarginBp)})</span>
                 </td>
-                <td className="text-end tnum text-slate-500">{fmt.percent(row.netMarginBp)}</td>
+                <td className={cx("text-end tnum font-semibold", row.loadedCosts.forecastProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  {base.format(row.loadedCosts.forecastProfitEgp)} <span className="text-xs text-slate-400">({fmt.percent(row.loadedCosts.forecastMarginBp)})</span>
+                </td>
               </tr>
             ))}
           </tbody>

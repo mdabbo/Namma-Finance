@@ -3,10 +3,10 @@ import { useTranslation } from "react-i18next";
 import { FileUp, Check } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { suggestAllocation } from "@mep/core";
+import { invoke } from "@tauri-apps/api/core";
 import { parseWorkbook } from "../../lib/export";
 import { parseToMinor } from "../../lib/format";
-import { select, selectOne, execute } from "../../lib/db";
+import { selectOne, execute } from "../../lib/db";
 import { nextProjectCode } from "../../repositories/projects";
 import { nextCertificateSeq } from "../../repositories/certificates";
 import { loadSettings } from "../../lib/settings";
@@ -114,7 +114,7 @@ function parseValue(kind: FieldKind, raw: unknown): unknown {
 }
 
 const DISCIPLINES = ["HVAC", "PLUMBING", "FIREFIGHTING", "ELECTRICAL", "BIM", "ARCHITECTURE", "STRUCTURAL", "ID", "MULTI"];
-const CERT_STATUSES = ["DRAFT", "SUBMITTED", "APPROVED", "PAID"];
+const CERT_STATUSES = ["DRAFT", "SUBMITTED", "APPROVED"];
 const METHODS = ["BANK_TRANSFER", "CHEQUE", "CASH"];
 
 export function ImportWizard() {
@@ -170,6 +170,25 @@ export function ImportWizard() {
     let imported = 0;
     const settings = await loadSettings();
 
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      const validRows = parsedRows.filter((row) => row.errors.length === 0).map((row) => row.values);
+      try {
+        imported = await invoke<number>("import_rows_atomic", {
+          entity,
+          rows: validRows,
+          projectCodePrefix: settings.projectCodePrefix,
+        });
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      }
+      await qc.invalidateQueries();
+      setResult({ imported, errors });
+      setRunning(false);
+      return;
+    }
+
+    await execute("BEGIN IMMEDIATE");
+    try {
     for (let i = 0; i < parsedRows.length; i++) {
       const { values, errors: rowErrors } = parsedRows[i]!;
       if (rowErrors.length > 0) continue;
@@ -207,7 +226,9 @@ export function ImportWizard() {
         } else if (entity === "certificates") {
           const contract = await selectOne<{ id: number }>("SELECT id FROM contracts WHERE number = $1", [values.contractNumber]);
           if (!contract) throw new Error(`contract ${values.contractNumber}?`);
-          const status = CERT_STATUSES.includes(String(values.status).toUpperCase()) ? String(values.status).toUpperCase() : "APPROVED";
+          const requestedStatus = String(values.status).toUpperCase();
+          if (requestedStatus === "PAID") throw new Error(t("importer.paidRequiresPayment"));
+          const status = CERT_STATUSES.includes(requestedStatus) ? requestedStatus : "APPROVED";
           const seq = await nextCertificateSeq(contract.id);
           await execute(
             `INSERT INTO payment_certificates (contract_id, seq, number, date, submission_date, gross_minor, discount_minor, status)
@@ -218,37 +239,26 @@ export function ImportWizard() {
           const contract = await selectOne<{ id: number }>("SELECT id FROM contracts WHERE number = $1", [values.contractNumber]);
           if (!contract) throw new Error(`contract ${values.contractNumber}?`);
           const method = METHODS.includes(String(values.method).toUpperCase().replace(" ", "_")) ? String(values.method).toUpperCase().replace(" ", "_") : "BANK_TRANSFER";
-          const r = await execute(
-            `INSERT INTO payments (contract_id, kind, number, date, amount_minor, method, reference)
-             VALUES ($1,'CERTIFICATE',$2,$3,$4,$5,$6)`,
+          // Imported cash remains explicitly unallocated. The user must link it
+          // to certificates after reviewing the imported evidence.
+          await execute(
+            "INSERT INTO payments (contract_id,kind,number,date,amount_minor,method,reference) VALUES ($1,'CERTIFICATE',$2,$3,$4,$5,$6)",
             [contract.id, values.number, values.date, values.amount, method, values.reference],
           );
-          // FIFO-allocate the imported payment across the contract's open certificates
-          const paymentId = r.lastInsertId ?? 0;
-          const open = await select<{ id: number; unpaid: number }>(
-            `SELECT pc.id,
-                    pc.gross_minor - pc.discount_minor
-                    - COALESCE((SELECT SUM(a.amount_minor) FROM payment_certificate_allocations a
-                        JOIN payments pm ON pm.id = a.payment_id AND pm.deleted_at IS NULL
-                        WHERE a.certificate_id = pc.id), 0) AS unpaid
-             FROM payment_certificates pc
-             WHERE pc.contract_id = $1 AND pc.deleted_at IS NULL AND pc.status != 'DRAFT'
-             ORDER BY pc.seq`,
-            [contract.id],
-          );
-          const { allocations } = suggestAllocation(values.amount as number, open.map((o) => ({ certificateId: o.id, unpaidMinor: Math.max(0, o.unpaid) })));
-          for (const a of allocations) {
-            await execute(
-              "INSERT INTO payment_certificate_allocations (payment_id, certificate_id, amount_minor) VALUES ($1,$2,$3)",
-              [paymentId, a.certificateId, a.amountMinor],
-            );
-          }
         }
         imported += 1;
       } catch (err) {
-        if (errors.length < 10) errors.push(`Row ${i + 2}: ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(`Row ${i + 2}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+      await execute("COMMIT");
+    } catch (error) {
+      await execute("ROLLBACK");
+      imported = 0;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+    const { reconcileCertificateStatuses } = await import("../../repositories/payments");
+    await reconcileCertificateStatuses();
     await qc.invalidateQueries();
     setResult({ imported, errors });
     setRunning(false);

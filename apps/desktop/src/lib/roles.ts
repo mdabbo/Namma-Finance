@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSyncClient, getSyncSession } from "./sync/client";
-import { loadSettings, saveSetting } from "./settings";
+import { loadSettings } from "./settings";
 
 /**
  * Phase 5 roles (confirmed):
@@ -9,8 +9,8 @@ import { loadSettings, saveSetting } from "./settings";
  *  ENGINEER   — projects / stages / documents only, no money screens
  *
  * The role lives in the cloud (user_roles table, keyed by the auth user)
- * and is cached in local settings so a device that starts offline keeps its
- * last-known role. With no cloud configured at all, the app stays the
+ * and is fetched from the backend for authorization decisions. A cached role
+ * is never trusted. With no cloud configured at all, the app stays the
  * single-user tool it always was → full access.
  *
  * v1 enforcement is in the app UI; the database still trusts any office
@@ -55,25 +55,21 @@ export async function refreshRole(): Promise<Role | null> {
     });
     role = bootError ? "ENGINEER" : "ADMIN";
   }
-  await saveSetting("syncRole", role);
   return role;
 }
 
-/** Effective role for gating: cached role, or ADMIN when never signed in. */
+/** Effective role for UI gating. Backend RLS remains the authority. */
 export function useRole(): Role {
   const { data } = useQuery({
     queryKey: ["role"],
     queryFn: async () => {
       const settings = await loadSettings();
-      const cached = (settings.syncRole || null) as Role | null;
       if (!settings.syncUrl || !settings.syncAnonKey) return "ADMIN" as Role;
-      // refresh in the background; the cached value answers immediately
-      void refreshRole();
-      return cached ?? ("ADMIN" as Role);
+      return (await refreshRole()) ?? ("ENGINEER" as Role);
     },
-    staleTime: 5 * 60_000,
+    staleTime: 0,
   });
-  return data ?? "ADMIN";
+  return data ?? "ENGINEER";
 }
 
 export function useInvalidateRole() {

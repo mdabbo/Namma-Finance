@@ -7,6 +7,7 @@ import {
   Building2,
   Clock,
   FileSpreadsheet,
+  FileClock,
   LayoutDashboard,
   Moon,
   Receipt,
@@ -35,6 +36,7 @@ const NAV = [
   { to: "/people", key: "nav.people", icon: Users },
   { to: "/time", key: "nav.time", icon: Clock },
   { to: "/reports", key: "nav.reports", icon: BarChart3 },
+  { to: "/audit", key: "nav.audit", icon: FileClock },
   { to: "/settings", key: "nav.settings", icon: Settings },
 ];
 
