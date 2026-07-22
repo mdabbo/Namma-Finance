@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "mep-finance-desktop"
-version = "0.6.0"
+version = "0.6.7"
 dependencies = [
  "argon2",
  "pbkdf2",

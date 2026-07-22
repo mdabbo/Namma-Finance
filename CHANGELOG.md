@@ -2,6 +2,17 @@
 
 All notable changes to NAMAA Finance are documented here. Versions follow Semantic Versioning.
 
+## [0.6.7] - 2026-07-20
+
+### Verified
+
+- Independent audit of the hardening branch: migration path 7 → 23 dry-run against a copy of real data (integrity/FK intact, data preserved), and runtime confirmation that sqlx applies all 23 migrations under the production stack and the app launches without freezing.
+- Immutability triggers confirmed at runtime: physical DELETE of protected records is blocked; archive/void updates succeed.
+
+### Notes
+
+- Same feature set and schema (23) as the 0.6.0 hardening line; version relabelled to distinguish the audited, installer-packaged build from earlier development builds.
+
 ## [0.6.0] - 2026-07-22
 
 ### Added
