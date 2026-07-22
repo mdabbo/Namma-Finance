@@ -14,10 +14,13 @@ interface ClientRow {
   contacts: string | null;
   notes: string | null;
   created_at: string;
+  archived_at: string | null;
   project_count?: number;
 }
 
-function mapClient(r: ClientRow): Client & { projectCount: number } {
+export type ClientListItem = Client & { projectCount: number; archivedAt: string | null };
+
+function mapClient(r: ClientRow): ClientListItem {
   return {
     id: r.id,
     name: r.name,
@@ -30,19 +33,20 @@ function mapClient(r: ClientRow): Client & { projectCount: number } {
     notes: r.notes,
     createdAt: r.created_at,
     projectCount: r.project_count ?? 0,
+    archivedAt: r.archived_at,
   };
 }
 
-export async function listClients() {
+export async function listClients(includeArchived = false) {
   const rows = await select<ClientRow>(
     `SELECT c.*, (SELECT COUNT(*) FROM projects p WHERE p.client_id = c.id) AS project_count
-     FROM clients c ORDER BY c.name COLLATE NOCASE`,
+     FROM clients c ${includeArchived ? "" : "WHERE c.archived_at IS NULL"} ORDER BY c.name COLLATE NOCASE`,
   );
   return rows.map(mapClient);
 }
 
 export async function getClient(id: number) {
-  const row = await selectOne<ClientRow>("SELECT * FROM clients WHERE id = $1", [id]);
+  const row = await selectOne<ClientRow>("SELECT * FROM clients WHERE id=$1 AND archived_at IS NULL", [id]);
   return row ? mapClient(row) : null;
 }
 
@@ -81,11 +85,16 @@ export async function clientCascadeInfo(id: number) {
 }
 
 export async function deleteClient(id: number): Promise<void> {
-  await execute("DELETE FROM clients WHERE id = $1", [id]);
+  const result = await execute("UPDATE clients SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+  if (result.rowsAffected !== 1) throw new Error("CLIENT_NOT_FOUND_OR_ARCHIVED");
 }
 
-export function useClients() {
-  return useQuery({ queryKey: ["clients"], queryFn: listClients });
+export async function restoreClient(id: number): Promise<void> {
+  await execute("UPDATE clients SET archived_at=NULL, archived_by=NULL, archive_reason=NULL WHERE id=$1", [id]);
+}
+
+export function useClients(includeArchived = false) {
+  return useQuery({ queryKey: ["clients", includeArchived], queryFn: () => listClients(includeArchived) });
 }
 
 export function useClient(id: number) {

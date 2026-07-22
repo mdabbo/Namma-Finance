@@ -8,8 +8,9 @@ import {
   drawingsValueMinor,
   milestoneAmounts,
   milestonesTotalBp,
-  parseDrawings,
-  parseMilestones,
+  parseAttachmentsResult,
+  parseDrawingsResult,
+  parseMilestonesResult,
   type Contract,
   type ContractInput,
   type ContractValuationMode,
@@ -21,13 +22,15 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { bpToInput, parseToBp, useFormat } from "../../lib/format";
 import { useStagesByProject } from "../../repositories/stages";
 import { nextContractNumber } from "../../repositories/contracts";
+import type { RevisionMetadata } from "../../repositories/contracts";
 import { useProject } from "../../repositories/projects";
+import { useSettings } from "../../lib/settings";
 
 interface ContractFormProps {
   projectId: number;
   currency: string;
   initial?: Contract | null;
-  onSubmit: (input: ContractInput) => void;
+  onSubmit: (input: ContractInput, revision?: RevisionMetadata) => void;
   onClose: () => void;
   busy?: boolean;
 }
@@ -37,6 +40,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
   const fmt = useFormat();
   const { data: stages = [] } = useStagesByProject(projectId);
   const { data: project } = useProject(projectId);
+  const { data: settings } = useSettings();
 
   const [form, setForm] = useState({
     number: initial?.number ?? "",
@@ -56,16 +60,25 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
     signedDate: initial?.signedDate ?? "",
     notes: initial?.notes ?? "",
   });
-  const [milestones, setMilestones] = useState<PercentMilestone[]>(() => parseMilestones(initial?.milestones));
-  const [drawings, setDrawings] = useState<DrawingLine[]>(() => parseDrawings(initial?.drawings));
+  const milestoneParse=parseMilestonesResult(initial?.milestones);
+  const drawingParse=parseDrawingsResult(initial?.drawings);
+  const attachmentParse=parseAttachmentsResult(initial?.attachments);
+  const [milestones, setMilestones] = useState<PercentMilestone[]>(() => milestoneParse.ok?milestoneParse.value:[]);
+  const [drawings, setDrawings] = useState<DrawingLine[]>(() => drawingParse.ok?drawingParse.value:[]);
+  const [attachmentsRaw,setAttachmentsRaw]=useState<string|null>(()=>attachmentParse.ok?(initial?.attachments??null):null);
+  const [corruptFields,setCorruptFields]=useState<string[]>(()=>[
+    ...(!milestoneParse.ok?["milestones"]:[]),...(!drawingParse.ok?["drawings"]:[]),...(!attachmentParse.ok?["attachments"]:[]),
+  ]);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [revisionReason, setRevisionReason] = useState("");
+  const [revisionEffectiveDate, setRevisionEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   // New contract: auto-generate the number (project code + per-project counter)
   // and default the title to the project name; both stay editable.
   useEffect(() => {
     if (initial || !project) return;
     let cancelled = false;
-    void nextContractNumber(projectId).then((number) => {
+    void nextContractNumber(projectId, settings?.contractNumberPrefix ?? "CON").then((number) => {
       if (cancelled) return;
       setForm((f) => ({
         ...f,
@@ -77,7 +90,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id, initial]);
+  }, [project?.id, initial, settings?.contractNumberPrefix]);
 
   // DRAWINGS mode derives the contract value from the drawing lines.
   useEffect(() => {
@@ -110,6 +123,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
   }
 
   function submit() {
+    if(corruptFields.length){setErrors({structured:t("validation.malformed_json")});return;}
     if (form.valuationMode === "MILESTONES" && milestonesTotalBp(milestones) !== BP_SCALE) {
       setErrors({ milestones: t("contracts.milestonesMustTotal") });
       return;
@@ -123,7 +137,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
       paymentTermsNotes: form.paymentTermsNotes || null,
       milestones: form.valuationMode === "MILESTONES" && milestones.length > 0 ? JSON.stringify(milestones) : null,
       drawings: form.valuationMode === "DRAWINGS" && drawings.length > 0 ? JSON.stringify(drawings) : null,
-      attachments: initial?.attachments ?? null,
+      attachments: attachmentsRaw,
       signedDate: form.signedDate || null,
       notes: form.notes || null,
     });
@@ -133,7 +147,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
       setErrors(errs);
       return;
     }
-    onSubmit(parsed.data);
+    onSubmit(parsed.data, initial ? { reason: revisionReason, effectiveDate: revisionEffectiveDate } : undefined);
   }
 
   const milestoneTotalBp = milestonesTotalBp(milestones);
@@ -141,6 +155,10 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
 
   return (
     <Modal title={initial ? t("common.edit") : t("contracts.newContract")} onClose={onClose} wide>
+      {corruptFields.length>0&&<Card className="mb-3 border-red-300 bg-red-50 p-3 text-sm text-red-700">
+        <p>{t("validation.malformed_json")} ({corruptFields.join(", ")})</p>
+        <Button className="mt-2" onClick={()=>{setCorruptFields([]);if(!attachmentParse.ok)setAttachmentsRaw(null);setErrors((current)=>({...current,structured:""}));}}>{t("validation.repair_structured")}</Button>
+      </Card>}
       <div className="grid grid-cols-3 gap-3">
         <Field label={t("contracts.number")} error={errors.number}>
           <Input value={form.number} readOnly className="tnum" />
@@ -208,6 +226,16 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
         <Field label={t("common.notes")} className="col-span-3">
           <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
         </Field>
+        {initial && (
+          <>
+            <Field label={t("contracts.revisionEffectiveDate")}>
+              <Input type="date" value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
+            </Field>
+            <Field label={t("contracts.revisionReason")} className="col-span-2">
+              <Input value={revisionReason} placeholder={t("contracts.revisionReasonHint")} onChange={(e) => setRevisionReason(e.target.value)} />
+            </Field>
+          </>
+        )}
       </div>
 
       {form.valuationMode === "MILESTONES" && (
@@ -350,8 +378,8 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
           <p className="font-semibold tnum">{fmt.money(figures.retentionMinor, currency)}</p>
         </div>
         <div>
-          <p className="text-xs text-slate-500">{t("contracts.netValue")}</p>
-          <p className="font-semibold tnum">{fmt.money(figures.netContractMinor, currency)}</p>
+          <p className="text-xs text-slate-500">{t("cash.contractValueIncludingVat")}</p>
+          <p className="font-semibold tnum">{fmt.money(figures.contractValueIncludingVatMinor, currency)}</p>
         </div>
       </Card>
 

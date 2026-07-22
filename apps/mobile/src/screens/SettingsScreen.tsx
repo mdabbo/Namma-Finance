@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSupabase } from "../hooks/useWorkspace";
 import { saveLanguage } from "../lib/supabase";
 import { card, colors } from "../lib/theme";
+import { APP_VERSION, RELEASE_CHANNEL } from "../generated/release";
 
 export function SettingsScreen({ onSignedOut }: { onSignedOut: () => void }) {
   const { t, i18n } = useTranslation();
@@ -20,6 +21,18 @@ export function SettingsScreen({ onSignedOut }: { onSignedOut: () => void }) {
         <View style={styles.langRow}>
           <LangButton active={i18n.language === "ar"} label={t("settings.arabic")} onPress={() => void switchLanguage("ar")} />
           <LangButton active={i18n.language === "en"} label={t("settings.english")} onPress={() => void switchLanguage("en")} />
+        </View>
+      </View>
+
+      <View style={[card, styles.section]}>
+        <Text style={styles.label}>{t("settings.releaseInfo")}</Text>
+        <View style={styles.releaseRow}>
+          <Text style={styles.releaseLabel}>{t("settings.applicationVersion")}</Text>
+          <Text style={styles.releaseValue}>{APP_VERSION}</Text>
+        </View>
+        <View style={styles.releaseRow}>
+          <Text style={styles.releaseLabel}>{t("settings.releaseChannel")}</Text>
+          <Text style={styles.releaseValue}>{t(`settings.releaseChannels.${RELEASE_CHANNEL}`)}</Text>
         </View>
       </View>
 
@@ -56,6 +69,9 @@ const styles = StyleSheet.create({
   langActive: { backgroundColor: colors.chipBg, borderColor: colors.brand },
   langText: { fontSize: 14, color: colors.subtle },
   langTextActive: { color: colors.brand, fontWeight: "700" },
+  releaseRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
+  releaseLabel: { fontSize: 12, color: colors.subtle },
+  releaseValue: { fontSize: 12, color: colors.text, fontWeight: "700" },
   signOut: { alignItems: "center", paddingVertical: 4 },
   signOutText: { color: colors.red, fontWeight: "600", fontSize: 14 },
   note: { textAlign: "center", fontSize: 11, color: colors.faint, marginTop: 8 },

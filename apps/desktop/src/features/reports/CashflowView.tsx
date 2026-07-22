@@ -71,7 +71,7 @@ export function CashflowView() {
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => new Intl.NumberFormat("en", { notation: "compact" }).format(Number(v))} orientation={i18n.dir() === "rtl" ? "right" : "left"} />
             <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
             <Legend />
-            <Bar dataKey="in" name={t("dashboard.cashIn")} fill="#2563eb" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="in" name={t("cash.totalActualCashIn")} fill="#2563eb" radius={[3, 3, 0, 0]} />
             <Bar dataKey="out" name={t("dashboard.cashOut")} fill="#f59e0b" radius={[3, 3, 0, 0]} />
             <Line type="monotone" dataKey="cumulative" name={t("reports.cumulative")} stroke="#10b981" strokeWidth={2} dot={false} />
           </ComposedChart>

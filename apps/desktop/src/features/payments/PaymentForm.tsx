@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { paymentSchema, suggestAllocation, type PaymentInput, type PaymentKind, type PaymentMethod } from "@mep/core";
 import type { PaymentListItem, AllocationInput } from "../../repositories/payments";
-import { listAllocationsByPayment } from "../../repositories/payments";
+import { listAllocationsByPayment, nextPaymentNumber } from "../../repositories/payments";
 import { useProjects } from "../../repositories/projects";
 import { useContractsByProject } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { Button, Card, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
+import { useSettings } from "../../lib/settings";
 
 /** Prefill for the "mark certificate paid" flow. */
 export interface PaymentDefaults {
@@ -31,6 +32,7 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
   const fmt = useFormat();
   const { data: projects = [] } = useProjects();
   const { data: financials } = useWorkspaceFinancials();
+  const { data: settings } = useSettings();
 
   const [projectId, setProjectId] = useState(initial?.projectId ?? defaults?.projectId ?? 0);
   const { data: contracts = [] } = useContractsByProject(projectId);
@@ -39,9 +41,9 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
     contractId: initial?.contractId ?? defaults?.contractId ?? 0,
     kind: initial?.kind ?? ("CERTIFICATE" as PaymentKind),
     number: initial?.number ?? "",
-    date: initial?.date ?? todayIso(),
+    date: initial?.date ?? (defaults ? "" : todayIso()),
     amountMinor: initial?.amountMinor ?? defaults?.amountMinor ?? 0,
-    method: initial?.method ?? ("BANK_TRANSFER" as PaymentMethod),
+    method: (initial?.method ?? (defaults ? "" : "BANK_TRANSFER")) as PaymentMethod | "",
     bank: initial?.bank ?? "",
     reference: initial?.reference ?? "",
     notes: initial?.notes ?? "",
@@ -50,18 +52,26 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
     () => new Map(defaults ? [[defaults.certificateId, defaults.amountMinor]] : []),
   );
   const [existingLoaded, setExistingLoaded] = useState(false);
+  const [hasLegacyDuplicates, setHasLegacyDuplicates] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (initial || form.number) return;
+    if (!form.date) return;
+    void nextPaymentNumber(settings?.paymentNumberPrefix ?? "PAY", new Date(`${form.date}T00:00:00Z`)).then((number) => setForm((current) => current.number ? current : { ...current, number }));
+  }, [initial, form.number, form.date, settings?.paymentNumberPrefix]);
 
   // load existing allocations when editing
   useEffect(() => {
     if (!initial || existingLoaded) return;
     void listAllocationsByPayment(initial.id).then((rows) => {
+      setHasLegacyDuplicates(rows.some((row) => row.integrityException === 1));
       setAllocations(new Map(rows.map((r) => [r.certificateId, r.amountMinor])));
       setExistingLoaded(true);
     });
   }, [initial, existingLoaded]);
 
   const state = form.contractId ? financials?.contractStates.get(form.contractId) : undefined;
+  const selectedContract=contracts.find((contract)=>contract.id===form.contractId);
   const currency = projects.find((p) => p.id === projectId)?.currency ?? initial?.currency ?? "EGP";
 
   /** Open certificates with capacity = unpaid + this payment's own allocation. */
@@ -103,6 +113,10 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
       setErrors(errs);
       return;
     }
+    if(selectedContract?.signedDate && parsed.data.date<selectedContract.signedDate){
+      setErrors({date:t("validation.payment_before_contract")});
+      return;
+    }
     if (form.kind === "CERTIFICATE") {
       if (allocatedTotal > form.amountMinor) {
         setErrors({ allocation: t("validation.allocation_exceeds_payment") });
@@ -122,19 +136,12 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
         return;
       }
     }
-    let allocationList: AllocationInput[] =
+    const allocationList: AllocationInput[] =
       form.kind === "CERTIFICATE"
         ? [...allocations.entries()].filter(([, v]) => v > 0).map(([certificateId, amountMinor]) => ({ certificateId, amountMinor }))
         : [];
     // No manual split → allocate automatically, oldest certificate first, so
-    // the money always counts toward "collected".
-    if (form.kind === "CERTIFICATE" && allocationList.length === 0 && openCertificates.length > 0) {
-      const { allocations: auto } = suggestAllocation(
-        form.amountMinor,
-        openCertificates.map((c) => ({ certificateId: c.id, unpaidMinor: c.capacity })),
-      );
-      allocationList = auto.map((a) => ({ certificateId: a.certificateId, amountMinor: a.amountMinor }));
-    }
+    // only confirmed allocations count as certificate collections; any remainder is customer credit.
     onSubmit(parsed.data, allocationList);
   }
 
@@ -183,7 +190,7 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
         <Field label={t("payments.number")} error={errors.number}>
           <Input value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))} className="tnum" />
         </Field>
-        <Field label={t("common.date")}>
+        <Field label={t("common.date")} error={errors.date}>
           <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("common.amount")} error={errors.amountMinor}>
@@ -192,6 +199,7 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
 
         <Field label={t("payments.method")}>
           <Select value={form.method} onChange={(e) => setForm((f) => ({ ...f, method: e.target.value as PaymentMethod }))}>
+            {form.method === "" && <option value="">â€”</option>}
             {(["BANK_TRANSFER", "CHEQUE", "CASH"] as const).map((m) => (
               <option key={m} value={m}>{t(`method.${m}`)}</option>
             ))}
@@ -251,12 +259,13 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
             </span>
           </div>
           {errors.allocation && <p className="mt-1 text-xs text-red-600">{errors.allocation}</p>}
+          {hasLegacyDuplicates && <p className="mt-2 text-xs font-medium text-red-600">{t("payments.legacyDuplicatesRequireReview")}</p>}
         </Card>
       )}
 
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={onClose}>{t("common.cancel")}</Button>
-        <Button variant="primary" onClick={submit} disabled={busy || form.contractId === 0}>{t("common.save")}</Button>
+        <Button variant="primary" onClick={submit} disabled={busy || form.contractId === 0 || hasLegacyDuplicates}>{t("common.save")}</Button>
       </div>
     </Modal>
   );

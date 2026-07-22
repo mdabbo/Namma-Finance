@@ -14,7 +14,7 @@ export async function exportXlsx(defaultName: string, sheetName: string, rows: R
     filters: [{ name: "Excel", extensions: ["xlsx"] }],
   });
   if (!path) return false;
-  const sheet = XLSX.utils.json_to_sheet(rows);
+  const sheet = XLSX.utils.json_to_sheet(sanitizeExportRows(rows));
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, sheetName.slice(0, 31));
   const buffer = XLSX.write(book, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
@@ -28,11 +28,20 @@ export async function exportCsv(defaultName: string, rows: Record<string, unknow
     filters: [{ name: "CSV", extensions: ["csv"] }],
   });
   if (!path) return false;
-  const sheet = XLSX.utils.json_to_sheet(rows);
+  const sheet = XLSX.utils.json_to_sheet(sanitizeExportRows(rows));
   const csv = XLSX.utils.sheet_to_csv(sheet);
   // BOM so Excel opens Arabic text correctly
   await writeTextFile(path, "﻿" + csv);
   return true;
+}
+
+/** Prevent CSV/Excel formula execution when exported text is opened. */
+export function sanitizeExportCell(value: unknown): unknown {
+  return typeof value === "string" && /^[\s\u0000-\u001f]*[=+\-@]/.test(value) ? `'${value}` : value;
+}
+
+export function sanitizeExportRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, sanitizeExportCell(value)])));
 }
 
 /** Read an Excel file into an array of row objects keyed by header text. */

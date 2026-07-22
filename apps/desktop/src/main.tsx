@@ -2,12 +2,13 @@ import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createHashRouter, RouterProvider } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import "./styles.css";
 import { initI18n } from "./lib/i18n";
 import { applyTheme, loadSettings } from "./lib/settings";
 import { isLockEnabled } from "./lib/lock";
 import { LockScreen } from "./components/LockScreen";
-import { runDailyBackupIfDue } from "./repositories/backups";
+import { finalizePendingBackupMetadata, runDailyBackupIfDue } from "./repositories/backups";
 import { Layout } from "./app/Layout";
 import { DashboardPage } from "./features/dashboard/DashboardPage";
 import { ClientsPage } from "./features/clients/ClientsPage";
@@ -22,6 +23,9 @@ import { PersonDetailPage } from "./features/people/PersonDetailPage";
 import { TimePage } from "./features/time/TimePage";
 import { ReportsPage } from "./features/reports/ReportsPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { AuditPage } from "./features/audit/AuditPage";
+import { finalizePendingRestoreAudit } from "./repositories/audit";
+import { getRuntimeReleaseInfo } from "./lib/db";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, retry: 1 } },
@@ -44,6 +48,7 @@ const router = createHashRouter([
       { path: "people/:id", element: <PersonDetailPage /> },
       { path: "time", element: <TimePage /> },
       { path: "reports", element: <ReportsPage /> },
+      { path: "audit", element: <AuditPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },
@@ -53,22 +58,54 @@ const router = createHashRouter([
 function Root() {
   const [locked, setLocked] = useState<boolean | null>(null);
   useEffect(() => {
-    void isLockEnabled().then(setLocked).catch(() => setLocked(false));
+    // Fail closed: a missing/corrupt credential or database error must never
+    // silently expose financial data.
+    void isLockEnabled().then(setLocked).catch(() => setLocked(true));
   }, []);
   if (locked === null) return null;
   if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
   return <RouterProvider router={router} />;
 }
 
+function StartupCompatibilityError({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  const raw = error instanceof Error ? error.message : String(error);
+  const detail = /^(SCHEMA_VERSION_|APPLICATION_VERSION_|RUNTIME_RELEASE_)/.test(raw)
+    ? raw.slice(0, 240)
+    : "RELEASE_PREFLIGHT_FAILED";
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-6 dark:bg-slate-950">
+      <section className="w-full max-w-xl rounded-2xl border border-red-200 bg-white p-6 shadow-sm dark:border-red-900 dark:bg-slate-900">
+        <h1 className="text-lg font-semibold text-red-700 dark:text-red-300">{t("settings.startupBlockedTitle")}</h1>
+        <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{t("settings.startupBlockedHint")}</p>
+        <p className="mt-4 rounded-lg bg-red-50 p-3 text-xs text-red-700 dark:bg-red-950/40 dark:text-red-300" dir="ltr">
+          {t("settings.startupBlockedCode")}: {detail}
+        </p>
+      </section>
+    </main>
+  );
+}
+
 async function bootstrap() {
   let language = "ar";
   let theme: "light" | "dark" = "light";
+  let startupError: unknown = null;
   try {
-    const settings = await loadSettings();
-    language = settings.language;
-    theme = settings.theme;
-  } catch (err) {
-    console.error("failed to load settings, using defaults", err);
+    await getRuntimeReleaseInfo();
+  } catch (error) {
+    startupError = error;
+    console.error("release compatibility preflight failed", error);
+  }
+  if (!startupError) {
+    try {
+      await finalizePendingRestoreAudit();
+      await finalizePendingBackupMetadata();
+      const settings = await loadSettings();
+      language = settings.language;
+      theme = settings.theme;
+    } catch (err) {
+      console.error("failed to load settings, using defaults", err);
+    }
   }
   initI18n(language);
   applyTheme(theme);
@@ -76,22 +113,13 @@ async function bootstrap() {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <Root />
+        {startupError ? <StartupCompatibilityError error={startupError} /> : <Root />}
       </QueryClientProvider>
     </React.StrictMode>,
   );
 
   // fire-and-forget: once-per-day local backup
-  runDailyBackupIfDue().catch((err) => console.error("auto-backup failed", err));
-
-  // heal certificates marked PAID before payments were enforced: create their
-  // backing payment records so "collected" matches reality (idempotent).
-  // Repeats every 10 minutes so a gap left by a failed save-time backfill
-  // closes without waiting for the next app start.
-  void import("./repositories/backfill").then(({ runPaidBackfill }) => {
-    void runPaidBackfill(queryClient);
-    setInterval(() => void runPaidBackfill(queryClient), 10 * 60_000);
-  });
+  if (!startupError) runDailyBackupIfDue().catch((err) => console.error("auto-backup failed", err));
 }
 
 void bootstrap();

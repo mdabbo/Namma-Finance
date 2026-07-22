@@ -30,15 +30,36 @@ const MIGRATIONS = [
   "0005_backfill_team_expenses.sql",
   "0006_sync_tracking.sql",
   "0007_time_tracking.sql",
+  "0008_financial_record_lifecycle.sql",
+  "0009_contract_revisions.sql",
+  "0010_contract_revision_integrity.sql",
+  "0011_payment_allocation_integrity.sql",
+  "0012_audit_log.sql",
+  "0013_audit_remediation.sql",
+  "0014_backup_hardening.sql",
+  "0015_backup_audit_hardening.sql",
+  "0016_domain_validation.sql",
+  "0017_domain_validation_audit.sql",
+  "0018_managed_documents.sql",
+  "0019_document_cache_isolation.sql",
+  "0020_sync_conflict_safety.sql",
+  "0021_sync_conflict_remediation.sql",
+  "0022_numbering_safety.sql",
+  "0023_numbering_remediation.sql",
 ];
 
 export function buildMigratedDb(through: number = MIGRATIONS.length): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
-  for (const file of MIGRATIONS.slice(0, through)) {
+  applyMigrations(db, 0, through);
+  return db;
+}
+
+/** Apply the real forward-only migration chain to an existing database. */
+export function applyMigrations(db: DatabaseSync, from: number, through: number = MIGRATIONS.length): void {
+  for (const file of MIGRATIONS.slice(from, through)) {
     db.exec(readFileSync(join(migrationsDir, file), "utf8"));
   }
-  return db;
 }
 
 // ─── multi-device DB layer (the mocked `../db`) ─────────────────────────────

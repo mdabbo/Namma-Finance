@@ -4,8 +4,18 @@ import { getSyncSession, resetSyncClient, syncSignIn, syncSignOut } from "../lib
 import { getLastSyncReport, runSync } from "../lib/sync/engine";
 import { refreshRole } from "../lib/roles";
 import { useSettings } from "../lib/settings";
+import { withLock } from "../lib/mutex";
+import { reconcileCertificateStatuses } from "./payments";
 
 const AUTO_SYNC_MINUTES = 15;
+
+async function runSyncWithReconciliation() {
+  return withLock(async () => {
+    const report = await runSync();
+    await reconcileCertificateStatuses();
+    return report;
+  });
+}
 
 export function useSyncSession() {
   return useQuery({ queryKey: ["sync", "session"], queryFn: getSyncSession });
@@ -35,7 +45,10 @@ export function useSyncMutations() {
       mutationFn: syncSignOut,
       onSuccess: () => void qc.invalidateQueries({ queryKey: ["sync"] }),
     }),
-    run: useMutation({ mutationFn: runSync, onSuccess: afterSync }),
+    run: useMutation({
+      mutationFn: runSyncWithReconciliation,
+      onSuccess: afterSync,
+    }),
   };
 }
 
@@ -62,7 +75,7 @@ export function useAutoSync(): void {
       try {
         const session = await getSyncSession();
         if (session) {
-          const report = await runSync();
+          const report = await runSyncWithReconciliation();
           if (report.ok && (report.pulled > 0 || report.deletedLocal > 0)) void qc.invalidateQueries();
           void qc.invalidateQueries({ queryKey: ["sync", "last"] });
         }

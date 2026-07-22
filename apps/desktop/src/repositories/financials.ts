@@ -3,6 +3,7 @@ import {
   computeContractState,
   computeProjectFinancials,
   computeReadyToBill,
+  computeProjectCostProfile,
   computeTeamPayout,
   laborCostMinor,
   parseMilestones,
@@ -11,7 +12,9 @@ import {
   type ContractState,
   type Expense,
   type PaymentAllocation,
+  type PaymentKind,
   type ProjectFinancials,
+  type ProjectCostProfile,
 } from "@mep/core";
 import { select } from "../lib/db";
 import { todayIso } from "../lib/format";
@@ -37,7 +40,7 @@ async function loadExpenses(): Promise<Expense[]> {
     id: number; date: string; category_id: number; description: string; project_id: number | null;
     supplier: string | null; amount_minor: number; currency: string; fx_rate_micro: number;
     attachment_path: string | null; created_at: string;
-  }>("SELECT * FROM expenses");
+  }>("SELECT * FROM expenses WHERE voided_at IS NULL AND archived_at IS NULL");
   return rows.map((r) => ({
     id: r.id, date: r.date, categoryId: r.category_id, description: r.description,
     projectId: r.project_id, supplier: r.supplier, amountMinor: r.amount_minor,
@@ -77,7 +80,7 @@ export interface WorkspaceFinancials {
   contractStates: Map<number, ContractState>;
   allExpenses: Expense[];
   /** Every live incoming payment with its EGP-converted amount (for cash-flow charts). */
-  cashIn: { date: string; egpMinor: number }[];
+  cashIn: { date: string; kind: PaymentKind; projectId: number; egpMinor: number }[];
   /** Achieved milestones not yet certified — work the client should be billed for. */
   readyToCollect: ReadyToCollectItem[];
   /** Paid certificates whose team-member share has not been paid out yet. */
@@ -85,16 +88,18 @@ export interface WorkspaceFinancials {
   /** Analytical labor cost per project (EGP) from logged time — costing only,
    *  deliberately NOT part of cash net profit (salaries stay overhead). */
   laborByProjectEgp: Map<number, number>;
+  /** Separate cash, accrual, commitment, and forecast views by project. */
+  costsByProject: Map<number, ProjectCostProfile>;
 }
 
 /** Load everything and compute the full financial state of the office. */
 export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
   const today = todayIso();
   const [projectRows, contractRows, certRows, paymentRows, allocations, expenses] = await Promise.all([
-    select<ProjectRow>("SELECT p.*, c.name AS client_name FROM projects p JOIN clients c ON c.id = p.client_id"),
-    select<ContractRow>("SELECT * FROM contracts"),
-    select<CertificateRow>("SELECT * FROM payment_certificates WHERE deleted_at IS NULL"),
-    select<PaymentRow>("SELECT * FROM payments WHERE deleted_at IS NULL"),
+    select<ProjectRow>("SELECT p.*, c.name AS client_name FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.archived_at IS NULL"),
+    select<ContractRow>("SELECT * FROM contracts WHERE archived_at IS NULL"),
+    select<CertificateRow>("SELECT * FROM payment_certificates WHERE deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL"),
+    select<PaymentRow>("SELECT * FROM payments WHERE deleted_at IS NULL AND voided_at IS NULL"),
     loadAllocations(),
     loadExpenses(),
   ]);
@@ -127,13 +132,23 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
   );
 
   const projectByContract = new Map(contracts.map((c) => [c.id, projects.find((p) => p.id === c.projectId)]));
-  const cashIn = payments.map((p) => {
+  const cashIn = payments.flatMap((p) => {
     const project = projectByContract.get(p.contractId);
-    return {
+    if (!project) return [];
+    return [{
       date: p.date,
-      egpMinor: project ? toEgpPiasters(p.amountMinor, project.currency, project.fxRateMicro) : p.amountMinor,
-    };
+      kind: p.kind,
+      projectId: project.id,
+      egpMinor: toEgpPiasters(p.amountMinor, project.currency, project.fxRateMicro),
+    }];
   });
+  const cashInByProjectEgp = new Map<number, number>();
+  for (const payment of payments) {
+    const project = projectByContract.get(payment.contractId);
+    if (!project) continue;
+    const amountEgp = toEgpPiasters(payment.amountMinor, project.currency, project.fxRateMicro);
+    cashInByProjectEgp.set(project.id, (cashInByProjectEgp.get(project.id) ?? 0) + amountEgp);
+  }
 
   // achieved-milestone billing alerts (milestones link to completed stages or are checked manually)
   const completedStages = await select<{ id: number; project_id: number }>(
@@ -185,7 +200,7 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
   );
   const paidByAssignment = new Map<number, number>();
   for (const r of await select<{ assignment_id: number; paid: number }>(
-    "SELECT assignment_id, SUM(amount_minor) AS paid FROM person_payments GROUP BY assignment_id",
+    "SELECT assignment_id, SUM(amount_minor) AS paid FROM person_payments WHERE voided_at IS NULL GROUP BY assignment_id",
   )) {
     paidByAssignment.set(r.assignment_id, r.paid);
   }
@@ -240,7 +255,38 @@ export async function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
     laborByProjectEgp.set(row.project_id, (laborByProjectEgp.get(row.project_id) ?? 0) + egp);
   }
 
-  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables, laborByProjectEgp };
+  const nonTeamExpenseByProject = new Map<number, number>();
+  for (const row of await select<{ project_id: number; amount_minor: number; currency: string; fx_rate_micro: number }>(
+    `SELECT project_id,amount_minor,currency,fx_rate_micro FROM expenses
+     WHERE project_id IS NOT NULL AND person_payment_id IS NULL AND voided_at IS NULL AND archived_at IS NULL`,
+  )) {
+    const egp = toEgpPiasters(row.amount_minor, row.currency, row.fx_rate_micro);
+    nonTeamExpenseByProject.set(row.project_id, (nonTeamExpenseByProject.get(row.project_id) ?? 0) + egp);
+  }
+  const committedTeamByProject = new Map<number, number>();
+  for (const assignment of assignments) {
+    const egp = toEgpPiasters(assignment.agreed_minor, assignment.currency, assignment.fx_rate_micro);
+    committedTeamByProject.set(assignment.project_id, (committedTeamByProject.get(assignment.project_id) ?? 0) + egp);
+  }
+  const accruedByProject = new Map<number, number>();
+  for (const payable of teamPayables) {
+    accruedByProject.set(payable.projectId, (accruedByProject.get(payable.projectId) ?? 0) + payable.dueEgp);
+  }
+  const costsByProject = new Map<number, ProjectCostProfile>();
+  for (const financial of projectFinancials) {
+    const project = financial.project;
+    costsByProject.set(project.id, computeProjectCostProfile({
+      projectId: project.id,
+      recognizedRevenueEgp: financial.revenueEgp,
+      forecastRevenueEgp: financial.contractValueEgp,
+      actualCashInEgp: cashInByProjectEgp.get(project.id) ?? 0,
+      actualPaidCostEgp: financial.expensesEgp,
+      accruedCostEgp: accruedByProject.get(project.id) ?? 0,
+      committedCostEgp: (committedTeamByProject.get(project.id) ?? 0) + (nonTeamExpenseByProject.get(project.id) ?? 0),
+    }));
+  }
+
+  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables, laborByProjectEgp, costsByProject };
 }
 
 export function useWorkspaceFinancials() {

@@ -4,6 +4,7 @@ import { projectSchema, type Project, type ProjectInput, CURRENCIES } from "@mep
 import { useClients } from "../../repositories/clients";
 import { useCurrencyRates } from "../../repositories/currencies";
 import { Button, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import type { RevisionMetadata } from "../../repositories/contracts";
 
 const DISCIPLINES = ["HVAC", "PLUMBING", "FIREFIGHTING", "ELECTRICAL", "BIM", "ARCHITECTURE", "STRUCTURAL", "ID", "MULTI"] as const;
 const STATUSES = ["ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"] as const;
@@ -11,7 +12,7 @@ const STATUSES = ["ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"] as const;
 interface ProjectFormProps {
   initial?: Project | null;
   nextCode?: string;
-  onSubmit: (input: ProjectInput) => void;
+  onSubmit: (input: ProjectInput, revision?: RevisionMetadata) => void;
   onClose: () => void;
   busy?: boolean;
 }
@@ -38,6 +39,8 @@ export function ProjectForm({ initial, nextCode, onSubmit, onClose, busy }: Proj
     description: initial?.description ?? "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [revisionEffectiveDate, setRevisionEffectiveDate] = useState(new Date().toISOString().slice(0, 10));
+  const [revisionReason, setRevisionReason] = useState("");
 
   // default the FX rate from the currency table when currency changes
   useEffect(() => {
@@ -65,7 +68,12 @@ export function ProjectForm({ initial, nextCode, onSubmit, onClose, busy }: Proj
       setErrors(errs);
       return;
     }
-    onSubmit(parsed.data);
+    const currencyChanged = !!initial && (initial.currency !== parsed.data.currency || initial.fxRateMicro !== parsed.data.fxRateMicro);
+    if (currencyChanged && !revisionReason.trim()) {
+      setErrors((current) => ({ ...current, revisionReason: t("contracts.revisionReasonHint") }));
+      return;
+    }
+    onSubmit(parsed.data, currencyChanged ? { effectiveDate: revisionEffectiveDate, reason: revisionReason.trim() } : undefined);
   }
 
   return (
@@ -144,6 +152,16 @@ export function ProjectForm({ initial, nextCode, onSubmit, onClose, busy }: Proj
             }}
           />
         </Field>
+        {initial && (initial.currency !== form.currency || initial.fxRateMicro !== form.fxRateMicro) && (
+          <>
+            <Field label={t("contracts.revisionEffectiveDate")}>
+              <Input type="date" value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
+            </Field>
+            <Field label={t("contracts.revisionReason")} error={errors.revisionReason} className="col-span-2">
+              <Input value={revisionReason} onChange={(e) => setRevisionReason(e.target.value)} placeholder={t("contracts.revisionReasonHint")} />
+            </Field>
+          </>
+        )}
         <Field label={t("projects.startDate")}>
           <Input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
         </Field>

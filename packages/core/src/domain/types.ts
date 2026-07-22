@@ -102,8 +102,37 @@ export interface PaymentCertificate {
   discountMinor: number;
   /** Used only when the contract's advance recovery method is MANUAL. */
   manualAdvanceRecoveryMinor: number | null;
+  contractRevisionId?: number | null;
+  contractValueMinorSnapshot?: number | null;
+  vatBpSnapshot?: number | null;
+  retentionBpSnapshot?: number | null;
+  withholdingBpSnapshot?: number | null;
+  advanceMinorSnapshot?: number | null;
+  advanceMethodSnapshot?: AdvanceRecoveryMethod | null;
+  paymentTermsDaysSnapshot?: number | null;
+  currencySnapshot?: string | null;
+  fxRateMicroSnapshot?: number | null;
   status: CertificateStatus;
   deletedAt: string | null;
+  createdAt: string;
+}
+
+export interface ContractRevision {
+  id: number;
+  contractId: number;
+  revisionNumber: number;
+  effectiveDate: string;
+  contractValueMinor: number;
+  vatBp: number;
+  retentionBp: number;
+  withholdingBp: number;
+  advanceMinor: number;
+  advanceRecoveryMethod: AdvanceRecoveryMethod;
+  paymentTermsDays: number;
+  currency: string;
+  fxRateMicro: number;
+  reason: string;
+  approvedAt: string | null;
   createdAt: string;
 }
 
@@ -190,6 +219,7 @@ export interface PersonPayment {
 
 export type StageStatus = "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "ON_HOLD";
 export type DocumentCategory = "CONTRACT" | "BOQ" | "PROPOSAL" | "INVOICE" | "DRAWING" | "OTHER";
+export type DocumentStorageProvider = "LOCAL_ONLY" | "SUPABASE" | "LEGACY_LOCAL";
 
 export interface ProjectStage {
   id: number;
@@ -210,7 +240,20 @@ export interface ProjectDocument {
   projectId: number;
   category: DocumentCategory;
   title: string;
-  path: string; // managed file reference — the file stays where it is
+  documentUuid: string;
+  originalFilename: string;
+  extension: string | null;
+  mimeType: string;
+  sizeBytes: number | null;
+  sha256: string | null;
+  storageProvider: DocumentStorageProvider;
+  cloudStorageKey: string | null;
+  localCachePath: string | null;
+  versionNumber: number;
+  uploadedAt: string | null;
+  uploadedBy: string | null;
+  isAvailableOffline: boolean;
+  archivedAt: string | null;
   addedAt: string;
 }
 

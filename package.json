@@ -1,15 +1,17 @@
 {
   "name": "mep-finance",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Project Financial Management System for an MEP engineering design office",
   "scripts": {
     "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "test:coverage": "pnpm --filter @mep/core test:coverage",
+    "typecheck": "pnpm -r typecheck",
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check"
   },
   "packageManager": "pnpm@10.0.0",
   "engines": {
     "node": ">=20"
   }
 }
-

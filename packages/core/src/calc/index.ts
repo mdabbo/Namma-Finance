@@ -10,3 +10,5 @@ export * from "./profitability";
 export * from "./labor";
 export * from "./cashflow";
 export * from "./aging";
+export * from "./collectionStatus";
+export * from "./costs";

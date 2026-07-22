@@ -1,8 +1,7 @@
 /**
  * A single global async lock that serialises the financial reconciliation
- * pipeline. Every reconcile/backfill trigger runs in the same webview JS
- * process — the stage/contract mutations, the "mark paid" flow, and the
- * startup + 10-minute background sweep. Without serialisation two of them
+ * pipeline. Every milestone reconciliation trigger runs in the same webview
+ * process. Without serialisation two stage or contract edits can
  * interleave at `await` boundaries and race on the read-modify-write of a
  * contract's milestone JSON, which double-creates milestone certificates and
  * wipes their certificateId links (observed in the simulation harness).

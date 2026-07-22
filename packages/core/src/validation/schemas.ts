@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { CURRENCIES } from "../money/currency";
+import { isIsoCalendarDate } from "./date";
+import { parseAttachmentsResult,parseDrawingsResult,parseMilestonesResult } from "../calc/valuation";
 
 const minor = z.number().int().safe();
 const nonNegMinor = minor.min(0);
 const bp = z.number().int().min(0).max(10_000);
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "invalid_date");
+export const isoDate = z.string().refine(isIsoCalendarDate, "invalid_date");
 const currencyCode = z.string().refine((c) => c in CURRENCIES, "invalid_currency");
 const fxMicro = z.number().int().positive();
 
@@ -34,7 +36,7 @@ export const projectSchema = z.object({
   endDate: isoDate.nullish(),
   progressBp: bp,
   description: z.string().nullish(),
-});
+}).refine((value)=>!value.startDate || !value.endDate || value.endDate>=value.startDate,{message:"end_before_start",path:["endDate"]});
 
 export const contractSchema = z
   .object({
@@ -53,9 +55,9 @@ export const contractSchema = z
     paymentTermsDays: z.number().int().min(0).max(3650),
     paymentTermsNotes: z.string().nullish(),
     valuationMode: z.enum(["LUMP_SUM", "MILESTONES", "DRAWINGS"]),
-    milestones: z.string().nullish(),
-    drawings: z.string().nullish(),
-    attachments: z.string().nullish(),
+    milestones: z.string().nullish().refine((value)=>parseMilestonesResult(value).ok,"malformed_json"),
+    drawings: z.string().nullish().refine((value)=>parseDrawingsResult(value).ok,"malformed_json"),
+    attachments: z.string().nullish().refine((value)=>parseAttachmentsResult(value).ok,"malformed_json"),
     signedDate: isoDate.nullish(),
     notes: z.string().nullish(),
   })
@@ -76,10 +78,14 @@ export const certificateSchema = z
     discountMinor: nonNegMinor,
     manualAdvanceRecoveryMinor: nonNegMinor.nullish(),
     status: z.enum(["DRAFT", "SUBMITTED", "APPROVED", "PAID"]),
+    dueDateConfirmed: z.boolean().optional(),
   })
   .refine((c) => c.discountMinor <= c.grossMinor, {
     message: "discount_exceeds_gross",
     path: ["discountMinor"],
+  })
+  .refine((c)=>!c.submissionDate || !c.dueDateOverride || c.dueDateOverride>=c.submissionDate || c.dueDateConfirmed===true,{
+    message:"due_before_submission",path:["dueDateOverride"],
   });
 
 export const paymentSchema = z.object({
@@ -147,13 +153,25 @@ export const stageSchema = z.object({
   completionBp: bp,
   engineers: z.string().nullish(),
   notes: z.string().nullish(),
-});
+}).refine((value)=>!value.startDate || !value.endDate || value.endDate>=value.startDate,{message:"end_before_start",path:["endDate"]});
 
 export const documentSchema = z.object({
   projectId: z.number().int().positive(),
   category: z.enum(["CONTRACT", "BOQ", "PROPOSAL", "INVOICE", "DRAWING", "OTHER"]),
   title: z.string().trim().min(1, "required"),
-  path: z.string().min(1, "required"),
+  documentUuid: z.string().uuid(),
+  originalFilename: z.string().trim().min(1, "required"),
+  extension: z.string().nullish(),
+  mimeType: z.string().trim().min(1, "required"),
+  sizeBytes: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  storageProvider: z.enum(["LOCAL_ONLY", "SUPABASE", "LEGACY_LOCAL"]),
+  cloudStorageKey: z.string().nullish(),
+  localCachePath: z.string().nullish(),
+  versionNumber: z.number().int().positive(),
+  uploadedAt: z.string().nullish(),
+  uploadedBy: z.string().nullish(),
+  isAvailableOffline: z.boolean(),
 });
 
 export const recurringExpenseSchema = z.object({

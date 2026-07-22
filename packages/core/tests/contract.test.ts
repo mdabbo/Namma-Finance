@@ -82,6 +82,8 @@ describe("contract-level derived figures", () => {
     expect(f.vatMinor).toBe(14_000_000);
     expect(f.retentionMinor).toBe(5_000_000);
     expect(f.netContractMinor).toBe(109_000_000);
+    expect(f.contractValueIncludingVatMinor).toBe(114_000_000);
+    expect(f.lifetimeContractEntitlementMinor).toBe(114_000_000);
   });
 });
 
@@ -100,6 +102,7 @@ describe("advance-recovery threading across certificates", () => {
     expect(recoveries).toEqual([4_000_000, 4_000_000, 2_000_000]);
     expect(state.advanceRecoveredMinor).toBe(10_000_000);
     expect(state.advanceRemainingMinor).toBe(0);
+    expect(state.remainingUncertifiedMinor).toBe(0);
   });
 
   it("rounding drift across many certificates never over-recovers", () => {
@@ -194,6 +197,45 @@ describe("collection and outstanding balances", () => {
     const state = computeContractState({ contract: c, certificates: certs, payments, allocations, todayIso: TODAY });
     expect(state.advanceReceivedMinor).toBe(10_000_000);
     expect(state.totalCashInMinor).toBe(31_000_000);
+    expect(state.totalActualCashInMinor).toBe(31_000_000);
+  });
+
+  it("separates billable, certified, invoiced, collections, credit, and total cash", () => {
+    const c = contract({ advanceMinor: 0, retentionBp: 500, vatBp: 1400 });
+    const certs = [
+      cert({ id: 1, seq: 1, grossMinor: 20_000_000, status: "DRAFT" }),
+      cert({ id: 2, seq: 2, grossMinor: 30_000_000, status: "APPROVED" }),
+    ];
+    const payments = [
+      payment({ id: 1, kind: "CERTIFICATE", amountMinor: 20_000_000 }),
+      payment({ id: 2, kind: "ADVANCE", amountMinor: 10_000_000 }),
+      payment({ id: 3, kind: "RETENTION_RELEASE", amountMinor: 500_000 }),
+    ];
+    const allocations = [alloc(1, 2, 15_000_000)];
+    const state = computeContractState({ contract: c, certificates: certs, payments, allocations, todayIso: TODAY });
+    expect(state.billableRevenueMinor).toBe(50_000_000);
+    expect(state.certifiedBaseMinor).toBe(30_000_000);
+    expect(state.invoicedAmountMinor).toBe(32_700_000);
+    expect(state.certificateCollectionsMinor).toBe(15_000_000);
+    expect(state.unallocatedCustomerCreditMinor).toBe(5_000_000);
+    expect(state.advanceReceivedMinor).toBe(10_000_000);
+    expect(state.retentionReleasedMinor).toBe(500_000);
+    expect(state.totalActualCashInMinor).toBe(30_500_000);
+    expect(state.outstandingReceivablesMinor).toBe(17_700_000);
+    expect(state.remainingUncertifiedMinor).toBe(70_000_000);
+  });
+
+  it("derives unallocated customer credit from active certificate payments only", () => {
+    const c = contract({ advanceMinor: 0, retentionBp: 0, vatBp: 0 });
+    const certs = [cert({ id: 1, seq: 1, grossMinor: 40_000_000 })];
+    const payments = [
+      payment({ id: 1, kind: "CERTIFICATE", amountMinor: 30_000_000 }),
+      payment({ id: 2, kind: "ADVANCE", amountMinor: 5_000_000 }),
+      payment({ id: 3, kind: "CERTIFICATE", amountMinor: 9_000_000, deletedAt: "2026-07-01" }),
+    ];
+    const allocations = [alloc(1, 1, 20_000_000), alloc(3, 1, 9_000_000)];
+    const state = computeContractState({ contract: c, certificates: certs, payments, allocations, todayIso: TODAY });
+    expect(state.unallocatedCustomerCreditMinor).toBe(10_000_000);
   });
 
   it("remaining un-certified value decreases as certificates are issued", () => {

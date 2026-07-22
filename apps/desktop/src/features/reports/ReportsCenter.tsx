@@ -37,7 +37,8 @@ export function ReportsCenter() {
   const { data: financials } = useWorkspaceFinancials();
   const { data: clients = [] } = useClients();
   const { data: certificates = [] } = useCertificates();
-  const { data: payments = [] } = usePayments();
+  const [includeVoidedPayments, setIncludeVoidedPayments] = useState(false);
+  const { data: payments = [] } = usePayments(includeVoidedPayments);
   const { data: expenses = [] } = useExpenses();
   const { data: people = [] } = usePeople();
   const { data: settings } = useSettings();
@@ -57,10 +58,16 @@ export function ReportsCenter() {
           [t("projects.client")]: clients.find((c) => c.id === p.project.clientId)?.name ?? "",
           [t("projects.discipline")]: t(`discipline.${p.project.discipline}`),
           [t("common.status")]: t(`status.${p.project.status}`),
-          [t("clients.totalContracts")]: money(p.contractValueEgp),
-          [t("dashboard.kpiRevenue")]: money(p.revenueEgp),
-          [t("projects.collected")]: money(p.collectedEgp),
-          [t("clients.outstanding")]: money(p.outstandingEgp),
+          [t("cash.contractValueExcludingVat")]: money(p.contractValueEgp),
+          [t("cash.billableRevenue")]: money(p.billableRevenueEgp),
+          [t("cash.certifiedRevenue")]: money(p.revenueEgp),
+          [t("cash.invoicedAmount")]: money(p.invoicedAmountEgp),
+          [t("cash.certificateCollections")]: money(p.certificateCollectionsEgp),
+          [t("cash.advanceReceived")]: money(p.advanceReceivedEgp),
+          [t("cash.retentionReleased")]: money(p.retentionReleasedEgp),
+          [t("cash.totalActualCashIn")]: money(p.totalActualCashInEgp),
+          [t("cash.customerCredit")]: money(p.unallocatedCustomerCreditEgp),
+          [t("cash.outstandingReceivables")]: money(p.outstandingEgp),
         }));
       case "clients":
         return clients.map((c) => {
@@ -69,9 +76,13 @@ export function ReportsCenter() {
             [t("common.name")]: c.name,
             [t("clients.company")]: c.company ?? "",
             [t("clients.projects")]: own.length,
-            [t("clients.totalContracts")]: money(own.reduce((s, p) => s + p.contractValueEgp, 0)),
-            [t("clients.totalCollected")]: money(own.reduce((s, p) => s + p.collectedEgp, 0)),
-            [t("clients.outstanding")]: money(own.reduce((s, p) => s + p.outstandingEgp, 0)),
+            [t("cash.contractValueExcludingVat")]: money(own.reduce((s, p) => s + p.contractValueEgp, 0)),
+            [t("cash.certificateCollections")]: money(own.reduce((s, p) => s + p.certificateCollectionsEgp, 0)),
+            [t("cash.advanceReceived")]: money(own.reduce((s, p) => s + p.advanceReceivedEgp, 0)),
+            [t("cash.retentionReleased")]: money(own.reduce((s, p) => s + p.retentionReleasedEgp, 0)),
+            [t("cash.totalActualCashIn")]: money(own.reduce((s, p) => s + p.totalActualCashInEgp, 0)),
+            [t("cash.customerCredit")]: money(own.reduce((s, p) => s + p.unallocatedCustomerCreditEgp, 0)),
+            [t("cash.outstandingReceivables")]: money(own.reduce((s, p) => s + p.outstandingEgp, 0)),
           };
         });
       case "certificates":
@@ -97,6 +108,7 @@ export function ReportsCenter() {
           [t("payments.kind")]: t(`paymentKind.${p.kind}`),
           [t("common.date")]: p.date,
           [t("payments.method")]: t(`method.${p.method}`),
+          [t("common.status")]: p.deletedAt ? t("lifecycle.void") : t("status.PAID"),
           [t("common.amount")]: fmt.money(p.amountMinor, p.currency),
         }));
       case "expenses":
@@ -194,7 +206,9 @@ export function ReportsCenter() {
               .reduce((s, cs) => s + (project ? toEgpPiasters(cs.breakdown.baseMinor, project.currency, project.fxRateMicro) : cs.breakdown.baseMinor), 0)
           );
         }, 0);
-        const collected = financials.cashIn.filter((p) => inYear(p.date)).reduce((s, p) => s + p.egpMinor, 0);
+        const cashByKind = (kind: "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE") =>
+          financials.cashIn.filter((p) => p.kind === kind && inYear(p.date)).reduce((s, p) => s + p.egpMinor, 0);
+        const totalCashIn = financials.cashIn.filter((p) => inYear(p.date)).reduce((s, p) => s + p.egpMinor, 0);
         const yearExpenses = financials.allExpenses.filter((e) => inYear(e.date));
         const byCategory = new Map<string, number>();
         for (const e of yearExpenses) {
@@ -206,7 +220,10 @@ export function ReportsCenter() {
         const totalExpenses = [...byCategory.values()].reduce((a, b) => a + b, 0);
         const rows: Record<string, unknown>[] = [
           { [t("common.description")]: t("reports.annualRevenue"), [t("common.amount")]: money(revenue) },
-          { [t("common.description")]: t("reports.annualCollected"), [t("common.amount")]: money(collected) },
+          { [t("common.description")]: t("cash.totalActualCashIn"), [t("common.amount")]: money(totalCashIn) },
+          { [t("common.description")]: t("cash.certificatePaymentCash"), [t("common.amount")]: money(cashByKind("CERTIFICATE")) },
+          { [t("common.description")]: t("cash.advanceReceived"), [t("common.amount")]: money(cashByKind("ADVANCE")) },
+          { [t("common.description")]: t("cash.retentionReleased"), [t("common.amount")]: money(cashByKind("RETENTION_RELEASE")) },
         ];
         for (const [cat, value] of [...byCategory.entries()].sort((a, b) => b[1] - a[1])) {
           rows.push({ [t("common.description")]: `${t("expenses.category")}: ${cat}`, [t("common.amount")]: money(value) });
@@ -242,6 +259,12 @@ export function ReportsCenter() {
                 <option key={y} value={y}>{y}</option>
               ))}
             </Select>
+          )}
+          {key === "payments" && (
+            <label className="mb-3 flex items-center gap-2 text-xs text-slate-600">
+              <input type="checkbox" checked={includeVoidedPayments} onChange={(e) => setIncludeVoidedPayments(e.target.checked)} />
+              {t("lifecycle.includeVoided")}
+            </label>
           )}
           <div className="flex gap-1.5">
             <Button onClick={() => void run(key, "pdf")}>
