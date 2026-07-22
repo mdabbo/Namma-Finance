@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { invoke } from "@tauri-apps/api/core";
 import { execute, select, selectOne } from "../db";
 import { getSyncClient } from "./client";
 import { CONFLICT_PROTECTED_TABLES, NUMBER_COLLISION_TABLES, SYNC_TABLES, type SyncTableSpec } from "./registry";
@@ -100,6 +101,10 @@ async function numberCollision(spec: SyncTableSpec, values: Record<string, unkno
  * marker into concurrent desktop writes. Context and mutation share a single
  * SQLite write transaction and are rolled back together on failure. */
 async function executeSyncMutation(sql: string, params: unknown[] = []): Promise<void> {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    await invoke("execute_sync_mutation_atomic", { sql, params });
+    return;
+  }
   await execute("BEGIN IMMEDIATE");
   try {
     await execute("UPDATE audit_context SET source='SYNC' WHERE id=1");

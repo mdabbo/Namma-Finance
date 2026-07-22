@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tauri::State;
 use tauri_plugin_sql::{DbInstances, DbPool};
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+const DATABASE_KEY: &str = "sqlite:mep-finance.db";
 
 #[derive(Default)]
 struct LockThrottle {
@@ -16,22 +19,12 @@ struct LockThrottleState {
     retry_at: Option<std::time::Instant>,
 }
 
-async fn lock_database(app: &tauri::AppHandle) -> Result<sqlx::SqlitePool, String> {
-    use tauri::Manager;
-    let path = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("LOCK_DATABASE_UNAVAILABLE: {e}"))?
-        .join("mep-finance.db");
-    sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(path)
-                .create_if_missing(false),
-        )
-        .await
-        .map_err(|e| format!("LOCK_DATABASE_UNAVAILABLE: {e}"))
+async fn application_database_pool(db_instances: &DbInstances) -> Result<sqlx::SqlitePool, String> {
+    let instances = db_instances.0.read().await;
+    match instances.get(DATABASE_KEY) {
+        Some(DbPool::Sqlite(pool)) => Ok(pool.clone()),
+        _ => Err("APP_DATABASE_UNAVAILABLE: database is not loaded".into()),
+    }
 }
 
 async fn read_lock_credentials(
@@ -128,11 +121,8 @@ fn note_lock_result(throttle: &LockThrottle, success: bool) -> Result<(), String
     Ok(())
 }
 
-#[tauri::command]
-async fn app_lock_enabled(app: tauri::AppHandle) -> Result<bool, String> {
-    let pool = lock_database(&app).await?;
-    let (credential, legacy_hash, legacy_salt) = read_lock_credentials(&pool).await?;
-    pool.close().await;
+async fn app_lock_enabled_inner(pool: &sqlx::SqlitePool) -> Result<bool, String> {
+    let (credential, legacy_hash, legacy_salt) = read_lock_credentials(pool).await?;
     match (credential, legacy_hash, legacy_salt) {
         (None, None, None) => Ok(false),
         (Some(value), _, _) if value.starts_with("$argon2id$") => Ok(true),
@@ -141,14 +131,19 @@ async fn app_lock_enabled(app: tauri::AppHandle) -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+async fn app_lock_enabled(db_instances: State<'_, DbInstances>) -> Result<bool, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    app_lock_enabled_inner(&pool).await
+}
+
 async fn verify_app_lock_inner(
-    app: &tauri::AppHandle,
+    pool: &sqlx::SqlitePool,
     throttle: &LockThrottle,
     password: &str,
 ) -> Result<bool, String> {
     enforce_lock_throttle(throttle)?;
-    let pool = lock_database(app).await?;
-    let (credential, legacy_hash, legacy_salt) = read_lock_credentials(&pool).await?;
+    let (credential, legacy_hash, legacy_salt) = read_lock_credentials(pool).await?;
     let legacy = credential.is_none() && legacy_hash.is_some() && legacy_salt.is_some();
     let valid = if let Some(encoded) = credential {
         verify_argon2(password, &encoded)
@@ -180,24 +175,24 @@ async fn verify_app_lock_inner(
         tx.commit().await.map_err(|e| e.to_string())?;
     }
     if !valid {
-        record_lock_failure(&pool).await;
+        record_lock_failure(pool).await;
     }
-    pool.close().await;
     Ok(valid)
 }
 
 #[tauri::command]
 async fn verify_app_lock(
-    app: tauri::AppHandle,
+    db_instances: State<'_, DbInstances>,
     throttle: State<'_, LockThrottle>,
     password: String,
 ) -> Result<bool, String> {
-    verify_app_lock_inner(&app, &throttle, &password).await
+    let pool = application_database_pool(&db_instances).await?;
+    verify_app_lock_inner(&pool, &throttle, &password).await
 }
 
 #[tauri::command]
 async fn set_app_lock(
-    app: tauri::AppHandle,
+    db_instances: State<'_, DbInstances>,
     throttle: State<'_, LockThrottle>,
     password: String,
     current_password: Option<String>,
@@ -205,15 +200,15 @@ async fn set_app_lock(
     if password.len() < 8 || password.len() > 1024 {
         return Err("LOCK_PASSWORD_LENGTH_INVALID".into());
     }
-    let was_enabled = app_lock_enabled(app.clone()).await?;
+    let pool = application_database_pool(&db_instances).await?;
+    let was_enabled = app_lock_enabled_inner(&pool).await?;
     if was_enabled {
         let current = current_password.ok_or("CURRENT_PASSWORD_REQUIRED")?;
-        if !verify_app_lock_inner(&app, &throttle, &current).await? {
+        if !verify_app_lock_inner(&pool, &throttle, &current).await? {
             return Err("LOCK_PASSWORD_INVALID".into());
         }
     }
     let credential = make_argon2_credential(&password)?;
-    let pool = lock_database(&app).await?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("INSERT INTO settings(key,value) VALUES('app_lock_credential',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         .bind(credential).execute(&mut *tx).await.map_err(|e| e.to_string())?;
@@ -237,20 +232,19 @@ async fn set_app_lock(
     .await
     .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
-    pool.close().await;
     Ok(())
 }
 
 #[tauri::command]
 async fn disable_app_lock(
-    app: tauri::AppHandle,
+    db_instances: State<'_, DbInstances>,
     throttle: State<'_, LockThrottle>,
     password: String,
 ) -> Result<(), String> {
-    if !verify_app_lock_inner(&app, &throttle, &password).await? {
+    let pool = application_database_pool(&db_instances).await?;
+    if !verify_app_lock_inner(&pool, &throttle, &password).await? {
         return Err("LOCK_PASSWORD_INVALID".into());
     }
-    let pool = lock_database(&app).await?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE settings SET value='' WHERE key IN ('app_lock_credential','app_lock_hash','app_lock_salt')")
         .execute(&mut *tx).await.map_err(|e| e.to_string())?;
@@ -263,7 +257,6 @@ async fn disable_app_lock(
     .bind(CURRENT_APP_VERSION)
     .execute(&mut *tx).await.map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
-    pool.close().await;
     Ok(())
 }
 
@@ -412,6 +405,123 @@ async fn begin_immediate(
     pool.begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| e.to_string())
+}
+
+const SYNC_MUTATION_TABLES: &[&str] = &[
+    "clients",
+    "people",
+    "expense_categories",
+    "projects",
+    "contracts",
+    "project_stages",
+    "contract_revisions",
+    "variation_orders",
+    "documents",
+    "time_entries",
+    "project_assignments",
+    "payment_certificates",
+    "payments",
+    "payment_certificate_allocations",
+    "person_payments",
+    "expenses",
+    "recurring_expenses",
+];
+
+fn validate_sync_mutation_sql(sql: &str) -> Result<(), String> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty()
+        || trimmed.contains(';')
+        || trimmed.contains("--")
+        || trimmed.contains("/*")
+    {
+        return Err("SYNC_MUTATION_SQL_DENIED".into());
+    }
+    let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
+    let table = match tokens.as_slice() {
+        [verb, table, ..] if verb.eq_ignore_ascii_case("UPDATE") => *table,
+        [verb, into, table, ..]
+            if verb.eq_ignore_ascii_case("INSERT") && into.eq_ignore_ascii_case("INTO") =>
+        {
+            *table
+        }
+        [verb, from, table, ..]
+            if verb.eq_ignore_ascii_case("DELETE") && from.eq_ignore_ascii_case("FROM") =>
+        {
+            *table
+        }
+        _ => return Err("SYNC_MUTATION_SQL_DENIED".into()),
+    };
+    let table = table.split('(').next().unwrap_or(table);
+    if !table
+        .chars()
+        .all(|character| character.is_ascii_lowercase() || character == '_')
+        || !SYNC_MUTATION_TABLES.contains(&table)
+    {
+        return Err("SYNC_MUTATION_TABLE_DENIED".into());
+    }
+    Ok(())
+}
+
+fn bind_json_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    value: JsonValue,
+) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, String> {
+    match value {
+        JsonValue::Null => Ok(query.bind(Option::<String>::None)),
+        JsonValue::Bool(value) => Ok(query.bind(i64::from(value))),
+        JsonValue::String(value) => Ok(query.bind(value)),
+        JsonValue::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(query.bind(value))
+            } else if let Some(value) = value.as_u64() {
+                let value = i64::try_from(value).map_err(|_| "SYNC_INTEGER_OVERFLOW")?;
+                Ok(query.bind(value))
+            } else {
+                // Every numeric field in the sync schema is an integer
+                // (money minor units, basis points, ids, counts, or flags).
+                // Reject decimal JSON instead of ever routing money through
+                // floating point.
+                Err("SYNC_NON_INTEGER_NUMBER_DENIED".into())
+            }
+        }
+        JsonValue::Array(_) | JsonValue::Object(_) => Err("SYNC_PARAMETER_TYPE_DENIED".into()),
+    }
+}
+
+async fn execute_sync_mutation_transaction(
+    pool: &sqlx::SqlitePool,
+    sql: &str,
+    params: Vec<JsonValue>,
+) -> Result<(), String> {
+    validate_sync_mutation_sql(sql)?;
+    let mut tx = begin_immediate(pool).await?;
+    sqlx::query("UPDATE audit_context SET source='SYNC' WHERE id=1")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut query = sqlx::query(sql);
+    for value in params {
+        query = bind_json_value(query, value)?;
+    }
+    query.execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE audit_context SET source='DESKTOP' WHERE id=1")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+/// Apply one pulled row and its audit source marker on the same SQLx
+/// connection. This prevents both writer-lock leaks and SYNC attribution from
+/// bleeding into a concurrent local edit.
+#[tauri::command]
+async fn execute_sync_mutation_atomic(
+    db_instances: State<'_, DbInstances>,
+    sql: String,
+    params: Vec<JsonValue>,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    execute_sync_mutation_transaction(&pool, &sql, params).await
 }
 
 fn validate_payment_input(
@@ -1474,14 +1584,46 @@ async fn stamp_runtime_release(pool: &sqlx::SqlitePool) -> Result<RuntimeRelease
 
 #[tauri::command]
 async fn initialize_runtime_release(
+    app: tauri::AppHandle,
     db_instances: State<'_, DbInstances>,
 ) -> Result<RuntimeReleaseInfo, String> {
-    let instances = db_instances.0.read().await;
-    let pool = match instances.get("sqlite:mep-finance.db") {
-        Some(DbPool::Sqlite(pool)) => pool,
-        _ => return Err("database is not loaded".into()),
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use tauri::Manager;
+
+    // tauri-plugin-sql uses SQLx's default multi-connection pool. The WebView
+    // API executes each statement independently, so legacy BEGIN/COMMIT
+    // sequences can otherwise land on different connections and strand a
+    // SQLite writer lock. After the plugin has completed forward migrations,
+    // replace its pool with one serialized connection for this offline desktop
+    // database. Rust atomic commands and WebView queries then share the same
+    // writer queue and SQLite's transaction boundary cannot change connection.
+    let path = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("RUNTIME_DATABASE_UNAVAILABLE: {e}"))?
+        .join("mep-finance.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .journal_mode(SqliteJournalMode::Wal)
+                .foreign_keys(true)
+                .busy_timeout(std::time::Duration::from_secs(15)),
+        )
+        .await
+        .map_err(|e| format!("RUNTIME_DATABASE_UNAVAILABLE: {e}"))?;
+    let info = stamp_runtime_release(&pool).await?;
+
+    let previous = {
+        let mut instances = db_instances.0.write().await;
+        instances.insert(DATABASE_KEY.to_string(), DbPool::Sqlite(pool))
     };
-    stamp_runtime_release(pool).await
+    if let Some(DbPool::Sqlite(previous)) = previous {
+        previous.close().await;
+    }
+    Ok(info)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2624,6 +2766,91 @@ mod financial_transaction_tests {
     }
 
     #[test]
+    fn sync_mutation_sql_is_restricted_to_one_registered_business_table() {
+        assert!(validate_sync_mutation_sql("UPDATE clients SET name=$1 WHERE id=$2").is_ok());
+        assert!(
+            validate_sync_mutation_sql("INSERT INTO expenses(amount_minor) VALUES($1)").is_ok()
+        );
+        assert!(validate_sync_mutation_sql("DELETE FROM time_entries WHERE id=$1").is_ok());
+        assert!(validate_sync_mutation_sql("UPDATE audit_context SET source='SYNC'").is_err());
+        assert!(
+            validate_sync_mutation_sql("UPDATE clients SET name='x'; DELETE FROM clients").is_err()
+        );
+        assert!(validate_sync_mutation_sql("PRAGMA foreign_keys=OFF").is_err());
+        let query = sqlx::query("UPDATE clients SET name=$1");
+        assert!(bind_json_value(query, JsonValue::from(1.25)).is_err());
+    }
+
+    #[test]
+    fn sync_mutation_and_audit_source_commit_or_roll_back_together() {
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::query("CREATE TABLE audit_context(id INTEGER PRIMARY KEY,source TEXT NOT NULL)")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO audit_context(id,source) VALUES(1,'DESKTOP')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("CREATE TABLE clients(id INTEGER PRIMARY KEY,name TEXT NOT NULL)")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO clients(id,name) VALUES(1,'Before')")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            execute_sync_mutation_transaction(
+                &pool,
+                "UPDATE clients SET name=$1 WHERE id=$2",
+                vec![JsonValue::String("After".into()), JsonValue::from(1)],
+            )
+            .await
+            .unwrap();
+            let name: String = sqlx::query_scalar("SELECT name FROM clients WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let source: String = sqlx::query_scalar("SELECT source FROM audit_context WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(name, "After");
+            assert_eq!(source, "DESKTOP");
+
+            sqlx::query(
+                "CREATE TRIGGER reject_client BEFORE UPDATE ON clients WHEN NEW.name='Rejected' BEGIN SELECT RAISE(ABORT,'test rejection'); END",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let failed = execute_sync_mutation_transaction(
+                &pool,
+                "UPDATE clients SET name=$1 WHERE id=$2",
+                vec![JsonValue::String("Rejected".into()), JsonValue::from(1)],
+            )
+            .await;
+            assert!(failed.is_err());
+            let name: String = sqlx::query_scalar("SELECT name FROM clients WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let source: String = sqlx::query_scalar("SELECT source FROM audit_context WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(name, "After");
+            assert_eq!(source, "DESKTOP");
+        });
+    }
+
+    #[test]
     fn managed_document_cache_is_hashed_versioned_and_path_safe() {
         let root = tempfile::tempdir().unwrap();
         let destination = managed_document_destination(
@@ -2816,6 +3043,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_lock_enabled,
             initialize_runtime_release,
+            execute_sync_mutation_atomic,
             verify_app_lock,
             set_app_lock,
             disable_app_lock,

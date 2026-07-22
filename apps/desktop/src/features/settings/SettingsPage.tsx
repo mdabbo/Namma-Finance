@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
 import { getSyncClient } from "../../lib/sync/client";
-import { disableLock, isLockEnabled, setLockPassword } from "../../lib/lock";
+import { disableLock, isLockEnabled, lockErrorMessageKey, setLockPassword } from "../../lib/lock";
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
@@ -340,8 +340,8 @@ function SecuritySection() {
         setMessage({ ok: true, text: t("lock.saved") });
       }
       reset();
-    } catch {
-      setMessage({ ok: false, text: t("lock.wrong") });
+    } catch (error) {
+      setMessage({ ok: false, text: t(`lock.${lockErrorMessageKey(error)}`) });
     }
   }
 
