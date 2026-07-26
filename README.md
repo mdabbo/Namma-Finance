@@ -37,7 +37,7 @@ pnpm --filter @mep/desktop tauri dev    # run the desktop app
 pnpm --filter @mep/desktop tauri build  # build the Windows installer (NSIS)
 ```
 
-Requirements: Node ≥ 20, pnpm, Rust (MSVC), VS Build Tools C++ workload.
+Requirements: Node ≥ 24, pnpm, Rust (MSVC), VS Build Tools C++ workload.
 
 - The SQLite DB lives at `%APPDATA%\com.mepfinance.app\mep-finance.db`.
 - Migrations: `apps/desktop/src-tauri/migrations/*.sql`, registered in `src-tauri/src/lib.rs`.
