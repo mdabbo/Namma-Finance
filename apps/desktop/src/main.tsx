@@ -18,6 +18,8 @@ import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { CertificatesPage } from "./features/certificates/CertificatesPage";
 import { PaymentsPage } from "./features/payments/PaymentsPage";
 import { ExpensesPage } from "./features/expenses/ExpensesPage";
+import { FinanceOverviewPage } from "./features/finance/FinanceOverviewPage";
+import { ReceivablesPage } from "./features/finance/ReceivablesPage";
 import { PeoplePage } from "./features/people/PeoplePage";
 import { PersonDetailPage } from "./features/people/PersonDetailPage";
 import { TimePage } from "./features/time/TimePage";
@@ -45,10 +47,11 @@ const router = createHashRouter([
       { path: "projects/clients/:id", element: <ClientDetailPage /> },
       { path: "projects/:id", element: <ProjectDetailPage /> },
 
-      { path: "finance", element: <Navigate to="/finance/certificates" replace /> },
+      { path: "finance", element: <FinanceOverviewPage /> },
       { path: "finance/certificates", element: <CertificatesPage /> },
       { path: "finance/payments", element: <PaymentsPage /> },
       { path: "finance/expenses", element: <ExpensesPage /> },
+      { path: "finance/receivables", element: <ReceivablesPage /> },
       { path: "finance/cash-flow", element: <CashflowView /> },
 
       { path: "team", element: <Navigate to="/team/people" replace /> },

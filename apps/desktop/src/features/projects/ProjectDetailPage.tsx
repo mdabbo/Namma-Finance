@@ -1124,7 +1124,7 @@ function ProjectFinance({
     certificates: "/finance/certificates",
     payments: "/finance/payments",
     expenses: "/finance/expenses",
-    receivables: "/finance/certificates?view=overdue",
+    receivables: "/finance/receivables",
   }[activeView];
 
   return (
@@ -1260,7 +1260,7 @@ function ProjectFinance({
           columns={receivableColumns}
           rowKey={(row) => row.certificate.id}
           density="compact"
-          onRowClick={() => navigate("/finance/certificates?view=overdue")}
+          onRowClick={() => navigate(`/finance/receivables?projectId=${projectId}`)}
           emptyMessage={t("projects.emptyReceivables")}
         />
       )}

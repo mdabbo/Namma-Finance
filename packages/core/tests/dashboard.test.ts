@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Expense, ProjectFinancials } from "../src";
+import type { Expense, FinanceContractInput, ProjectFinancials } from "../src";
 import {
   buildMonthlyCashSeries,
   computeDashboardAttention,
   computeDashboardOverview,
   resolveEffectiveFxSnapshot,
+  selectOpenReceivables,
+  selectUpcomingCollections,
 } from "../src";
 
 const expense = (
@@ -109,5 +111,74 @@ describe("dashboard financial model", () => {
       unallocatedPayments: { count: 1, amountEgp: 50_00 },
       teamPaymentsDue: { count: 1, amountEgp: 40_00 },
     });
+  });
+
+  const receivableFixture = (): FinanceContractInput[] => [{
+    projectCurrency: "USD",
+    projectFxRateMicro: 50_000_000,
+    state: {
+      contract: { id: 9, number: "C-9", projectId: 4 },
+      certificates: [
+        {
+          overdue: true,
+          unpaidMinor: 100_00,
+          dueDate: "2026-05-01",
+          certificate: {
+            id: 1, number: "PC-1", status: "APPROVED",
+            currencySnapshot: "EGP", fxRateMicroSnapshot: 1_000_000,
+          },
+        },
+        {
+          overdue: false,
+          unpaidMinor: 200_00,
+          dueDate: "2026-08-10",
+          certificate: {
+            id: 2, number: "PC-2", status: "SUBMITTED",
+            currencySnapshot: null, fxRateMicroSnapshot: null,
+          },
+        },
+        // Fully collected and draft certificates are never receivables.
+        {
+          overdue: false,
+          unpaidMinor: 0,
+          dueDate: "2026-08-01",
+          certificate: { id: 3, number: "PC-3", status: "PAID" },
+        },
+        {
+          overdue: false,
+          unpaidMinor: 300_00,
+          dueDate: null,
+          certificate: { id: 4, number: "PC-4", status: "DRAFT" },
+        },
+      ],
+    },
+  } as never];
+
+  it("selects billable unpaid certificates at their historical FX as receivables", () => {
+    const receivables = selectOpenReceivables(receivableFixture());
+    expect(receivables.map((row) => row.certificateId)).toEqual([1, 2]);
+    expect(receivables[0]).toMatchObject({
+      certificateNumber: "PC-1",
+      contractNumber: "C-9",
+      projectId: 4,
+      overdue: true,
+      currency: "EGP",
+      unpaidMinor: 100_00,
+      unpaidEgp: 100_00,
+    });
+    // Fallback to the project FX snapshot when the certificate has none.
+    expect(receivables[1]).toMatchObject({ currency: "USD", unpaidEgp: 10_000_00 });
+  });
+
+  it("forecasts upcoming collections inside the horizon without double-counting overdue", () => {
+    const receivables = selectOpenReceivables(receivableFixture());
+    const upcoming = selectUpcomingCollections(receivables, "2026-07-01", 60);
+    expect(upcoming.horizonEndIso).toBe("2026-08-30");
+    expect(upcoming.items.map((row) => row.certificateId)).toEqual([2]);
+    expect(upcoming.totalEgp).toBe(10_000_00);
+
+    const shortHorizon = selectUpcomingCollections(receivables, "2026-07-01", 7);
+    expect(shortHorizon.items).toEqual([]);
+    expect(shortHorizon.totalEgp).toBe(0);
   });
 });

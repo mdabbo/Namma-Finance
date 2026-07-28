@@ -1,32 +1,74 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { CalendarDays, Coins, Plus, Wallet } from "lucide-react";
 import { usePaymentMutations, usePayments, type PaymentListItem } from "../../repositories/payments";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { KpiCard } from "../../components/KpiCard";
 import { Badge, Button, PageHeader, Select } from "../../components/ui";
-import { useFormat } from "../../lib/format";
+import { todayIso, useFormat } from "../../lib/format";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import { inProjectScope, parseFinanceScope, paymentSectionKpis } from "../finance/financeSectionModel";
+import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { PaymentForm } from "./PaymentForm";
 
 export function PaymentsPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const base = useBaseMoney();
   const [searchParams, setSearchParams] = useSearchParams();
-  const attentionView = searchParams.get("view");
+  const scope = parseFinanceScope(searchParams, "payments");
+  const attentionView = scope.view;
   const [includeVoided, setIncludeVoided] = useState(false);
   const { data: payments = [], isLoading } = usePayments(includeVoided);
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = usePaymentMutations();
 
   const [kindFilter, setKindFilter] = useState("");
   const [editing, setEditing] = useState<PaymentListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<PaymentListItem | null>(null);
 
+  function clearScopeParam(name: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete(name);
+    setSearchParams(next);
+  }
+
+  const scopedProject = scope.projectId !== null
+    ? financials?.projects.find((p) => p.project.id === scope.projectId)?.project ?? null
+    : null;
+  const kpis = paymentSectionKpis({
+    projects: financials?.projects ?? [],
+    cashIn: financials?.cashIn ?? [],
+    projectId: scope.projectId,
+    todayIso: todayIso(),
+  });
+
   const filtered = payments.filter(
     (payment) =>
       (!kindFilter || payment.kind === kindFilter) &&
+      inProjectScope(payment.projectId, scope.projectId) &&
       (attentionView !== "unallocated" || payment.unallocatedMinor > 0),
   );
+
+  const scopeChips: FinanceScopeChip[] = [
+    ...(scopedProject
+      ? [{
+          key: "project",
+          label: `${scopedProject.code} · ${scopedProject.name}`,
+          onClear: () => clearScopeParam("projectId"),
+        }]
+      : []),
+    ...(attentionView === "unallocated"
+      ? [{
+          key: "view",
+          label: t("dashboard.filtered.unallocated"),
+          onClear: () => clearScopeParam("view"),
+        }]
+      : []),
+  ];
 
   const columns: Column<PaymentListItem>[] = [
     { key: "number", header: t("payments.number"), value: (p) => p.number, render: (p) => <span className="font-medium tnum">{p.number}</span> },
@@ -83,6 +125,29 @@ export function PaymentsPage() {
         }
       />
 
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.cashIn")}
+            value={base.format(kpis.totalCashInEgp)}
+            icon={Wallet}
+            tone="positive"
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.cashInMonth")}
+            value={base.format(kpis.monthCashInEgp)}
+            icon={CalendarDays}
+          />
+          <KpiCard
+            label={t("financeSection.customerCredit")}
+            value={base.format(kpis.unallocatedCreditEgp)}
+            icon={Coins}
+            tone={kpis.unallocatedCreditEgp > 0 ? "warning" : "default"}
+          />
+        </div>
+      )}
+
       <DataTable
         rows={filtered}
         columns={columns}
@@ -100,19 +165,7 @@ export function PaymentsPage() {
             <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
             {t("lifecycle.includeVoided")}
           </label>
-          {attentionView === "unallocated" && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                const next = new URLSearchParams(searchParams);
-                next.delete("view");
-                setSearchParams(next);
-              }}
-            >
-              {t("dashboard.filtered.unallocated")} · {t("common.clearFilters")}
-            </Button>
-          )}
+          <FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />
         </>}
       />
 

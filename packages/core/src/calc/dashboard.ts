@@ -1,4 +1,5 @@
-import type { Expense, ProjectStatus } from "../domain/types";
+import type { CertificateStatus, Expense, ProjectStatus } from "../domain/types";
+import { isBillable } from "../domain/types";
 import { toEgpPiasters } from "../money/money";
 import type { ProjectFinancials } from "./aggregate";
 import type { ContractState } from "./contract";
@@ -152,6 +153,94 @@ export function resolveEffectiveFxSnapshot(
   return selected
     ? { currency: selected.currency, fxRateMicro: selected.fxRateMicro }
     : fallback;
+}
+
+export interface FinanceContractInput {
+  state: ContractState;
+  projectCurrency: string;
+  projectFxRateMicro: number;
+}
+
+export interface ReceivableCertificate {
+  certificateId: number;
+  certificateNumber: string;
+  contractId: number;
+  contractNumber: string;
+  projectId: number;
+  status: CertificateStatus;
+  dueDate: string | null;
+  overdue: boolean;
+  currency: string;
+  unpaidMinor: number;
+  unpaidEgp: number;
+}
+
+/**
+ * Every billable certificate with money still owed by the client, valued at
+ * its own commercial FX snapshot. The workspace receivables surface and the
+ * dashboard overdue alert both derive from this single selection.
+ */
+export function selectOpenReceivables(contracts: readonly FinanceContractInput[]): ReceivableCertificate[] {
+  const rows: ReceivableCertificate[] = [];
+  for (const { state, projectCurrency, projectFxRateMicro } of contracts) {
+    for (const certificate of state.certificates) {
+      if (!isBillable(certificate.certificate.status) || certificate.unpaidMinor <= 0) continue;
+      const currency = certificate.certificate.currencySnapshot ?? projectCurrency;
+      rows.push({
+        certificateId: certificate.certificate.id,
+        certificateNumber: certificate.certificate.number,
+        contractId: state.contract.id,
+        contractNumber: state.contract.number,
+        projectId: state.contract.projectId,
+        status: certificate.certificate.status,
+        dueDate: certificate.dueDate,
+        overdue: certificate.overdue,
+        currency,
+        unpaidMinor: certificate.unpaidMinor,
+        unpaidEgp: toEgpPiasters(
+          certificate.unpaidMinor,
+          currency,
+          certificate.certificate.fxRateMicroSnapshot ?? projectFxRateMicro,
+        ),
+      });
+    }
+  }
+  return rows.sort((left, right) =>
+    (left.dueDate ?? "9999-12-31").localeCompare(right.dueDate ?? "9999-12-31")
+    || left.certificateId - right.certificateId);
+}
+
+export interface UpcomingCollections {
+  items: ReceivableCertificate[];
+  totalEgp: number;
+  horizonEndIso: string;
+}
+
+function addDaysIso(dateIso: string, days: number): string {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const date = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Receivables the office should expect to collect within the horizon:
+ * not yet overdue, with a due date on or before the horizon end. Overdue
+ * amounts stay in the overdue alert instead of being double-forecast.
+ */
+export function selectUpcomingCollections(
+  receivables: readonly ReceivableCertificate[],
+  todayIso: string,
+  horizonDays = 60,
+): UpcomingCollections {
+  const horizonEndIso = addDaysIso(todayIso, Math.max(0, horizonDays));
+  const items = receivables.filter((item) =>
+    !item.overdue && item.dueDate !== null && item.dueDate <= horizonEndIso);
+  return {
+    items,
+    totalEgp: sum(items.map((item) => item.unpaidEgp)),
+    horizonEndIso,
+  };
 }
 
 /** Completed/cancelled projects remain in finance, but not operational health. */

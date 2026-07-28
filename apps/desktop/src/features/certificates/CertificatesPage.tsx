@@ -1,15 +1,19 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { FileDown, Plus } from "lucide-react";
+import { AlertTriangle, FileCheck2, FileDown, Hourglass, Plus } from "lucide-react";
 import type { CertificateStatus } from "@mep/core";
 import { useCertificateMutations, useCertificates, type CertificateListItem } from "../../repositories/certificates";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { KpiCard } from "../../components/KpiCard";
 import { PrintPortal } from "../../components/PrintPortal";
 import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { todayIso, useFormat } from "../../lib/format";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import { certificateSectionKpis, inProjectScope, parseFinanceScope } from "../finance/financeSectionModel";
+import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { usePaymentMutations } from "../../repositories/payments";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
 import { CertificateForm } from "./CertificateForm";
@@ -19,10 +23,23 @@ export function CertificatesPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const [searchParams, setSearchParams] = useSearchParams();
-  const attentionView = searchParams.get("view");
+  const base = useBaseMoney();
+  const scope = parseFinanceScope(searchParams, "certificates");
+  const attentionView = scope.view;
   const { data: certificates = [], isLoading } = useCertificates();
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useCertificateMutations();
+
+  function clearScopeParam(name: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete(name);
+    setSearchParams(next);
+  }
+
+  const scopedProject = scope.projectId !== null
+    ? financials?.projects.find((p) => p.project.id === scope.projectId)?.project ?? null
+    : null;
+  const kpis = certificateSectionKpis(financials?.projects ?? [], scope.projectId);
 
   const [statusFilter, setStatusFilter] = useState<CertificateStatus | "">("");
   const [editing, setEditing] = useState<CertificateListItem | "new" | null>(null);
@@ -46,10 +63,28 @@ export function CertificatesPage() {
       certificates.filter(
         (certificate) =>
           (!statusFilter || certificate.status === statusFilter) &&
+          inProjectScope(certificate.projectId, scope.projectId) &&
           (attentionView !== "overdue" || stateOf(certificate)?.overdue),
       ),
-    [certificates, financials, statusFilter, attentionView],
+    [certificates, financials, statusFilter, attentionView, scope.projectId],
   );
+
+  const scopeChips: FinanceScopeChip[] = [
+    ...(scopedProject
+      ? [{
+          key: "project",
+          label: `${scopedProject.code} · ${scopedProject.name}`,
+          onClear: () => clearScopeParam("projectId"),
+        }]
+      : []),
+    ...(attentionView === "overdue"
+      ? [{
+          key: "view",
+          label: t("dashboard.filtered.overdue"),
+          onClear: () => clearScopeParam("view"),
+        }]
+      : []),
+  ];
 
   const columns: Column<CertificateListItem>[] = [
     { key: "number", header: t("certificates.number"), value: (c) => c.number, render: (c) => <span className="font-medium tnum">{c.number}</span> },
@@ -151,6 +186,29 @@ export function CertificatesPage() {
         }
       />
 
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.invoiced")}
+            value={base.format(kpis.invoicedEgp)}
+            icon={FileCheck2}
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.outstanding")}
+            value={base.format(kpis.outstandingEgp)}
+            icon={Hourglass}
+            tone={kpis.outstandingEgp > 0 ? "warning" : "default"}
+          />
+          <KpiCard
+            label={t("financeSection.overdueCount")}
+            value={String(kpis.overdueCount)}
+            icon={AlertTriangle}
+            tone={kpis.overdueCount > 0 ? "negative" : "positive"}
+          />
+        </div>
+      )}
+
       <DataTable
         rows={filtered}
         columns={columns}
@@ -165,19 +223,7 @@ export function CertificatesPage() {
                 <option key={s} value={s}>{t(`status.${s}`)}</option>
               ))}
             </Select>
-            {attentionView === "overdue" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  const next = new URLSearchParams(searchParams);
-                  next.delete("view");
-                  setSearchParams(next);
-                }}
-              >
-                {t("dashboard.filtered.overdue")} · {t("common.clearFilters")}
-              </Button>
-            )}
+            <FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />
           </>
         }
       />

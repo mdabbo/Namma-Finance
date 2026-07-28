@@ -1,29 +1,47 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Paperclip, Plus } from "lucide-react";
+import { Building2, CalendarDays, FolderKanban, Paperclip, Plus, Receipt } from "lucide-react";
 import { expenseSchema, type ExpenseInput } from "@mep/core";
 import { useCategories, useExpenseMutations, useExpenses, type ExpenseListItem } from "../../repositories/expenses";
 import { useProjects } from "../../repositories/projects";
 import { useCurrencyRates } from "../../repositories/currencies";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { KpiCard } from "../../components/KpiCard";
 import { Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import { expenseSectionKpis, parseFinanceScope } from "../finance/financeSectionModel";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function ExpensesPage() {
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
+  const base = useBaseMoney();
+  const [searchParams] = useSearchParams();
   const { data: expenses = [], isLoading } = useExpenses();
   const { data: categories = [] } = useCategories();
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = useExpenseMutations();
 
   const [categoryFilter, setCategoryFilter] = useState(0);
-  const [projectFilter, setProjectFilter] = useState<"" | "overhead" | number>("");
+  // The project-workspace shortcut lands here with ?projectId=; it seeds the
+  // regular project filter so there is exactly one filtering control.
+  const [projectFilter, setProjectFilter] = useState<"" | "overhead" | number>(
+    () => parseFinanceScope(searchParams, "expenses").projectId ?? "",
+  );
   const [editing, setEditing] = useState<ExpenseListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
   const { data: projects = [] } = useProjects();
+
+  const kpis = expenseSectionKpis(
+    financials?.allExpenses ?? [],
+    typeof projectFilter === "number" ? projectFilter : null,
+    todayIso(),
+  );
 
   const catName = (e: ExpenseListItem) => (i18n.language === "ar" ? e.categoryAr : e.categoryEn);
 
@@ -92,6 +110,32 @@ export function ExpensesPage() {
           </Button>
         }
       />
+
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.totalSpend")}
+            value={base.format(kpis.totalEgp)}
+            icon={Receipt}
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.spendMonth")}
+            value={base.format(kpis.monthEgp)}
+            icon={CalendarDays}
+          />
+          <KpiCard
+            label={t("financeSection.projectSpend")}
+            value={base.format(kpis.projectEgp)}
+            icon={FolderKanban}
+          />
+          <KpiCard
+            label={t("financeSection.overheadSpend")}
+            value={base.format(kpis.overheadEgp)}
+            icon={Building2}
+          />
+        </div>
+      )}
 
       <DataTable
         rows={filtered}

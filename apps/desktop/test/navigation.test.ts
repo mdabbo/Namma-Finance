@@ -32,9 +32,11 @@ describe("Milestone 1 navigation", () => {
     ["/projects", "projects"],
     ["/projects/clients/12", "projects"],
     ["/projects/41", "projects"],
+    ["/finance", "finance"],
     ["/finance/certificates", "finance"],
     ["/finance/payments", "finance"],
     ["/finance/expenses", "finance"],
+    ["/finance/receivables", "finance"],
     ["/finance/cash-flow", "finance"],
     ["/team/people/8", "team"],
     ["/team/time", "team"],
@@ -63,6 +65,24 @@ describe("Milestone 1 navigation", () => {
     expect(activeSecondaryItemId("/settings/audit", SECONDARY_NAVIGATION.settings)).toBe("audit");
   });
 
+  it("gives finance a full secondary workspace with an exact overview entry", () => {
+    expect(SECONDARY_NAVIGATION.finance.map((item) => item.id)).toEqual([
+      "overview",
+      "certificates",
+      "payments",
+      "expenses",
+      "receivables",
+      "cash-flow",
+    ]);
+    expect(activeSecondaryItemId("/finance", SECONDARY_NAVIGATION.finance)).toBe("overview");
+    expect(activeSecondaryItemId("/finance/receivables", SECONDARY_NAVIGATION.finance)).toBe("receivables");
+    expect(activeSecondaryItemId("/finance/certificates", SECONDARY_NAVIGATION.finance)).toBe("certificates");
+    expect(breadcrumbsForPath("/finance/receivables")).toEqual([
+      { labelKey: "nav.finance", to: "/finance" },
+      { labelKey: "financeSection.receivables" },
+    ]);
+  });
+
   it("builds linked breadcrumbs for grouped detail routes", () => {
     expect(breadcrumbsForPath("/projects/clients/7")).toEqual([
       { labelKey: "nav.projects", to: "/projects" },
@@ -82,6 +102,8 @@ describe("Milestone 1 navigation", () => {
     expect(allowedPath("ENGINEER", "/projects/clients")).toBe(false);
     expect(allowedPath("ENGINEER", "/projects/clients/12")).toBe(false);
     expect(allowedPath("ENGINEER", "/finance/certificates")).toBe(false);
+    expect(allowedPath("ENGINEER", "/finance")).toBe(false);
+    expect(allowedPath("ENGINEER", "/finance/receivables")).toBe(false);
     expect(allowedPath("ENGINEER", "/settings")).toBe(true);
     expect(allowedPath("ENGINEER", "/settings/audit")).toBe(false);
     expect(allowedPath("ENGINEER", "/audit")).toBe(false);

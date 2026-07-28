@@ -21,7 +21,7 @@ import {
   RatioBar,
 } from "../src/components/ui";
 import { MoneyInput, parseMoneyInputEdit } from "../src/components/MoneyInput";
-import { isInteractiveTableTarget } from "../src/components/DataTable";
+import { buildCsv, isInteractiveTableTarget, type Column } from "../src/components/DataTable";
 import { parseToMinor } from "../src/lib/format";
 
 beforeAll(async () => {
@@ -94,6 +94,29 @@ describe("Milestone 2 design system", () => {
     expect(parseMoneyInputEdit("1.99", 2)).toBe(199);
     expect(parseMoneyInputEdit("1.999", 2)).toBeUndefined();
     expect(parseMoneyInputEdit("not money", 2)).toBeUndefined();
+  });
+
+  it("exports spreadsheet-safe CSV without letting cells become formulas", () => {
+    interface Row { number: string; description: string; amount: number }
+    const columns: Column<Row>[] = [
+      { key: "number", header: "Number", value: (row) => row.number },
+      { key: "description", header: "Description", value: (row) => row.description },
+      { key: "amount", header: "Amount", value: (row) => row.amount },
+      { key: "actions", header: "" },
+    ];
+    const csv = buildCsv(columns, [
+      { number: "PC-1", description: '=SUM(A1),"x"', amount: -500 },
+      { number: "+PC2", description: "plain", amount: 1200 },
+    ]);
+    expect(csv.startsWith("﻿")).toBe(true);
+    expect(csv).toContain("Number,Description,Amount");
+    // Formula-looking cells are neutralised, quotes and commas escaped.
+    expect(csv).toContain('"\'=SUM(A1),""x"""');
+    expect(csv).toContain("'+PC2");
+    // Plain negative amounts stay importable numbers.
+    expect(csv).toContain(",-500");
+    // The actions column has no value and is not exported.
+    expect(csv.split("\r\n")[2]).toBe("'+PC2,plain,1200");
   });
 
   it("does not treat nested table controls as row activation", () => {

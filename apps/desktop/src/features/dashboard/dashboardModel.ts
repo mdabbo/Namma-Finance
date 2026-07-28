@@ -14,7 +14,7 @@ export const DASHBOARD_PRIMARY_KPI_IDS = [
 ] as const;
 
 export const DASHBOARD_ATTENTION_ROUTES = {
-  overdue: "/finance/certificates?view=overdue",
+  overdue: "/finance/receivables?view=overdue",
   readyToInvoice: "/projects?view=ready-to-invoice",
   unallocated: "/finance/payments?view=unallocated",
   teamPayments: "/team/people?view=payments-due",

@@ -50,7 +50,7 @@ describe("Milestone 3 dashboard model", () => {
     ]);
     expect(new Set(DASHBOARD_PRIMARY_KPI_IDS).size).toBe(4);
     expect(DASHBOARD_ATTENTION_ROUTES).toEqual({
-      overdue: "/finance/certificates?view=overdue",
+      overdue: "/finance/receivables?view=overdue",
       readyToInvoice: "/projects?view=ready-to-invoice",
       unallocated: "/finance/payments?view=unallocated",
       teamPayments: "/team/people?view=payments-due",

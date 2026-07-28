@@ -1,11 +1,22 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  BookmarkPlus,
+  ChevronLeft,
+  ChevronRight,
+  FileDown,
+  Search,
+  Trash2,
+} from "lucide-react";
 import {
   EmptyState,
   IconButton,
   Input,
   LoadingState,
+  Select,
   Table,
   TableBody,
   TableCell,
@@ -39,6 +50,60 @@ interface DataTableProps<T> {
   pageSize?: number;
   density?: "comfortable" | "compact";
   loading?: boolean;
+  /** File name (without extension) enabling CSV export of the filtered rows. */
+  exportName?: string;
+  /** Storage key enabling named saved views (search + sort presets). */
+  viewKey?: string;
+}
+
+export interface SavedTableView {
+  name: string;
+  search: string;
+  sort: { key: string; dir: "asc" | "desc" } | null;
+}
+
+const VIEW_STORAGE_PREFIX = "mep.tableViews.";
+
+function loadTableViews(viewKey: string): SavedTableView[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(`${VIEW_STORAGE_PREFIX}${viewKey}`) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((view): view is SavedTableView =>
+          typeof (view as SavedTableView).name === "string" && typeof (view as SavedTableView).search === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistTableViews(viewKey: string, views: SavedTableView[]): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(`${VIEW_STORAGE_PREFIX}${viewKey}`, JSON.stringify(views));
+}
+
+const NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
+
+/**
+ * Build a spreadsheet-safe CSV of every column with a plain value. Cells that
+ * a spreadsheet would evaluate as a formula are prefixed with an apostrophe
+ * (plain negative numbers stay untouched so amounts import correctly).
+ */
+export function buildCsv<T>(columns: Column<T>[], rows: T[]): string {
+  const exportable = columns.filter((column) => column.value);
+  const escape = (value: string | number | null | undefined) => {
+    const raw = value === null || value === undefined ? "" : String(value);
+    const guarded = /^[=+@\t\r]/.test(raw) || (raw.startsWith("-") && !NUMERIC_CELL.test(raw))
+      ? `'${raw}`
+      : raw;
+    return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
+  };
+  const lines = [
+    exportable.map((column) => escape(column.header)).join(","),
+    ...rows.map((row) => exportable.map((column) => escape(column.value!(row))).join(",")),
+  ];
+  // UTF-8 BOM so Excel opens Arabic text correctly.
+  return "﻿" + lines.join("\r\n") + "\r\n";
 }
 
 const INTERACTIVE_TARGET_SELECTOR =
@@ -61,11 +126,46 @@ export function DataTable<T>({
   pageSize = 25,
   density = "comfortable",
   loading = false,
+  exportName,
+  viewKey,
 }: DataTableProps<T>) {
   const { t, i18n } = useTranslation();
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState(initialSort ?? null);
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(initialSort ?? null);
   const [page, setPage] = useState(0);
+  const [views, setViews] = useState<SavedTableView[]>(() => (viewKey ? loadTableViews(viewKey) : []));
+  const [activeViewName, setActiveViewName] = useState("");
+  const [namingView, setNamingView] = useState(false);
+  const [viewName, setViewName] = useState("");
+
+  function applyView(name: string) {
+    setActiveViewName(name);
+    const view = views.find((candidate) => candidate.name === name);
+    if (!view) return;
+    setSearch(view.search);
+    setSort(view.sort);
+    setPage(0);
+  }
+
+  function saveCurrentView() {
+    const name = viewName.trim();
+    if (!viewKey || !name) return;
+    const next = [...views.filter((view) => view.name !== name), { name, search, sort }]
+      .sort((left, right) => left.name.localeCompare(right.name));
+    setViews(next);
+    persistTableViews(viewKey, next);
+    setActiveViewName(name);
+    setNamingView(false);
+    setViewName("");
+  }
+
+  function deleteActiveView() {
+    if (!viewKey || !activeViewName) return;
+    const next = views.filter((view) => view.name !== activeViewName);
+    setViews(next);
+    persistTableViews(viewKey, next);
+    setActiveViewName("");
+  }
 
   const filtered = useMemo(() => {
     let result = rows;
@@ -113,9 +213,26 @@ export function DataTable<T>({
   const NextIcon = i18n.dir() === "rtl" ? ChevronLeft : ChevronRight;
   const cellPadding = density === "compact" ? "py-1.5" : "py-2.5";
 
+  async function exportCsv() {
+    if (!exportName) return;
+    try {
+      const [{ save }, { writeTextFile }] = await Promise.all([
+        import("@tauri-apps/plugin-dialog"),
+        import("@tauri-apps/plugin-fs"),
+      ]);
+      const path = await save({
+        defaultPath: `${exportName}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (path) await writeTextFile(path, buildCsv(columns, filtered));
+    } catch (error) {
+      console.error("CSV export failed", error);
+    }
+  }
+
   return (
     <div>
-      {(searchable || toolbar) && (
+      {(searchable || toolbar || exportName || viewKey) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           {searchable && (
             <div className="relative w-64">
@@ -137,6 +254,66 @@ export function DataTable<T>({
             </div>
           )}
           {toolbar}
+          {(exportName || viewKey) && (
+            <div className="ms-auto flex items-center gap-1.5">
+              {viewKey && (
+                <>
+                  <Select
+                    className="!w-40"
+                    aria-label={t("common.savedViews")}
+                    value={activeViewName}
+                    onChange={(event) => applyView(event.target.value)}
+                  >
+                    <option value="">{t("common.savedViews")}</option>
+                    {views.map((view) => (
+                      <option key={view.name} value={view.name}>{view.name}</option>
+                    ))}
+                  </Select>
+                  {namingView ? (
+                    <Input
+                      autoFocus
+                      className="!w-36"
+                      value={viewName}
+                      placeholder={t("common.viewName")}
+                      aria-label={t("common.viewName")}
+                      onChange={(event) => setViewName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") saveCurrentView();
+                        if (event.key === "Escape") {
+                          setNamingView(false);
+                          setViewName("");
+                        }
+                      }}
+                      onBlur={() => setNamingView(false)}
+                    />
+                  ) : (
+                    <IconButton
+                      label={t("common.saveView")}
+                      icon={BookmarkPlus}
+                      size="sm"
+                      onClick={() => setNamingView(true)}
+                    />
+                  )}
+                  {activeViewName && (
+                    <IconButton
+                      label={t("common.deleteView")}
+                      icon={Trash2}
+                      size="sm"
+                      onClick={deleteActiveView}
+                    />
+                  )}
+                </>
+              )}
+              {exportName && (
+                <IconButton
+                  label={t("common.exportCsv")}
+                  icon={FileDown}
+                  size="sm"
+                  onClick={() => void exportCsv()}
+                />
+              )}
+            </div>
+          )}
         </div>
       )}
       <div className="overflow-x-auto rounded-[var(--radius-panel)] border border-border-subtle bg-surface shadow-[var(--shadow-panel)]">
