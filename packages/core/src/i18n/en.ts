@@ -59,6 +59,11 @@ export const en = {
     empty: "Nothing here yet",
   },
   nav: {
+    overview: "Overview",
+    finance: "Finance",
+    team: "Team",
+    breadcrumbs: "Breadcrumbs",
+    sectionNavigation: "Section navigation",
     audit: "Audit Log",
     dashboard: "Dashboard",
     clients: "Clients",

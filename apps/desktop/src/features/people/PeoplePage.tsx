@@ -76,7 +76,7 @@ export function PeoplePage() {
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        onRowClick={(p) => { if (!p.archivedAt) navigate(`/people/${p.id}`); }}
+        onRowClick={(p) => { if (!p.archivedAt) navigate(`/team/people/${p.id}`); }}
         emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
         toolbar={<>

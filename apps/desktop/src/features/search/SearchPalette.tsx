@@ -59,7 +59,7 @@ function SearchPalette({ onClose }: { onClose: () => void }) {
     const results: SearchHit[] = [];
     for (const c of clients) {
       if (match(c.name, c.company, c.phone, c.email))
-        results.push({ id: `c${c.id}`, icon: Building2, title: c.name, subtitle: t("clients.single"), to: `/clients/${c.id}` });
+        results.push({ id: `c${c.id}`, icon: Building2, title: c.name, subtitle: t("clients.single"), to: `/projects/clients/${c.id}` });
     }
     for (const p of projects) {
       if (match(p.name, p.code, p.clientName, p.city))
@@ -67,19 +67,19 @@ function SearchPalette({ onClose }: { onClose: () => void }) {
     }
     for (const cert of certificates) {
       if (match(cert.number, cert.projectName, cert.description))
-        results.push({ id: `t${cert.id}`, icon: FileSpreadsheet, title: cert.number, subtitle: `${t("certificates.single")} — ${cert.projectName}`, to: "/certificates" });
+        results.push({ id: `t${cert.id}`, icon: FileSpreadsheet, title: cert.number, subtitle: `${t("certificates.single")} — ${cert.projectName}`, to: "/finance/certificates" });
     }
     for (const pm of payments) {
       if (match(pm.number, pm.reference, pm.projectName))
-        results.push({ id: `m${pm.id}`, icon: Banknote, title: pm.number, subtitle: `${t("payments.single")} — ${pm.projectName}`, to: "/payments" });
+        results.push({ id: `m${pm.id}`, icon: Banknote, title: pm.number, subtitle: `${t("payments.single")} — ${pm.projectName}`, to: "/finance/payments" });
     }
     for (const e of expenses) {
       if (match(e.description, e.supplier, e.projectName))
-        results.push({ id: `e${e.id}`, icon: Wallet, title: e.description, subtitle: t("expenses.single"), to: "/expenses" });
+        results.push({ id: `e${e.id}`, icon: Wallet, title: e.description, subtitle: t("expenses.single"), to: "/finance/expenses" });
     }
     for (const person of people) {
       if (match(person.name, person.specialization, person.phone))
-        results.push({ id: `f${person.id}`, icon: Users, title: person.name, subtitle: t(`personType.${person.type}`), to: `/people/${person.id}` });
+        results.push({ id: `f${person.id}`, icon: Users, title: person.name, subtitle: t(`personType.${person.type}`), to: `/team/people/${person.id}` });
     }
     return results.slice(0, 12);
   }, [query, clients, projects, certificates, payments, expenses, people, t]);

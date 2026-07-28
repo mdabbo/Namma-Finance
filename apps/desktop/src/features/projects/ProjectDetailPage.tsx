@@ -326,7 +326,7 @@ export function ProjectDetailPage() {
                 return (
                   <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2.5 dark:border-slate-800">
                     <div>
-                      <button className="text-sm font-medium hover:text-brand-600" onClick={() => navigate(`/people/${a.personId}`)}>
+                      <button className="text-sm font-medium hover:text-brand-600" onClick={() => navigate(`/team/people/${a.personId}`)}>
                         {a.personName}
                       </button>
                       {a.scope && <p className="text-xs text-slate-400">{a.scope}</p>}
@@ -530,7 +530,7 @@ function ProjectCertificates({ projectId, currency }: { projectId: number; curre
             <tr
               key={cert.certificate.id}
               className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-brand-50/50 dark:border-slate-800 dark:hover:bg-slate-800/50"
-              onClick={() => navigate("/certificates")}
+              onClick={() => navigate("/finance/certificates")}
             >
               <td className="py-2 tnum">{cert.certificate.number}</td>
               <td className="tnum">{fmt.date(cert.certificate.date)}</td>

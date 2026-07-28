@@ -62,7 +62,7 @@ export function PersonDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate("/people")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
+      <button onClick={() => navigate("/team/people")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
         <BackIcon size={15} /> {t("people.title")}
       </button>
 

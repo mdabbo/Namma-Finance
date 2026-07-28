@@ -275,7 +275,7 @@ export function DashboardPage() {
             {financials!.teamPayables.map((item) => (
               <Link
                 key={item.assignmentId}
-                to={`/people/${item.personId}`}
+                to={`/team/people/${item.personId}`}
                 className="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 text-sm hover:bg-white dark:bg-slate-900/50 dark:hover:bg-slate-900"
               >
                 <div className="min-w-0">

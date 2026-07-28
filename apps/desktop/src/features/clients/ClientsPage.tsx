@@ -113,7 +113,7 @@ export function ClientsPage() {
         rows={clients}
         columns={columns}
         rowKey={(c) => c.id}
-        onRowClick={(c) => { if (!c.archivedAt) navigate(`/clients/${c.id}`); }}
+        onRowClick={(c) => { if (!c.archivedAt) navigate(`/projects/clients/${c.id}`); }}
         emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
       />

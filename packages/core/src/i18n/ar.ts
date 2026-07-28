@@ -61,6 +61,11 @@ export const ar: Dictionary = {
     empty: "لا توجد بيانات بعد",
   },
   nav: {
+    overview: "نظرة عامة",
+    finance: "المالية",
+    team: "الفريق",
+    breadcrumbs: "مسار التنقل",
+    sectionNavigation: "التنقل داخل القسم",
     audit: "سجل التدقيق",
     dashboard: "لوحة المتابعة",
     clients: "العملاء",

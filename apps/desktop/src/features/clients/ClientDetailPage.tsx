@@ -27,7 +27,7 @@ export function ClientDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate("/clients")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
+      <button onClick={() => navigate("/projects/clients")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
         <BackIcon size={15} /> {t("clients.title")}
       </button>
 

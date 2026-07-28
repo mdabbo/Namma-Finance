@@ -19,15 +19,18 @@ import { loadSettings } from "./settings";
 
 export type Role = "ADMIN" | "ACCOUNTANT" | "ENGINEER";
 
-const ENGINEER_PREFIXES = ["/projects", "/settings"];
-
 export function allowedPath(role: Role, pathname: string): boolean {
   if (role !== "ENGINEER") return true;
-  return ENGINEER_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  if (pathname === "/settings" || pathname.startsWith("/settings/")) return true;
+  if (pathname === "/projects") return true;
+  // Project workspaces use a single numeric-id segment. Keep clients, which
+  // now live under /projects/clients, outside the engineer role just as they
+  // were before the navigation redesign.
+  return /^\/projects\/\d+$/.test(pathname);
 }
 
 export function homePath(role: Role): string {
-  return role === "ENGINEER" ? "/projects" : "/";
+  return role === "ENGINEER" ? "/projects" : "/overview";
 }
 
 /**
