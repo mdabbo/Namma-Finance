@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const database = vi.hoisted(() => ({ appVersion: "0.6.0", schemaVersion: 23 }));
+const database = vi.hoisted(() => ({ appVersion: "0.6.0", schemaVersion: 24 }));
 vi.mock("../src/lib/db", () => ({
   getRuntimeReleaseInfo: async () => ({ ...database }),
 }));

@@ -9,6 +9,7 @@ import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createCertificate, setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment, deletePayment, updatePayment } from "../src/repositories/payments";
+import { createStage, deleteStage, updateStage } from "../src/repositories/stages";
 import { finalizePendingRestoreAudit, listAuditRecords, listEntityHistory, listRecentAuditRecords } from "../src/repositories/audit";
 
 beforeEach(() => resetDb());
@@ -78,6 +79,21 @@ describe("Milestone 8 immutable audit trail", () => {
       entityType: "project",
       source: "DESKTOP",
     });
+  });
+
+  it("records client and project-stage activity that changes dashboard context", async () => {
+    const clientId = await createClient({ name: "Activity Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("ACT-2026-001", { name: "Activity Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const stageId = await createStage({ projectId, name: "Concept", sortOrder: 0, startDate: null, endDate: null, status: "PLANNED", completionBp: 0, engineers: null, notes: null });
+    await updateStage(stageId, { projectId, name: "Concept", sortOrder: 0, startDate: null, endDate: null, status: "COMPLETED", completionBp: 10_000, engineers: null, notes: null });
+    await deleteStage(stageId);
+
+    expect((await listEntityHistory("client", clientId, null)).map((row) => row.action)).toEqual(["CREATE"]);
+    expect((await listEntityHistory("project_stage", stageId, null)).map((row) => row.action)).toEqual([
+      "CREATE",
+      "UPDATE",
+      "DELETE",
+    ]);
   });
 
   it("keeps UUID-only timelines isolated and records the running app version", async () => {

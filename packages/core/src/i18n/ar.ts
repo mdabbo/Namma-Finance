@@ -639,6 +639,7 @@ export const ar: Dictionary = {
       assignment: "تكليف",
       teamPayment: "دفعة فريق",
       timeEntry: "سجل وقت",
+      projectStage: "مرحلة مشروع",
       backup: "مساحة العمل",
       settings: "الإعدادات",
       record: "سجل",

@@ -8,7 +8,7 @@ export interface RuntimeReleaseInfo {
 }
 let runtimeReleaseInfo: RuntimeReleaseInfo | null = null;
 
-/** Single shared connection. Migrations run on the Rust side before load resolves. */
+/** Shared SQLx-backed database handle. Migrations run on the Rust side before load resolves. */
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
     dbPromise = Database.load("sqlite:mep-finance.db").then(async (db) => {

@@ -163,6 +163,29 @@ describe("project financials with FX consolidation", () => {
     expect(fin.outstandingReceivablesMinor).toBe(30_000_000);
   });
 
+  it("values historical certificates at their immutable FX snapshots", () => {
+    const p = project({ currency: "USD", fxRateMicro: 50_000_000 });
+    const c = contract({ valueMinor: 100_000 });
+    const oldEgp = cert({
+      id: 1,
+      grossMinor: 100_000,
+      currencySnapshot: "EGP",
+      fxRateMicroSnapshot: 1_000_000,
+    });
+    const currentUsd = cert({
+      id: 2,
+      seq: 2,
+      grossMinor: 100_000,
+      currencySnapshot: "USD",
+      fxRateMicroSnapshot: 50_000_000,
+    });
+    const fin = computeProjectFinancials(p, [stateOf(c, [oldEgp, currentUsd])], []);
+
+    expect(fin.revenueEgp).toBe(5_100_000);
+    expect(fin.invoicedAmountEgp).toBe(5_100_000);
+    expect(fin.outstandingEgp).toBe(5_100_000);
+  });
+
   it("sums uncertified value per contract without netting over-certification", () => {
     const overCertified = stateOf(contract({ id: 1, valueMinor: 100_000_000 }), [
       cert({ id: 1, contractId: 1, grossMinor: 120_000_000 }),

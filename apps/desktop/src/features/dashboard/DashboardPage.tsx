@@ -29,10 +29,9 @@ import {
   YAxis,
 } from "recharts";
 import {
-  aggregateProjectCostTotals,
+  computeDashboardAttention,
+  computeDashboardOverview,
   minorPerMajor,
-  toEgpPiasters,
-  type ProjectFinancials,
 } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useClients } from "../../repositories/clients";
@@ -106,6 +105,7 @@ const ACTIVITY_ENTITY_KEYS: Record<string, string> = {
   project_assignment: "dashboard.activityEntities.assignment",
   person_payment: "dashboard.activityEntities.teamPayment",
   time_entry: "dashboard.activityEntities.timeEntry",
+  project_stage: "dashboard.activityEntities.projectStage",
   backup: "dashboard.activityEntities.backup",
   setting: "dashboard.activityEntities.settings",
 };
@@ -121,48 +121,17 @@ export function DashboardPage() {
   const financials = workspace.data;
   const money = useMemo(() => {
     if (!financials) return null;
-    const sumProjects = (pick: (project: ProjectFinancials) => number) =>
-      financials.projects.reduce(
-        (sum, project) =>
-          sum +
-          base.convertFrom(
-            pick(project),
-            project.project.currency,
-            project.project.fxRateMicro,
-          ),
-        0,
-      );
-    const profiles = [...financials.costsByProject.values()];
-    const overheadEgp = financials.allExpenses
-      .filter((expense) => expense.projectId === null)
-      .reduce(
-        (sum, expense) =>
-          sum +
-          toEgpPiasters(
-            expense.amountMinor,
-            expense.currency,
-            expense.fxRateMicro,
-          ),
-        0,
-      );
-    const costTotals = aggregateProjectCostTotals(profiles, overheadEgp);
-    const cashCollected = sumProjects(
-      (project) => project.totalActualCashInMinor,
+    const overview = computeDashboardOverview(
+      financials.projects,
+      financials.allExpenses,
     );
-    const cashOut = base.convert(costTotals.actualPaidCostEgp);
     return {
-      contractValue: sumProjects((project) => project.contractValueMinor),
-      cashCollected,
-      outstanding: sumProjects(
-        (project) => project.outstandingReceivablesMinor,
-      ),
-      cashOut,
-      netCash: cashCollected - cashOut,
-      unallocated: sumProjects(
-        (project) => project.unallocatedCustomerCreditMinor,
-      ),
+      contractValue: base.convert(overview.contractValueEgp),
+      cashCollected: base.convert(overview.cashCollectedEgp),
+      outstanding: base.convert(overview.outstandingReceivablesEgp),
+      netCash: base.convert(overview.netCashPositionEgp),
     };
-    // `base.code` changes the source-aware conversion identity.
+    // `base.code` changes the EGP-to-reporting-currency conversion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, base.code]);
 
@@ -187,53 +156,29 @@ export function DashboardPage() {
         project.project,
       ]),
     );
-    let overdueCount = 0;
-    let overdueAmount = 0;
-    let unallocatedContracts = 0;
-
-    for (const state of financials.contractStates.values()) {
-      const project = projectById.get(state.contract.projectId);
-      if (!project) continue;
-      if (state.unallocatedCustomerCreditMinor > 0) unallocatedContracts += 1;
-      for (const certificate of state.certificates) {
-        if (!certificate.overdue || certificate.unpaidMinor <= 0) continue;
-        overdueCount += 1;
-        overdueAmount += base.convertFrom(
-          certificate.unpaidMinor,
-          project.currency,
-          project.fxRateMicro,
-        );
-      }
-    }
-
-    const readyAmount = financials.readyToCollect.reduce(
-      (sum, item) =>
-        sum +
-        base.convertFrom(
-          item.readyMinor,
-          item.currency,
-          projectById.get(item.projectId)?.fxRateMicro ?? 1_000_000,
-        ),
-      0,
-    );
-    const teamAmount = financials.teamPayables.reduce(
-      (sum, item) =>
-        sum +
-        (item.currency === base.code
-          ? item.dueMinor
-          : base.convert(item.dueEgp)),
-      0,
-    );
+    const summary = computeDashboardAttention({
+      contracts: [...financials.contractStates.values()].flatMap((state) => {
+        const project = projectById.get(state.contract.projectId);
+        return project ? [{
+          state,
+          projectCurrency: project.currency,
+          projectFxRateMicro: project.fxRateMicro,
+        }] : [];
+      }),
+      projects: financials.projects,
+      readyToInvoiceEgp: financials.readyToCollect.map((item) => item.readyEgp),
+      teamPaymentsDueEgp: financials.teamPayables.map((item) => item.dueEgp),
+    });
 
     return [
       {
         id: "overdue",
         title: t("dashboard.attention.overdue"),
         detail: t("dashboard.attention.overdueDetail", {
-          count: overdueCount,
+          count: summary.overdueCertificates.count,
         }),
-        count: overdueCount,
-        amount: overdueAmount,
+        count: summary.overdueCertificates.count,
+        amount: base.convert(summary.overdueCertificates.amountEgp),
         to: DASHBOARD_ATTENTION_ROUTES.overdue,
         icon: AlarmClock,
         tone: "danger" as const,
@@ -242,10 +187,10 @@ export function DashboardPage() {
         id: "ready",
         title: t("dashboard.attention.ready"),
         detail: t("dashboard.attention.readyDetail", {
-          count: financials.readyToCollect.length,
+          count: summary.readyToInvoice.count,
         }),
-        count: financials.readyToCollect.length,
-        amount: readyAmount,
+        count: summary.readyToInvoice.count,
+        amount: base.convert(summary.readyToInvoice.amountEgp),
         to: DASHBOARD_ATTENTION_ROUTES.readyToInvoice,
         icon: FileCheck2,
         tone: "success" as const,
@@ -254,10 +199,10 @@ export function DashboardPage() {
         id: "unallocated",
         title: t("dashboard.attention.unallocated"),
         detail: t("dashboard.attention.unallocatedDetail", {
-          count: unallocatedContracts,
+          count: summary.unallocatedPayments.count,
         }),
-        count: unallocatedContracts,
-        amount: money.unallocated,
+        count: summary.unallocatedPayments.count,
+        amount: base.convert(summary.unallocatedPayments.amountEgp),
         to: DASHBOARD_ATTENTION_ROUTES.unallocated,
         icon: WalletCards,
         tone: "warning" as const,
@@ -266,16 +211,16 @@ export function DashboardPage() {
         id: "team",
         title: t("dashboard.attention.team"),
         detail: t("dashboard.attention.teamDetail", {
-          count: financials.teamPayables.length,
+          count: summary.teamPaymentsDue.count,
         }),
-        count: financials.teamPayables.length,
-        amount: teamAmount,
+        count: summary.teamPaymentsDue.count,
+        amount: base.convert(summary.teamPaymentsDue.amountEgp),
         to: DASHBOARD_ATTENTION_ROUTES.teamPayments,
         icon: HandCoins,
         tone: "info" as const,
       },
     ].filter((item) => item.count > 0 || item.amount > 0);
-    // `base.code` changes source-aware conversions.
+    // `base.code` changes the EGP-to-reporting-currency conversion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, money, base.code, t]);
 
@@ -593,11 +538,7 @@ export function DashboardPage() {
                     </p>
                     <p className="truncate text-xs text-muted tnum">
                       {project.project.code} ·{" "}
-                      {base.formatFrom(
-                        project.contractValueMinor,
-                        project.project.currency,
-                        project.project.fxRateMicro,
-                      )}
+                      {base.format(project.contractValueEgp)}
                     </p>
                   </div>
                   <Badge

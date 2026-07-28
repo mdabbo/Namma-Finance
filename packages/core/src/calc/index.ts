@@ -12,3 +12,4 @@ export * from "./cashflow";
 export * from "./aging";
 export * from "./collectionStatus";
 export * from "./costs";
+export * from "./dashboard";

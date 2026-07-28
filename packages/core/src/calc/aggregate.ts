@@ -1,4 +1,5 @@
 import type { Expense, Project, ProjectAssignment, PersonPayment } from "../domain/types";
+import { isBillable } from "../domain/types";
 import { ratioBp, toEgpPiasters } from "../money/money";
 import type { ContractState } from "./contract";
 
@@ -50,10 +51,19 @@ export interface ProjectFinancials {
   overdueCertificates: number;
 }
 
+export interface ProjectCashValuationEgp {
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  totalActualCashInEgp: number;
+  unallocatedCustomerCreditEgp: number;
+}
+
 export function computeProjectFinancials(
   project: Project,
   contractStates: ContractState[],
   projectExpenses: Expense[],
+  cashValuation?: ProjectCashValuationEgp,
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
   const certifiedBase = sum(contractStates.map((c) => c.certifiedBaseMinor));
@@ -69,8 +79,23 @@ export function computeProjectFinancials(
   const retentionHeld = sum(contractStates.map((c) => c.retentionHeldMinor));
 
   const toEgp = (minor: number) => toEgpPiasters(minor, project.currency, project.fxRateMicro);
+  const certificateEgp = (
+    pick: (state: ContractState["certificates"][number]) => number,
+    billableOnly: boolean,
+  ) => sum(contractStates.flatMap((contractState) =>
+    contractState.certificates
+      .filter((state) => !billableOnly || isBillable(state.certificate.status))
+      .map((state) => toEgpPiasters(
+        pick(state),
+        state.certificate.currencySnapshot ?? project.currency,
+        state.certificate.fxRateMicroSnapshot ?? project.fxRateMicro,
+      )),
+  ));
   const expensesEgp = sum(projectExpenses.map((e) => toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro)));
-  const revenueEgp = toEgp(certifiedBase);
+  const revenueEgp = certificateEgp((state) => state.breakdown.baseMinor, true);
+  const certificateCollectionsEgp = certificateEgp((state) => state.paidMinor, true);
+  const invoicedAmountEgp = certificateEgp((state) => state.breakdown.netPayableMinor, true);
+  const outstandingEgp = certificateEgp((state) => state.unpaidMinor, true);
   const profitEgp = revenueEgp - expensesEgp;
 
   return {
@@ -95,15 +120,15 @@ export function computeProjectFinancials(
     collectionRatioBp: ratioBp(totalPaid, totalDue),
     contractValueEgp: toEgp(contractValue),
     revenueEgp,
-    billableRevenueEgp: toEgp(billableRevenue),
-    invoicedAmountEgp: toEgp(invoicedAmount),
-    collectedEgp: toEgp(totalPaid),
-    certificateCollectionsEgp: toEgp(totalPaid),
-    advanceReceivedEgp: toEgp(advanceReceived),
-    retentionReleasedEgp: toEgp(retentionReleased),
-    totalActualCashInEgp: toEgp(totalActualCashIn),
-    unallocatedCustomerCreditEgp: toEgp(unallocatedCustomerCredit),
-    outstandingEgp: toEgp(totalDue - totalPaid),
+    billableRevenueEgp: certificateEgp((state) => state.breakdown.baseMinor, false),
+    invoicedAmountEgp,
+    collectedEgp: cashValuation?.certificateCollectionsEgp ?? certificateCollectionsEgp,
+    certificateCollectionsEgp: cashValuation?.certificateCollectionsEgp ?? certificateCollectionsEgp,
+    advanceReceivedEgp: cashValuation?.advanceReceivedEgp ?? toEgp(advanceReceived),
+    retentionReleasedEgp: cashValuation?.retentionReleasedEgp ?? toEgp(retentionReleased),
+    totalActualCashInEgp: cashValuation?.totalActualCashInEgp ?? toEgp(totalActualCashIn),
+    unallocatedCustomerCreditEgp: cashValuation?.unallocatedCustomerCreditEgp ?? toEgp(unallocatedCustomerCredit),
+    outstandingEgp,
     expensesEgp,
     profitEgp,
     marginBp: ratioBp(profitEgp, revenueEgp),

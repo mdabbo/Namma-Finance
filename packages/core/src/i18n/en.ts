@@ -592,6 +592,7 @@ export const en = {
       assignment: "assignment",
       teamPayment: "team payment",
       timeEntry: "time entry",
+      projectStage: "project stage",
       backup: "workspace",
       settings: "settings",
       record: "record",

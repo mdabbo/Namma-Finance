@@ -1528,7 +1528,7 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 23;
+const CURRENT_SCHEMA_VERSION: i64 = 24;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 
@@ -2565,6 +2565,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0021_sync_conflict_remediation.sql"),
             include_str!("../migrations/0022_numbering_safety.sql"),
             include_str!("../migrations/0023_numbering_remediation.sql"),
+            include_str!("../migrations/0024_dashboard_snapshot_audit.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -2636,7 +2637,7 @@ mod financial_transaction_tests {
             .unwrap();
             assert_eq!(version, "sentinel");
 
-            sqlx::query("UPDATE app_metadata SET value='23' WHERE key='schema_version'")
+            sqlx::query("UPDATE app_metadata SET value='24' WHERE key='schema_version'")
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -3024,6 +3025,12 @@ pub fn run() {
             version: 23,
             description: "numbering_remediation",
             sql: include_str!("../migrations/0023_numbering_remediation.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 24,
+            description: "dashboard_snapshot_audit",
+            sql: include_str!("../migrations/0024_dashboard_snapshot_audit.sql"),
             kind: MigrationKind::Up,
         },
     ];

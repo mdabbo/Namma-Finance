@@ -19,6 +19,25 @@ afterEach(() => {
 });
 
 describe("migration upgrade path", () => {
+  it("upgrades schema 23 to dashboard audit schema 24 without rewriting source rows", () => {
+    db = buildMigratedDb(23);
+    db.exec("INSERT INTO clients(name) VALUES('Snapshot Client')");
+    db.exec("INSERT INTO projects(code,name,client_id,currency,fx_rate_micro) VALUES('SNAP-1','Snapshot Project',1,'EGP',1000000)");
+    db.exec("INSERT INTO project_stages(project_id,name,status,completion_bp) VALUES(1,'Concept','PLANNED',0)");
+    const before = db.prepare("SELECT project_id,name,status,completion_bp FROM project_stages WHERE id=1").get();
+    const here = dirname(fileURLToPath(import.meta.url));
+
+    db.exec(readFileSync(join(here, "..", "src-tauri", "migrations", "0024_dashboard_snapshot_audit.sql"), "utf8"));
+
+    expect(db.prepare("SELECT project_id,name,status,completion_bp FROM project_stages WHERE id=1").get()).toEqual(before);
+    db.exec("UPDATE project_stages SET status='COMPLETED',completion_bp=10000 WHERE id=1");
+    expect(db.prepare("SELECT action,entity_type FROM audit_logs WHERE entity_type='project_stage' ORDER BY id DESC LIMIT 1").get())
+      .toEqual({ action: "UPDATE", entity_type: "project_stage" });
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 24 });
+  });
+
   it("upgrades legacy document paths to managed local metadata without losing the reference",()=>{
     db=buildMigratedDb(17);
     db.exec("INSERT INTO clients(name) VALUES('Docs Client')");
@@ -32,6 +51,7 @@ describe("migration upgrade path", () => {
     db.exec(readFileSync(join(here,"..","src-tauri","migrations","0021_sync_conflict_remediation.sql"),"utf8"));
     db.exec(readFileSync(join(here,"..","src-tauri","migrations","0022_numbering_safety.sql"),"utf8"));
     db.exec(readFileSync(join(here,"..","src-tauri","migrations","0023_numbering_remediation.sql"),"utf8"));
+    db.exec(readFileSync(join(here,"..","src-tauri","migrations","0024_dashboard_snapshot_audit.sql"),"utf8"));
     expect(db.prepare("SELECT title,path,local_cache_path,storage_provider,is_available_offline,version_number FROM documents").get()).toEqual({
       title:"Signed contract",path:"C:/Legacy/signed.pdf",local_cache_path:"C:/Legacy/signed.pdf",storage_provider:"LEGACY_LOCAL",is_available_offline:1,version_number:1,
     });
@@ -47,7 +67,7 @@ describe("migration upgrade path", () => {
     expect(()=>db!.prepare("INSERT INTO documents(project_id,category,title,document_uuid,original_filename,mime_type,size_bytes,sha256,storage_provider,version_number) VALUES(1,'OTHER','Bad','44444444-4444-4444-8444-444444444444','bad.bin','application/octet-stream',1,?,'LOCAL_ONLY',1)").run("Z".repeat(64))).toThrow(/INVALID_DOCUMENT_SHA256/);
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({integrity_check:"ok"});
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({user_version:23});
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({user_version:24});
   });
   it("upgrades schema 15, preserves malformed source data, and records recoverable quality issues",()=>{
     db=buildMigratedDb(15);
@@ -275,7 +295,7 @@ describe("migration upgrade path", () => {
     );
     expect(clientCols.has("sync_uuid")).toBe(true);
     expect(clientCols.has("updated_at")).toBe(true);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 24 });
   });
 
   it("backfills sync_uuid and updated_at on rows that predate the sync migration", () => {

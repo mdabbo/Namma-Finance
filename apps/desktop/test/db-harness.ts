@@ -42,6 +42,7 @@ const MIGRATIONS = [
   "0021_sync_conflict_remediation.sql",
   "0022_numbering_safety.sql",
   "0023_numbering_remediation.sql",
+  "0024_dashboard_snapshot_audit.sql",
 ];
 
 let db: DatabaseSync | null = null;
