@@ -55,6 +55,23 @@ export function useAuditRecords(filters: AuditFilters) {
   return useQuery({ queryKey: ["audit", filters], queryFn: () => listAuditRecords(filters) });
 }
 
+export function listRecentAuditRecords(limit = 6): Promise<AuditRecord[]> {
+  const safeLimit = Math.min(20, Math.max(1, Math.trunc(limit)));
+  return select<AuditRecord>(
+    `SELECT ${PROJECTION} FROM audit_logs
+     WHERE source <> 'BACKGROUND'
+     ORDER BY id DESC LIMIT $1`,
+    [safeLimit],
+  );
+}
+
+export function useRecentAuditRecords(limit = 6) {
+  return useQuery({
+    queryKey: ["audit", "recent", limit],
+    queryFn: () => listRecentAuditRecords(limit),
+  });
+}
+
 export function useEntityHistory(record: AuditRecord | null) {
   return useQuery({
     queryKey: ["audit", "entity", record?.entityType, record?.entityId, record?.entityUuid],

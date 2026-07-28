@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { ProjectStatus } from "@mep/core";
@@ -18,6 +18,8 @@ export function ProjectsPage() {
   const fmt = useFormat();
   const base = useBaseMoney();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: projects = [], isLoading } = useProjects(includeArchived);
   const { data: financials } = useWorkspaceFinancials();
@@ -32,8 +34,14 @@ export function ProjectsPage() {
 
   const finOf = (id: number) => financials?.projects.find((f) => f.project.id === id);
 
+  const readyProjectIds = new Set(
+    financials?.readyToCollect.map((item) => item.projectId) ?? [],
+  );
   const filtered = projects.filter(
-    (p) => (!statusFilter || p.status === statusFilter) && (!disciplineFilter || p.discipline === disciplineFilter),
+    (project) =>
+      (!statusFilter || project.status === statusFilter) &&
+      (!disciplineFilter || project.discipline === disciplineFilter) &&
+      (attentionView !== "ready-to-invoice" || readyProjectIds.has(project.id)),
   );
 
   const columns: Column<ProjectListItem>[] = [
@@ -122,7 +130,7 @@ export function ProjectsPage() {
         columns={columns}
         rowKey={(p) => p.id}
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/projects/${p.id}`); }}
-        loading={isLoading}
+        loading={isLoading || (attentionView === "ready-to-invoice" && !financials)}
         emptyMessage={t("common.empty")}
         toolbar={
           <>
@@ -142,6 +150,19 @@ export function ProjectsPage() {
               <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
               {t("lifecycle.includeArchived")}
             </label>
+            {attentionView === "ready-to-invoice" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("view");
+                  setSearchParams(next);
+                }}
+              >
+                {t("dashboard.filtered.ready")} · {t("common.clearFilters")}
+              </Button>
+            )}
           </>
         }
       />

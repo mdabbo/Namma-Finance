@@ -9,7 +9,7 @@ import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createCertificate, setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment, deletePayment, updatePayment } from "../src/repositories/payments";
-import { finalizePendingRestoreAudit, listAuditRecords, listEntityHistory } from "../src/repositories/audit";
+import { finalizePendingRestoreAudit, listAuditRecords, listEntityHistory, listRecentAuditRecords } from "../src/repositories/audit";
 
 beforeEach(() => resetDb());
 
@@ -62,6 +62,22 @@ describe("Milestone 8 immutable audit trail", () => {
     expect(rows[0]).toMatchObject({ entityType: "payment_certificate", action: "STATUS_CHANGE", userId: "11111111-2222-4333-8444-555555555555" });
     expect(rows[0]?.beforeJson).toContain('"status":"DRAFT"');
     expect(rows[0]?.afterJson).toContain('"status":"APPROVED"');
+  });
+
+  it("provides a bounded recent-activity feed without background maintenance noise", async () => {
+    await execute(
+      "INSERT INTO audit_logs(device_id,action,entity_type,source) VALUES('qa-device','BACKUP','backup','BACKGROUND')",
+    );
+    await execute(
+      "INSERT INTO audit_logs(device_id,action,entity_type,source) VALUES('qa-device','CREATE','project','DESKTOP')",
+    );
+    const rows = await listRecentAuditRecords(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "CREATE",
+      entityType: "project",
+      source: "DESKTOP",
+    });
   });
 
   it("keeps UUID-only timelines isolated and records the running app version", async () => {

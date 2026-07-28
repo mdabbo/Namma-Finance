@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { FileDown, Plus } from "lucide-react";
 import type { CertificateStatus } from "@mep/core";
@@ -17,6 +18,8 @@ import { CertificateDocument } from "./CertificateDocument";
 export function CertificatesPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const { data: certificates = [], isLoading } = useCertificates();
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useCertificateMutations();
@@ -39,8 +42,13 @@ export function CertificatesPage() {
   }
 
   const filtered = useMemo(
-    () => certificates.filter((c) => !statusFilter || c.status === statusFilter),
-    [certificates, statusFilter],
+    () =>
+      certificates.filter(
+        (certificate) =>
+          (!statusFilter || certificate.status === statusFilter) &&
+          (attentionView !== "overdue" || stateOf(certificate)?.overdue),
+      ),
+    [certificates, financials, statusFilter, attentionView],
   );
 
   const columns: Column<CertificateListItem>[] = [
@@ -147,15 +155,30 @@ export function CertificatesPage() {
         rows={filtered}
         columns={columns}
         rowKey={(c) => c.id}
-        loading={isLoading}
+        loading={isLoading || (attentionView === "overdue" && !financials)}
         emptyMessage={t("common.empty")}
         toolbar={
-          <Select className="!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CertificateStatus | "")}>
-            <option value="">{t("common.status")}: {t("common.all")}</option>
-            {(["DRAFT", "SUBMITTED", "APPROVED", "PAID"] as const).map((s) => (
-              <option key={s} value={s}>{t(`status.${s}`)}</option>
-            ))}
-          </Select>
+          <>
+            <Select className="!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CertificateStatus | "")}>
+              <option value="">{t("common.status")}: {t("common.all")}</option>
+              {(["DRAFT", "SUBMITTED", "APPROVED", "PAID"] as const).map((s) => (
+                <option key={s} value={s}>{t(`status.${s}`)}</option>
+              ))}
+            </Select>
+            {attentionView === "overdue" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("view");
+                  setSearchParams(next);
+                }}
+              >
+                {t("dashboard.filtered.overdue")} · {t("common.clearFilters")}
+              </Button>
+            )}
+          </>
         }
       />
 

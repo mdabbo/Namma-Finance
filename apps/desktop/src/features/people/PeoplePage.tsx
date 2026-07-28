@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
 import { usePeople, usePeopleMutations, type PersonListItem } from "../../repositories/people";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, Field, Input, Modal, PageHeader, Select, Textarea } from "../../components/ui";
@@ -14,15 +15,25 @@ export function PeoplePage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: people = [], isLoading } = usePeople(includeArchived);
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = usePeopleMutations();
 
   const [typeFilter, setTypeFilter] = useState("");
   const [editing, setEditing] = useState<Person | "new" | null>(null);
   const [deleting, setDeleting] = useState<PersonListItem | null>(null);
 
-  const filtered = people.filter((p) => !typeFilter || p.type === typeFilter);
+  const duePersonIds = new Set(
+    financials?.teamPayables.map((item) => item.personId) ?? [],
+  );
+  const filtered = people.filter(
+    (person) =>
+      (!typeFilter || person.type === typeFilter) &&
+      (attentionView !== "payments-due" || duePersonIds.has(person.id)),
+  );
 
   const columns: Column<PersonListItem>[] = [
     { key: "name", header: t("common.name"), value: (p) => p.name, render: (p) => <span className="font-medium">{p.name}</span> },
@@ -79,7 +90,7 @@ export function PeoplePage() {
         columns={columns}
         rowKey={(p) => p.id}
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/team/people/${p.id}`); }}
-        loading={isLoading}
+        loading={isLoading || (attentionView === "payments-due" && !financials)}
         emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
         toolbar={<>
@@ -92,6 +103,19 @@ export function PeoplePage() {
             <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
             {t("lifecycle.includeArchived")}
           </label>
+          {attentionView === "payments-due" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("view");
+                setSearchParams(next);
+              }}
+            >
+              {t("dashboard.filtered.team")} · {t("common.clearFilters")}
+            </Button>
+          )}
         </>}
       />
 

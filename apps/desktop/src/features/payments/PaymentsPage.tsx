@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { usePaymentMutations, usePayments, type PaymentListItem } from "../../repositories/payments";
@@ -11,6 +12,8 @@ import { PaymentForm } from "./PaymentForm";
 export function PaymentsPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const [includeVoided, setIncludeVoided] = useState(false);
   const { data: payments = [], isLoading } = usePayments(includeVoided);
   const mutations = usePaymentMutations();
@@ -19,7 +22,11 @@ export function PaymentsPage() {
   const [editing, setEditing] = useState<PaymentListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<PaymentListItem | null>(null);
 
-  const filtered = payments.filter((p) => !kindFilter || p.kind === kindFilter);
+  const filtered = payments.filter(
+    (payment) =>
+      (!kindFilter || payment.kind === kindFilter) &&
+      (attentionView !== "unallocated" || payment.unallocatedMinor > 0),
+  );
 
   const columns: Column<PaymentListItem>[] = [
     { key: "number", header: t("payments.number"), value: (p) => p.number, render: (p) => <span className="font-medium tnum">{p.number}</span> },
@@ -93,6 +100,19 @@ export function PaymentsPage() {
             <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
             {t("lifecycle.includeVoided")}
           </label>
+          {attentionView === "unallocated" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("view");
+                setSearchParams(next);
+              }}
+            >
+              {t("dashboard.filtered.unallocated")} · {t("common.clearFilters")}
+            </Button>
+          )}
         </>}
       />
 

@@ -1,393 +1,846 @@
-import { useMemo } from "react";
+import { useMemo, type ComponentType } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
+  Activity,
   AlarmClock,
+  ArrowRight,
   Banknote,
-  BellRing,
-  Briefcase,
-  CheckCircle2,
+  BriefcaseBusiness,
+  Check,
+  CircleDollarSign,
+  FileCheck2,
   HandCoins,
-  FileSpreadsheet,
-  TrendingDown,
-  TrendingUp,
-  Wallet,
+  Landmark,
+  Plus,
+  ReceiptText,
+  SlidersHorizontal,
+  Users,
+  WalletCards,
 } from "lucide-react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { aggregateProjectCostTotals, computeDashboardKpis, isBillable, toEgpPiasters, type ProjectFinancials } from "@mep/core";
+import {
+  aggregateProjectCostTotals,
+  minorPerMajor,
+  toEgpPiasters,
+  type ProjectFinancials,
+} from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
-import { useCategories } from "../../repositories/expenses";
-import { Badge, Card, EmptyState, RatioBar } from "../../components/ui";
+import { useClients } from "../../repositories/clients";
+import { useRecentAuditRecords, type AuditRecord } from "../../repositories/audit";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  PageHeader,
+  RatioBar,
+  SectionHeader,
+  cx,
+} from "../../components/ui";
 import { KpiCard } from "../../components/KpiCard";
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import {
+  DASHBOARD_ATTENTION_ROUTES,
+  activityRoute,
+  buildMonthlyCashSeries,
+  selectProjectHealth,
+} from "./dashboardModel";
 
-const CHART_COLORS = ["#2563eb", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#64748b", "#14b8a6", "#f97316", "#a855f7", "#84cc16", "#6b7280"];
+type AttentionTone = "danger" | "warning" | "info" | "success";
+
+const ATTENTION_STYLES: Record<AttentionTone, { icon: string; hover: string }> = {
+  danger: {
+    icon: "bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-300",
+    hover: "hover:border-red-200 dark:hover:border-red-900",
+  },
+  warning: {
+    icon: "bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-300",
+    hover: "hover:border-amber-200 dark:hover:border-amber-900",
+  },
+  info: {
+    icon: "bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300",
+    hover: "hover:border-blue-200 dark:hover:border-blue-900",
+  },
+  success: {
+    icon: "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300",
+    hover: "hover:border-emerald-200 dark:hover:border-emerald-900",
+  },
+};
+
+const ACTIVITY_ACTION_KEYS: Record<string, string> = {
+  CREATE: "dashboard.activityActions.create",
+  UPDATE: "dashboard.activityActions.update",
+  DELETE: "dashboard.activityActions.delete",
+  ARCHIVE: "dashboard.activityActions.archive",
+  RESTORE: "dashboard.activityActions.restore",
+  STATUS_CHANGE: "dashboard.activityActions.status",
+  VOID: "dashboard.activityActions.void",
+  BACKUP: "dashboard.activityActions.backup",
+  SETTING_CHANGE: "dashboard.activityActions.settings",
+};
+
+const ACTIVITY_ENTITY_KEYS: Record<string, string> = {
+  project: "dashboard.activityEntities.project",
+  client: "dashboard.activityEntities.client",
+  contract: "dashboard.activityEntities.contract",
+  contract_revision: "dashboard.activityEntities.contract",
+  payment_certificate: "dashboard.activityEntities.certificate",
+  payment: "dashboard.activityEntities.payment",
+  payment_allocation: "dashboard.activityEntities.payment",
+  expense: "dashboard.activityEntities.expense",
+  recurring_expense: "dashboard.activityEntities.expense",
+  person: "dashboard.activityEntities.person",
+  project_assignment: "dashboard.activityEntities.assignment",
+  person_payment: "dashboard.activityEntities.teamPayment",
+  time_entry: "dashboard.activityEntities.timeEntry",
+  backup: "dashboard.activityEntities.backup",
+  setting: "dashboard.activityEntities.settings",
+};
 
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
   const base = useBaseMoney();
-  const { data: financials } = useWorkspaceFinancials();
-  const { data: categories = [] } = useCategories(true);
+  const workspace = useWorkspaceFinancials();
+  const clients = useClients(false);
+  const recentActivity = useRecentAuditRecords(6);
 
-  const kpis = useMemo(
-    () => (financials ? computeDashboardKpis(financials.projects, financials.allExpenses) : null),
-    [financials],
-  );
-
-  // money KPIs in the base currency, source-aware: same-currency amounts at
-  // FACE VALUE, foreign amounts via the EGP pivot (fixes the stored-vs-today
-  // rate drift that made a 10,000 SAR contract read 9,596)
+  const financials = workspace.data;
   const money = useMemo(() => {
     if (!financials) return null;
-    const sumProjects = (pick: (p: ProjectFinancials) => number) =>
+    const sumProjects = (pick: (project: ProjectFinancials) => number) =>
       financials.projects.reduce(
-        (s, p) => s + base.convertFrom(pick(p), p.project.currency, p.project.fxRateMicro),
+        (sum, project) =>
+          sum +
+          base.convertFrom(
+            pick(project),
+            project.project.currency,
+            project.project.fxRateMicro,
+          ),
         0,
       );
-    const contractValue = sumProjects((p) => p.contractValueMinor);
-    const revenue = sumProjects((p) => p.certifiedBaseMinor);
-    const billableRevenue = sumProjects((p) => p.billableRevenueMinor);
-    const invoicedAmount = sumProjects((p) => p.invoicedAmountMinor);
     const profiles = [...financials.costsByProject.values()];
-    const overheadEgp = financials.allExpenses.filter((expense) => expense.projectId === null)
-      .reduce((sum, expense) => sum + toEgpPiasters(expense.amountMinor, expense.currency, expense.fxRateMicro), 0);
+    const overheadEgp = financials.allExpenses
+      .filter((expense) => expense.projectId === null)
+      .reduce(
+        (sum, expense) =>
+          sum +
+          toEgpPiasters(
+            expense.amountMinor,
+            expense.currency,
+            expense.fxRateMicro,
+          ),
+        0,
+      );
     const costTotals = aggregateProjectCostTotals(profiles, overheadEgp);
-    const actualPaid = base.convert(costTotals.actualPaidCostEgp);
-    const directPaid = base.convert(costTotals.directActualPaidCostEgp);
-    const accrued = base.convert(costTotals.accruedCostEgp);
-    const committed = base.convert(costTotals.committedCostEgp);
-    const forecastCost = base.convert(costTotals.forecastCostEgp);
-    const actualCashIn = base.convert(profiles.reduce((sum, profile) => sum + profile.actualCashInEgp, 0));
+    const cashCollected = sumProjects(
+      (project) => project.totalActualCashInMinor,
+    );
+    const cashOut = base.convert(costTotals.actualPaidCostEgp);
     return {
-      contractValue,
-      billableRevenue,
-      revenue,
-      invoicedAmount,
-      certificateCollections: sumProjects((p) => p.certificateCollectionsMinor),
-      advanceReceived: sumProjects((p) => p.advanceReceivedMinor),
-      retentionReleased: sumProjects((p) => p.retentionReleasedMinor),
-      totalActualCashIn: sumProjects((p) => p.totalActualCashInMinor),
-      customerCredit: sumProjects((p) => p.unallocatedCustomerCreditMinor),
-      outstanding: sumProjects((p) => p.outstandingReceivablesMinor),
-      uncertified: sumProjects((p) => p.remainingUncertifiedMinor),
-      retentionHeld: sumProjects((p) => p.retentionHeldMinor),
-      actualPaid,
-      accrued,
-      committed,
-      forecastCost,
-      actualGrossProfit: revenue - directPaid - accrued,
-      actualNetProfit: revenue - actualPaid - accrued,
-      cashProfit: actualCashIn - actualPaid,
-      forecastProfit: contractValue - forecastCost,
+      contractValue: sumProjects((project) => project.contractValueMinor),
+      cashCollected,
+      outstanding: sumProjects(
+        (project) => project.outstandingReceivablesMinor,
+      ),
+      cashOut,
+      netCash: cashCollected - cashOut,
+      unallocated: sumProjects(
+        (project) => project.unallocatedCustomerCreditMinor,
+      ),
     };
+    // `base.code` changes the source-aware conversion identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, base.code]);
 
-  /** Face-value totals per currency — no conversion at all. */
-  const byCurrency = useMemo(() => {
-    if (!financials) return [];
-    const groups = new Map<string, { value: number; certificateCollections: number; totalCashIn: number; outstanding: number }>();
-    for (const p of financials.projects) {
-      const g = groups.get(p.project.currency) ?? { value: 0, certificateCollections: 0, totalCashIn: 0, outstanding: 0 };
-      g.value += p.contractValueMinor;
-      g.certificateCollections += p.certificateCollectionsMinor;
-      g.totalCashIn += p.totalActualCashInMinor;
-      g.outstanding += p.outstandingReceivablesMinor;
-      groups.set(p.project.currency, g);
-    }
-    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [financials]);
+  const monthly = useMemo(
+    () =>
+      financials
+        ? buildMonthlyCashSeries(financials.cashIn, financials.allExpenses)
+        : [],
+    [financials],
+  );
 
-  /** Monthly series: revenue (certified base), cash in (payments), expenses — in EGP. */
-  const monthly = useMemo(() => {
-    if (!financials) return [];
-    const buckets = new Map<string, { revenue: number; cashIn: number; expenses: number }>();
-    const bucket = (date: string) => {
-      const key = date.slice(0, 7);
-      if (!buckets.has(key)) buckets.set(key, { revenue: 0, cashIn: 0, expenses: 0 });
-      return buckets.get(key)!;
-    };
+  const healthProjects = useMemo(
+    () => selectProjectHealth(financials?.projects ?? [], 5),
+    [financials],
+  );
+
+  const attention = useMemo(() => {
+    if (!financials || !money) return [];
+    const projectById = new Map(
+      financials.projects.map((project) => [
+        project.project.id,
+        project.project,
+      ]),
+    );
+    let overdueCount = 0;
+    let overdueAmount = 0;
+    let unallocatedContracts = 0;
+
     for (const state of financials.contractStates.values()) {
-      const project = financials.projects.find((p) => p.project.id === state.contract.projectId)?.project;
-      const toEgp = (minor: number) => (project ? toEgpPiasters(minor, project.currency, project.fxRateMicro) : minor);
-      for (const cs of state.certificates) {
-        if (isBillable(cs.certificate.status)) {
-          bucket(cs.certificate.date).revenue += toEgp(cs.breakdown.baseMinor);
-        }
+      const project = projectById.get(state.contract.projectId);
+      if (!project) continue;
+      if (state.unallocatedCustomerCreditMinor > 0) unallocatedContracts += 1;
+      for (const certificate of state.certificates) {
+        if (!certificate.overdue || certificate.unpaidMinor <= 0) continue;
+        overdueCount += 1;
+        overdueAmount += base.convertFrom(
+          certificate.unpaidMinor,
+          project.currency,
+          project.fxRateMicro,
+        );
       }
     }
-    for (const payment of financials.cashIn) {
-      bucket(payment.date).cashIn += payment.egpMinor;
-    }
-    for (const e of financials.allExpenses) {
-      bucket(e.date).expenses += toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro);
-    }
-    return [...buckets.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-12)
-      .map(([month, v]) => ({ month, ...v, net: v.cashIn - v.expenses }));
-  }, [financials]);
 
-  const expenseByCategory = useMemo(() => {
-    if (!financials) return [];
-    const sums = new Map<number, number>();
-    for (const e of financials.allExpenses) {
-      sums.set(e.categoryId, (sums.get(e.categoryId) ?? 0) + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro));
-    }
-    return [...sums.entries()]
-      .map(([categoryId, value]) => {
-        const cat = categories.find((c) => c.id === categoryId);
-        return { name: cat ? (i18n.language === "ar" ? cat.nameAr : cat.nameEn) : "?", value: value / 100 };
-      })
-      .sort((a, b) => b.value - a.value);
-  }, [financials, categories, i18n.language]);
+    const readyAmount = financials.readyToCollect.reduce(
+      (sum, item) =>
+        sum +
+        base.convertFrom(
+          item.readyMinor,
+          item.currency,
+          projectById.get(item.projectId)?.fxRateMicro ?? 1_000_000,
+        ),
+      0,
+    );
+    const teamAmount = financials.teamPayables.reduce(
+      (sum, item) =>
+        sum +
+        (item.currency === base.code
+          ? item.dueMinor
+          : base.convert(item.dueEgp)),
+      0,
+    );
 
-  const statusDistribution = useMemo(() => {
-    if (!financials) return [];
-    const counts = new Map<string, number>();
-    for (const p of financials.projects) {
-      counts.set(p.project.status, (counts.get(p.project.status) ?? 0) + 1);
-    }
-    return [...counts.entries()].map(([status, count]) => ({ name: t(`status.${status}`), value: count }));
-  }, [financials, t]);
+    return [
+      {
+        id: "overdue",
+        title: t("dashboard.attention.overdue"),
+        detail: t("dashboard.attention.overdueDetail", {
+          count: overdueCount,
+        }),
+        count: overdueCount,
+        amount: overdueAmount,
+        to: DASHBOARD_ATTENTION_ROUTES.overdue,
+        icon: AlarmClock,
+        tone: "danger" as const,
+      },
+      {
+        id: "ready",
+        title: t("dashboard.attention.ready"),
+        detail: t("dashboard.attention.readyDetail", {
+          count: financials.readyToCollect.length,
+        }),
+        count: financials.readyToCollect.length,
+        amount: readyAmount,
+        to: DASHBOARD_ATTENTION_ROUTES.readyToInvoice,
+        icon: FileCheck2,
+        tone: "success" as const,
+      },
+      {
+        id: "unallocated",
+        title: t("dashboard.attention.unallocated"),
+        detail: t("dashboard.attention.unallocatedDetail", {
+          count: unallocatedContracts,
+        }),
+        count: unallocatedContracts,
+        amount: money.unallocated,
+        to: DASHBOARD_ATTENTION_ROUTES.unallocated,
+        icon: WalletCards,
+        tone: "warning" as const,
+      },
+      {
+        id: "team",
+        title: t("dashboard.attention.team"),
+        detail: t("dashboard.attention.teamDetail", {
+          count: financials.teamPayables.length,
+        }),
+        count: financials.teamPayables.length,
+        amount: teamAmount,
+        to: DASHBOARD_ATTENTION_ROUTES.teamPayments,
+        icon: HandCoins,
+        tone: "info" as const,
+      },
+    ].filter((item) => item.count > 0 || item.amount > 0);
+    // `base.code` changes source-aware conversions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [financials, money, base.code, t]);
 
-  if (!kpis || !money) return <EmptyState message={t("common.loading")} />;
+  if (workspace.isLoading || clients.isLoading) {
+    return <LoadingState label={t("common.loading")} className="min-h-[50vh]" />;
+  }
+  if (workspace.isError || clients.isError || !financials || !money) {
+    return (
+      <ErrorState
+        title={t("common.error")}
+        description={t("dashboard.loadFailed")}
+        action={
+          <Button
+            onClick={() => {
+              void workspace.refetch();
+              void clients.refetch();
+            }}
+          >
+            {t("common.retry")}
+          </Button>
+        }
+        className="min-h-[50vh]"
+      />
+    );
+  }
 
-  const currencyTick = (v: number) => new Intl.NumberFormat("en", { notation: "compact" }).format(v);
-  const toMajor = (egpMinor: number) => base.convert(egpMinor) / 100;
+  const certificateCount = [...financials.contractStates.values()].reduce(
+    (sum, state) => sum + state.certificates.length,
+    0,
+  );
+  const setupSteps = [
+    {
+      id: "client",
+      label: t("dashboard.setup.client"),
+      complete: (clients.data?.length ?? 0) > 0,
+      to: "/projects/clients",
+      icon: Users,
+    },
+    {
+      id: "project",
+      label: t("dashboard.setup.project"),
+      complete: financials.projects.length > 0,
+      to: "/projects",
+      icon: BriefcaseBusiness,
+    },
+    {
+      id: "contract",
+      label: t("dashboard.setup.contract"),
+      complete: financials.contractStates.size > 0,
+      to:
+        financials.projects.length > 0
+          ? `/projects/${financials.projects[0]!.project.id}`
+          : "/projects",
+      icon: Landmark,
+    },
+    {
+      id: "certificate",
+      label: t("dashboard.setup.certificate"),
+      complete: certificateCount > 0,
+      to: "/finance/certificates",
+      icon: ReceiptText,
+    },
+  ];
+  const nextStep = setupSteps.find((step) => !step.complete);
+  const isNewWorkspace =
+    certificateCount === 0 &&
+    financials.cashIn.length === 0 &&
+    financials.allExpenses.length === 0;
+
+  if (isNewWorkspace) {
+    return (
+      <div>
+        <DashboardHeader currency={base.code} />
+        <WorkspaceSetup
+          steps={setupSteps}
+          nextStepId={nextStep?.id ?? null}
+          completed={setupSteps.filter((step) => step.complete).length}
+        />
+      </div>
+    );
+  }
+
+  const currencyScale = minorPerMajor(base.code);
+  const cashChart = monthly.map((point) => ({
+    month: point.month,
+    cashIn: base.convert(point.cashInEgp) / currencyScale,
+    cashOut: base.convert(point.cashOutEgp) / currencyScale,
+  }));
+  const healthChart = healthProjects.map((project) => ({
+    name:
+      project.project.name.length > 18
+        ? `${project.project.name.slice(0, 16)}…`
+        : project.project.name,
+    progress: project.project.progressBp / 100,
+    certified: project.certifiedRatioBp / 100,
+    collected: project.collectionRatioBp / 100,
+  }));
+  const compactTick = (value: number) =>
+    new Intl.NumberFormat(i18n.language === "ar" ? "ar-EG" : "en-US", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(value);
 
   return (
     <div>
-      <div className="mb-4 flex items-baseline justify-between">
-        <h1 className="text-xl font-semibold">{t("dashboard.title")}</h1>
-        <p className="text-xs text-slate-400">{t("dashboard.consolidatedNote", { currency: base.code })}</p>
-      </div>
+      <DashboardHeader currency={base.code} />
 
-      <div className="mb-4 grid grid-cols-5 gap-3">
-        <KpiCard label={t("cash.contractValueExcludingVat")} value={fmt.money(money!.contractValue, base.code, { compactFraction: true })} icon={Briefcase} />
-        <KpiCard label={t("cash.billableRevenue")} hint={t("cash.billableRevenueHint")} value={fmt.money(money.billableRevenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
-        <KpiCard label={t("cash.certifiedRevenue")} hint={t("cash.certifiedRevenueHint")} value={fmt.money(money!.revenue, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
-        <KpiCard label={t("cash.invoicedAmount")} hint={t("cash.invoicedAmountHint")} value={fmt.money(money.invoicedAmount, base.code, { compactFraction: true })} icon={FileSpreadsheet} />
-        <KpiCard label={t("cash.certificateCollections")} hint={t("cash.certificateCollectionsHint")} value={fmt.money(money.certificateCollections, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
-        <KpiCard label={t("cash.advanceReceived")} value={fmt.money(money.advanceReceived, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
-        <KpiCard label={t("cash.retentionReleased")} value={fmt.money(money.retentionReleased, base.code, { compactFraction: true })} icon={Banknote} tone="positive" />
-        <KpiCard label={t("cash.totalActualCashIn")} hint={t("cash.totalActualCashInHint")} value={fmt.money(money.totalActualCashIn, base.code, { compactFraction: true })} icon={Wallet} tone="positive" />
-        <KpiCard label={t("cash.customerCredit")} hint={t("cash.customerCreditHint")} value={fmt.money(money.customerCredit, base.code, { compactFraction: true })} icon={Wallet} tone={money.customerCredit > 0 ? "warning" : "default"} />
+      <section
+        aria-label={t("dashboard.primaryKpis")}
+        className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4"
+      >
+        <KpiCard
+          label={t("dashboard.contractValue")}
+          hint={t("dashboard.contractValueHint")}
+          value={fmt.money(money.contractValue, base.code, {
+            compactFraction: true,
+          })}
+          icon={BriefcaseBusiness}
+        />
+        <KpiCard
+          label={t("dashboard.cashCollected")}
+          hint={t("dashboard.cashCollectedHint")}
+          value={fmt.money(money.cashCollected, base.code, {
+            compactFraction: true,
+          })}
+          icon={Banknote}
+          tone="positive"
+        />
         <KpiCard
           label={t("dashboard.kpiOutstanding")}
           hint={t("cash.outstandingReceivablesHint")}
-          value={fmt.money(money!.outstanding, base.code, { compactFraction: true })}
-          icon={Wallet}
-          tone={money!.outstanding > 0 ? "warning" : "default"}
+          value={fmt.money(money.outstanding, base.code, {
+            compactFraction: true,
+          })}
+          icon={CircleDollarSign}
+          tone={money.outstanding > 0 ? "warning" : "default"}
         />
-        <KpiCard label={t("cash.uncertifiedContractValue")} value={fmt.money(money.uncertified, base.code, { compactFraction: true })} icon={Briefcase} />
-        <KpiCard label={t("cash.retentionHeld")} value={fmt.money(money.retentionHeld, base.code, { compactFraction: true })} icon={Wallet} />
-        <KpiCard label={t("costs.actualPaid")} value={fmt.money(money.actualPaid, base.code, { compactFraction: true })} icon={TrendingDown} />
-        <KpiCard label={t("costs.accrued")} value={fmt.money(money.accrued, base.code, { compactFraction: true })} icon={AlarmClock} tone={money.accrued > 0 ? "warning" : "default"} />
-        <KpiCard label={t("costs.committed")} value={fmt.money(money.committed, base.code, { compactFraction: true })} icon={Briefcase} />
-        <KpiCard label={t("costs.forecast")} value={fmt.money(money.forecastCost, base.code, { compactFraction: true })} icon={TrendingDown} />
-        <KpiCard label={t("costs.actualGrossProfit")} value={fmt.money(money.actualGrossProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.actualGrossProfit >= 0 ? "positive" : "negative"} />
-        <KpiCard label={t("costs.actualNetProfit")} value={fmt.money(money.actualNetProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.actualNetProfit >= 0 ? "positive" : "negative"} />
-        <KpiCard label={t("costs.cashProfit")} value={fmt.money(money.cashProfit, base.code, { compactFraction: true })} icon={Wallet} tone={money.cashProfit >= 0 ? "positive" : "negative"} />
-        <KpiCard label={t("costs.forecastProfit")} value={fmt.money(money.forecastProfit, base.code, { compactFraction: true })} icon={TrendingUp} tone={money.forecastProfit >= 0 ? "positive" : "negative"} />
-        <KpiCard label={t("dashboard.kpiActiveProjects")} value={String(kpis.activeProjects)} icon={Briefcase} />
-        <KpiCard label={t("dashboard.kpiCompletedProjects")} value={String(kpis.completedProjects)} icon={CheckCircle2} />
         <KpiCard
-          label={t("dashboard.kpiOverdue")}
-          value={String(kpis.overdueCertificates)}
-          icon={AlarmClock}
-          tone={kpis.overdueCertificates > 0 ? "negative" : "default"}
+          label={t("dashboard.netCashPosition")}
+          hint={t("dashboard.netCashPositionHint")}
+          value={fmt.money(money.netCash, base.code, {
+            compactFraction: true,
+          })}
+          icon={WalletCards}
+          tone={money.netCash >= 0 ? "positive" : "negative"}
         />
-      </div>
+      </section>
 
-      {byCurrency.length > 1 && (
-        <Card className="mb-4 p-4">
-          <p className="mb-2 text-sm font-semibold">{t("dashboard.byCurrency")}</p>
-          <div className="grid grid-cols-3 gap-x-8 gap-y-1 text-sm">
-            {byCurrency.map(([code, g]) => (
-              <div key={code} className="flex items-baseline justify-between gap-3">
-                <span className="font-semibold tnum">{code}</span>
-                <span className="text-xs text-slate-500 tnum">
-                  {t("dashboard.kpiContractValue")}: <b>{fmt.money(g.value, code, { compactFraction: true })}</b>
-                  {" · "}{t("cash.certificateCollections")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.certificateCollections, code, { compactFraction: true })}</b>
-                  {" · "}{t("cash.totalActualCashIn")}: <b className="text-emerald-600 dark:text-emerald-400">{fmt.money(g.totalCashIn, code, { compactFraction: true })}</b>
-                  {" · "}{t("dashboard.kpiOutstanding")}: <b className="text-amber-600 dark:text-amber-400">{fmt.money(g.outstanding, code, { compactFraction: true })}</b>
-                </span>
-              </div>
+      {attention.length > 0 && (
+        <section className="mb-5" aria-labelledby="attention-heading">
+          <SectionHeader
+            title={
+              <span id="attention-heading">{t("dashboard.attention.title")}</span>
+            }
+            description={t("dashboard.attention.description")}
+          />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {attention.map((item) => (
+              <AttentionCard
+                key={item.id}
+                title={item.title}
+                detail={item.detail}
+                amount={fmt.money(item.amount, base.code, {
+                  compactFraction: true,
+                })}
+                to={item.to}
+                icon={item.icon}
+                tone={item.tone}
+              />
             ))}
           </div>
-        </Card>
+        </section>
       )}
 
-      {financials!.readyToCollect.length > 0 && (
-        <Card className="mb-4 border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900 dark:bg-emerald-900/10">
-          <div className="mb-1 flex items-center gap-2">
-            <BellRing size={16} className="text-emerald-600 dark:text-emerald-400" />
-            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">{t("dashboard.readyToCollect")}</p>
-          </div>
-          <p className="mb-3 text-xs text-emerald-700/70 dark:text-emerald-400/70">{t("dashboard.readyToCollectHint")}</p>
-          <div className="space-y-1.5">
-            {financials!.readyToCollect.map((item) => (
-              <Link
-                key={item.contractId}
-                to={`/projects/${item.projectId}`}
-                className="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 text-sm hover:bg-white dark:bg-slate-900/50 dark:hover:bg-slate-900"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-medium">
-                    {item.projectName} <span className="text-xs text-slate-400 tnum">({item.projectCode} · {item.contractNumber})</span>
-                  </p>
-                  <p className="truncate text-xs text-slate-500">{item.achievedTitles.join(" · ")}</p>
-                </div>
-                <span className="ms-3 shrink-0 font-semibold tnum text-emerald-700 dark:text-emerald-300">
-                  {fmt.money(item.readyMinor, item.currency, { compactFraction: true })}
-                </span>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {financials!.teamPayables.length > 0 && (
-        <Card className="mb-4 border-sky-200 bg-sky-50/50 p-4 dark:border-sky-900 dark:bg-sky-900/10">
-          <div className="mb-1 flex items-center gap-2">
-            <HandCoins size={16} className="text-sky-600 dark:text-sky-400" />
-            <p className="text-sm font-semibold text-sky-800 dark:text-sky-300">{t("dashboard.teamPayables")}</p>
-          </div>
-          <p className="mb-3 text-xs text-sky-700/70 dark:text-sky-400/70">{t("dashboard.teamPayablesHint")}</p>
-          <div className="space-y-1.5">
-            {financials!.teamPayables.map((item) => (
-              <Link
-                key={item.assignmentId}
-                to={`/team/people/${item.personId}`}
-                className="flex items-center justify-between rounded-lg bg-white/70 px-3 py-2 text-sm hover:bg-white dark:bg-slate-900/50 dark:hover:bg-slate-900"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-medium">
-                    {item.personName} <span className="text-xs text-slate-400 tnum">({item.projectCode} · {item.projectName})</span>
-                  </p>
-                  <p className="truncate text-xs text-slate-500">{item.dueTitles.join(" · ")}</p>
-                </div>
-                <span className="ms-3 shrink-0 font-semibold tnum text-sky-700 dark:text-sky-300">
-                  {fmt.money(item.dueMinor, item.currency, { compactFraction: true })}
-                </span>
-              </Link>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <Card className="p-4">
-          <p className="mb-3 text-sm font-semibold">{t("dashboard.chartRevenueExpenses")}</p>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={monthly.map((m) => ({ ...m, revenue: toMajor(m.revenue), expenses: toMajor(m.expenses) }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} reversed={i18n.dir() === "rtl"} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={currencyTick} orientation={i18n.dir() === "rtl" ? "right" : "left"} />
-              <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
-              <Legend />
-              <Bar dataKey="revenue" name={t("dashboard.revenue")} fill="#2563eb" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="expenses" name={t("dashboard.kpiExpenses")} fill="#f59e0b" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-
-        <Card className="p-4">
-          <p className="mb-3 text-sm font-semibold">{t("dashboard.chartCashFlow")}</p>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={monthly.map((m) => ({ ...m, net: toMajor(m.net), cashIn: toMajor(m.cashIn), expenses: toMajor(m.expenses) }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} reversed={i18n.dir() === "rtl"} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={currencyTick} orientation={i18n.dir() === "rtl" ? "right" : "left"} />
-              <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
-              <Legend />
-              <Line type="monotone" dataKey="cashIn" name={t("cash.totalActualCashIn")} stroke="#2563eb" strokeWidth={1.5} dot={false} />
-              <Line type="monotone" dataKey="expenses" name={t("dashboard.cashOut")} stroke="#ef4444" strokeWidth={1.5} dot={false} />
-              <Line type="monotone" dataKey="net" name={t("dashboard.net")} stroke="#10b981" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-
-        <Card className="p-4">
-          <p className="mb-3 text-sm font-semibold">{t("dashboard.chartExpenseBreakdown")}</p>
-          {expenseByCategory.length === 0 ? (
-            <EmptyState message={t("common.empty")} />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={expenseByCategory} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} paddingAngle={2}>
-                  {expenseByCategory.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-
-        <Card className="p-4">
-          <p className="mb-3 text-sm font-semibold">{t("dashboard.chartProjectStatus")}</p>
-          {statusDistribution.length === 0 ? (
-            <EmptyState message={t("common.empty")} />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={statusDistribution} dataKey="value" nameKey="name" outerRadius={90}>
-                  {statusDistribution.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-      </div>
-
-      <h2 className="mb-3 text-sm font-semibold">{t("dashboard.projectCards")}</h2>
-      <div className="grid grid-cols-3 gap-3">
-        {financials!.projects.map((fin) => (
-          <Link key={fin.project.id} to={`/projects/${fin.project.id}`}>
-            <Card className="p-4 transition-shadow hover:shadow-md">
-              <div className="mb-2 flex items-start justify-between">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{fin.project.name}</p>
-                  <p className="text-xs text-slate-400 tnum">{fin.project.code}</p>
-                </div>
-                <Badge value={fin.project.status} label={t(`status.${fin.project.status}`)} />
-              </div>
-              <p className="mb-2 text-lg font-semibold tnum">
-                {base.formatFrom(fin.contractValueMinor, fin.project.currency, fin.project.fxRateMicro)}
-              </p>
-              <RatioBar ratioBp={fin.collectionRatioBp} secondaryBp={fin.certifiedRatioBp} className="!h-2.5" />
-              <div className="mt-1.5 flex justify-between text-[11px] text-slate-500">
-                <span>{t("cash.certificateCollections")}: <b className="tnum">{fmt.percent(fin.collectionRatioBp)}</b></span>
-                <span>{t("projects.certified")}: <b className="tnum">{fmt.percent(fin.certifiedRatioBp)}</b></span>
-              </div>
+      {(cashChart.length > 0 || healthChart.length > 0) && (
+        <section
+          className="mb-5 grid gap-3 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
+          aria-label={t("dashboard.insights")}
+        >
+          {cashChart.length > 0 && (
+            <Card className="min-w-0 p-4">
+              <SectionHeader
+                title={t("dashboard.cashInVsCashOut")}
+                description={t("dashboard.lastTwelveMonths")}
+              />
+              <ResponsiveContainer width="100%" height={224}>
+                <BarChart data={cashChart}>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="var(--ui-border-subtle)"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 10 }}
+                    reversed={i18n.dir() === "rtl"}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={compactTick}
+                    orientation={i18n.dir() === "rtl" ? "right" : "left"}
+                    width={50}
+                  />
+                  <Tooltip
+                    formatter={(value) =>
+                      fmt.money(
+                        Math.round(Number(value) * currencyScale),
+                        base.code,
+                        { compactFraction: true },
+                      )
+                    }
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    dataKey="cashIn"
+                    name={t("dashboard.cashIn")}
+                    fill="#2563eb"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={26}
+                  />
+                  <Bar
+                    dataKey="cashOut"
+                    name={t("dashboard.cashOut")}
+                    fill="#94a3b8"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={26}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
             </Card>
-          </Link>
-        ))}
+          )}
+
+          {healthChart.length > 0 && (
+            <Card className="min-w-0 p-4">
+              <SectionHeader
+                title={t("dashboard.projectHealth")}
+                description={t("dashboard.projectHealthHint")}
+              />
+              <ResponsiveContainer width="100%" height={224}>
+                <BarChart data={healthChart} layout="vertical" barGap={1}>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="var(--ui-border-subtle)"
+                    horizontal={false}
+                  />
+                  <XAxis
+                    type="number"
+                    domain={[0, 100]}
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(value) => `${value}%`}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    tick={{ fontSize: 10 }}
+                    width={92}
+                    orientation={i18n.dir() === "rtl" ? "right" : "left"}
+                  />
+                  <Tooltip formatter={(value) => `${Number(value).toFixed(0)}%`} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar
+                    dataKey="progress"
+                    name={t("dashboard.progress")}
+                    fill="#64748b"
+                    radius={3}
+                    barSize={6}
+                  />
+                  <Bar
+                    dataKey="certified"
+                    name={t("projects.certified")}
+                    fill="#60a5fa"
+                    radius={3}
+                    barSize={6}
+                  />
+                  <Bar
+                    dataKey="collected"
+                    name={t("dashboard.collected")}
+                    fill="#10b981"
+                    radius={3}
+                    barSize={6}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+        </section>
+      )}
+
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(19rem,0.65fr)]">
+        {healthProjects.length > 0 && (
+          <Card className="min-w-0 overflow-hidden">
+            <div className="p-4 pb-2">
+              <SectionHeader
+                title={t("dashboard.topActiveProjects")}
+                actions={
+                  <Link
+                    to="/projects"
+                    className="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-300"
+                  >
+                    {t("dashboard.viewAll")}
+                  </Link>
+                }
+              />
+            </div>
+            <div className="divide-y divide-border-subtle">
+              {healthProjects.map((project) => (
+                <Link
+                  key={project.project.id}
+                  to={`/projects/${project.project.id}`}
+                  className="grid grid-cols-[minmax(0,1fr)_8rem_9rem_1rem] items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-subtle"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                      {project.project.name}
+                    </p>
+                    <p className="truncate text-xs text-muted tnum">
+                      {project.project.code} ·{" "}
+                      {base.formatFrom(
+                        project.contractValueMinor,
+                        project.project.currency,
+                        project.project.fxRateMicro,
+                      )}
+                    </p>
+                  </div>
+                  <Badge
+                    value={project.project.status}
+                    label={t(`status.${project.project.status}`)}
+                  />
+                  <div>
+                    <RatioBar
+                      ratioBp={project.collectionRatioBp}
+                      secondaryBp={project.certifiedRatioBp}
+                    />
+                    <p className="mt-1 text-end text-[10px] text-muted tnum">
+                      {fmt.percent(project.collectionRatioBp)}
+                    </p>
+                  </div>
+                  <ArrowRight
+                    size={14}
+                    className="text-slate-400 rtl:rotate-180"
+                    aria-hidden="true"
+                  />
+                </Link>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {(recentActivity.data?.length ?? 0) > 0 && (
+          <Card className="min-w-0 p-4">
+            <SectionHeader
+              title={t("dashboard.recentActivity")}
+              actions={
+                <Link
+                  to="/settings/audit"
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-300"
+                >
+                  {t("dashboard.viewAuditLog")}
+                </Link>
+              }
+            />
+            <div className="space-y-1">
+              {recentActivity.data!.map((record) => (
+                <ActivityRow key={record.id} record={record} />
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
     </div>
+  );
+}
+
+function DashboardHeader({ currency }: { currency: string }) {
+  const { t } = useTranslation();
+  return (
+    <PageHeader
+      title={t("dashboard.title")}
+      description={t("dashboard.subtitle")}
+      meta={
+        <Badge
+          tone="info"
+          label={t("dashboard.reportingCurrency", { currency })}
+        />
+      }
+      actions={
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled
+          title={t("dashboard.customizeComingSoon")}
+        >
+          <SlidersHorizontal size={15} aria-hidden="true" />
+          {t("dashboard.customizeKpis")}
+        </Button>
+      }
+    />
+  );
+}
+
+function AttentionCard({
+  title,
+  detail,
+  amount,
+  to,
+  icon: Icon,
+  tone,
+}: {
+  title: string;
+  detail: string;
+  amount: string;
+  to: string;
+  icon: ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean | "true" | "false" }>;
+  tone: AttentionTone;
+}) {
+  const styles = ATTENTION_STYLES[tone];
+  return (
+    <Link to={to} className="group">
+      <Card
+        className={cx(
+          "h-full p-3.5 transition-[border-color,box-shadow] group-hover:shadow-sm",
+          styles.hover,
+        )}
+      >
+        <div className="flex items-start gap-3">
+          <div className={cx("shrink-0 rounded-lg p-2", styles.icon)}>
+            <Icon size={17} aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <p className="truncate text-sm font-semibold">{title}</p>
+              <ArrowRight
+                size={14}
+                className="mt-0.5 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 rtl:rotate-180 rtl:group-hover:-translate-x-0.5"
+                aria-hidden="true"
+              />
+            </div>
+            <p className="mt-1 text-lg font-semibold tracking-tight tnum">
+              {amount}
+            </p>
+            <p className="mt-0.5 truncate text-xs text-muted">{detail}</p>
+          </div>
+        </div>
+      </Card>
+    </Link>
+  );
+}
+
+function WorkspaceSetup({
+  steps,
+  nextStepId,
+  completed,
+}: {
+  steps: {
+    id: string;
+    label: string;
+    complete: boolean;
+    to: string;
+    icon: ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean | "true" | "false" }>;
+  }[];
+  nextStepId: string | null;
+  completed: number;
+}) {
+  const { t } = useTranslation();
+  const nextStep = steps.find((step) => step.id === nextStepId);
+  return (
+    <Card className="mx-auto mt-8 max-w-3xl overflow-hidden">
+      <div className="border-b border-border-subtle bg-gradient-to-r from-brand-50 to-surface px-6 py-5 dark:bg-slate-900 dark:bg-none">
+        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
+          <BriefcaseBusiness size={20} aria-hidden="true" />
+        </div>
+        <h2 className="text-xl font-semibold tracking-tight">
+          {t("dashboard.setup.title")}
+        </h2>
+        <p className="mt-1 max-w-xl text-sm leading-6 text-muted">
+          {t("dashboard.setup.description")}
+        </p>
+        <div className="mt-4 flex items-center gap-3">
+          <RatioBar ratioBp={(completed * 10_000) / steps.length} className="max-w-xs" />
+          <span className="text-xs text-muted tnum">
+            {t("dashboard.setup.progress", {
+              completed,
+              total: steps.length,
+            })}
+          </span>
+        </div>
+      </div>
+      <div className="grid gap-px bg-border-subtle sm:grid-cols-2">
+        {steps.map(({ id, label, complete, to, icon: Icon }, index) => (
+          <div
+            key={id}
+            className="flex min-h-24 items-center gap-3 bg-surface px-5 py-4"
+          >
+            <div
+              className={cx(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                complete
+                  ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300"
+                  : id === nextStepId
+                    ? "bg-brand-50 text-brand-600 dark:bg-brand-950/60 dark:text-brand-300"
+                    : "bg-surface-subtle text-slate-400",
+              )}
+            >
+              {complete ? (
+                <Check size={17} aria-hidden="true" />
+              ) : (
+                <Icon size={17} aria-hidden="true" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-muted tnum">
+                {t("dashboard.setup.step", { number: index + 1 })}
+              </p>
+              <p className="truncate text-sm font-medium">{label}</p>
+            </div>
+            {id === nextStepId && (
+              <Link
+                to={to}
+                className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-2.5 text-xs font-medium text-white shadow-sm hover:bg-brand-700"
+              >
+                <Plus size={14} aria-hidden="true" />
+                {t("dashboard.setup.start")}
+              </Link>
+            )}
+          </div>
+        ))}
+      </div>
+      {!nextStep && (
+        <EmptyState
+          icon={Check}
+          title={t("dashboard.setup.complete")}
+          className="!py-6"
+        />
+      )}
+    </Card>
+  );
+}
+
+function ActivityRow({ record }: { record: AuditRecord }) {
+  const { t } = useTranslation();
+  const fmt = useFormat();
+  const actionKey =
+    ACTIVITY_ACTION_KEYS[record.action] ?? "dashboard.activityActions.other";
+  const entityKey =
+    ACTIVITY_ENTITY_KEYS[record.entityType] ??
+    "dashboard.activityEntities.record";
+  return (
+    <Link
+      to={activityRoute(record)}
+      className="flex items-start gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-surface-subtle"
+    >
+      <div className="mt-0.5 rounded-full bg-surface-subtle p-1.5 text-slate-500">
+        <Activity size={13} aria-hidden="true" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium">
+          {t("dashboard.activityLine", {
+            action: t(actionKey),
+            entity: t(entityKey),
+          })}
+        </p>
+        <p className="mt-0.5 text-[11px] text-muted tnum">
+          {fmt.date(record.timestamp.slice(0, 10))}
+        </p>
+      </div>
+    </Link>
   );
 }
