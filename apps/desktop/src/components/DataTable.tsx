@@ -41,6 +41,14 @@ interface DataTableProps<T> {
   loading?: boolean;
 }
 
+const INTERACTIVE_TARGET_SELECTOR =
+  'button, a, input, select, textarea, [role="button"], [role="link"], [contenteditable="true"]';
+
+export function isInteractiveTableTarget(target: unknown): boolean {
+  if (!target || typeof (target as { closest?: unknown }).closest !== "function") return false;
+  return Boolean((target as { closest: (selector: string) => unknown }).closest(INTERACTIVE_TARGET_SELECTOR));
+}
+
 export function DataTable<T>({
   rows,
   columns,
@@ -171,10 +179,17 @@ export function DataTable<T>({
             {visible.map((row) => (
               <TableRow
                 key={rowKey(row)}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onClick={
+                  onRowClick
+                    ? (event) => {
+                        if (!isInteractiveTableTarget(event.target)) onRowClick(row);
+                      }
+                    : undefined
+                }
                 onKeyDown={
                   onRowClick
                     ? (event) => {
+                        if (isInteractiveTableTarget(event.target)) return;
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
                           onRowClick(row);

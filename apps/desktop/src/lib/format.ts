@@ -28,6 +28,7 @@ export function parseToMinor(text: string, exponent = 2): number | null {
   if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
   if (!/^-?\d*(\.\d*)?$/.test(cleaned)) return null;
   const [intPart = "0", fracPart = ""] = cleaned.replace("-", "").split(".");
+  if (fracPart.length > exponent) return null;
   const frac = (fracPart + "0".repeat(exponent)).slice(0, exponent);
   const sign = cleaned.startsWith("-") ? -1 : 1;
   const value = sign * (Number(intPart) * 10 ** exponent + Number(frac || "0"));

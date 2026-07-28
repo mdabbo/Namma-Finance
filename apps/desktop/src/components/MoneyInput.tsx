@@ -10,6 +10,12 @@ interface MoneyInputProps
   currency?: string;
 }
 
+/** Distinguishes a deliberate clear from input that cannot represent minor units. */
+export function parseMoneyInputEdit(raw: string, exponent: number): number | null | undefined {
+  if (raw.trim() === "") return null;
+  return parseToMinor(raw, exponent) ?? undefined;
+}
+
 /** Text field that edits integer minor units as a human decimal amount. */
 export function MoneyInput({
   valueMinor,
@@ -19,6 +25,7 @@ export function MoneyInput({
   placeholder,
   disabled,
   "aria-invalid": ariaInvalid,
+  onBlur,
   ...inputProps
 }: MoneyInputProps) {
   const exponent = currencyInfo(currency).exponent;
@@ -45,15 +52,28 @@ export function MoneyInput({
         className="pe-14 text-end tnum"
         onChange={(e) => {
           const raw = e.target.value;
-          setText(raw);
-          if (raw.trim() === "") {
+          const parsed = parseMoneyInputEdit(raw, exponent);
+          if (parsed === null) {
+            setText(raw);
             setInvalid(false);
             onChange(null);
             return;
           }
-          const minor = parseToMinor(raw, exponent);
-          setInvalid(minor === null);
-          if (minor !== null) onChange(minor);
+          if (parsed === undefined) {
+            // Never let the displayed amount drift from the integer minor
+            // units held by the parent form. Invalid or over-precision input
+            // is rejected instead of being silently truncated.
+            setInvalid(true);
+            return;
+          }
+          setText(raw);
+          setInvalid(false);
+          onChange(parsed);
+        }}
+        onBlur={(event) => {
+          setInvalid(false);
+          setText(minorToInput(valueMinor, exponent));
+          onBlur?.(event);
         }}
         {...inputProps}
       />

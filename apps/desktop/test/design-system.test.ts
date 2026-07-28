@@ -20,7 +20,9 @@ import {
   PageHeader,
   RatioBar,
 } from "../src/components/ui";
-import { MoneyInput } from "../src/components/MoneyInput";
+import { MoneyInput, parseMoneyInputEdit } from "../src/components/MoneyInput";
+import { isInteractiveTableTarget } from "../src/components/DataTable";
+import { parseToMinor } from "../src/lib/format";
 
 beforeAll(async () => {
   await i18next.use(initReactI18next).init({
@@ -82,6 +84,24 @@ describe("Milestone 2 design system", () => {
     expect(money).toContain("tnum");
     expect(money).toContain("123.45");
     expect(money).toContain("EGP");
+  });
+
+  it("rejects money precision that cannot be represented in integer minor units", () => {
+    expect(parseToMinor("1.99", 2)).toBe(199);
+    expect(parseToMinor("1.999", 2)).toBeNull();
+    expect(parseToMinor("90071992547409.92", 2)).toBeNull();
+    expect(parseMoneyInputEdit("", 2)).toBeNull();
+    expect(parseMoneyInputEdit("1.99", 2)).toBe(199);
+    expect(parseMoneyInputEdit("1.999", 2)).toBeUndefined();
+    expect(parseMoneyInputEdit("not money", 2)).toBeUndefined();
+  });
+
+  it("does not treat nested table controls as row activation", () => {
+    const nestedButton = { closest: (selector: string) => (selector.includes("button") ? {} : null) };
+    const ordinaryCell = { closest: () => null };
+    expect(isInteractiveTableTarget(nestedButton)).toBe(true);
+    expect(isInteractiveTableTarget(ordinaryCell)).toBe(false);
+    expect(isInteractiveTableTarget(null)).toBe(false);
   });
 
   it("provides accessible overlays and state feedback", () => {
