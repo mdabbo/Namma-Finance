@@ -145,6 +145,13 @@ describe("dashboard financial hardening", () => {
       totalActualCashInEgp: 510_000,
     });
     expect(workspace.cashIn.map((row) => row.egpMinor)).toEqual([10_000, 500_000]);
+    expect(workspace.cashIn.map(({ number, projectId: cashProjectId }) => ({
+      number,
+      projectId: cashProjectId,
+    }))).toEqual([
+      { number: "PAY-EGP", projectId },
+      { number: "PAY-USD", projectId },
+    ]);
   });
 
   it("does not mix archived-project costs into a live-workspace dashboard", async () => {

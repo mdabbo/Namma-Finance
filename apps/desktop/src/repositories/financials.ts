@@ -90,16 +90,37 @@ export interface TeamPayableItem {
   dueTitles: string[];
 }
 
+export interface TeamAccountItem {
+  assignmentId: number;
+  projectId: number;
+  currency: string;
+  /** Assignment fee released by paid client certificates. */
+  accruedMinor: number;
+  /** Real person-payment records posted against the assignment. */
+  paidMinor: number;
+  /** Accrued less paid, floored at zero by the shared core engine. */
+  dueMinor: number;
+}
+
 export interface WorkspaceFinancials {
   projects: ProjectFinancials[];
   contractStates: Map<number, ContractState>;
   allExpenses: Expense[];
   /** Every live incoming payment with its EGP-converted amount (for cash-flow charts). */
-  cashIn: { date: string; kind: PaymentKind; projectId: number; egpMinor: number }[];
+  cashIn: {
+    paymentId: number;
+    number: string;
+    date: string;
+    kind: PaymentKind;
+    projectId: number;
+    egpMinor: number;
+  }[];
   /** Achieved milestones not yet certified — work the client should be billed for. */
   readyToCollect: ReadyToCollectItem[];
   /** Paid certificates whose team-member share has not been paid out yet. */
   teamPayables: TeamPayableItem[];
+  /** Audited payout state for every live assignment, including fully paid rows. */
+  teamAccounts: TeamAccountItem[];
   /** Analytical labor cost per project (EGP) from logged time — costing only,
    *  deliberately NOT part of cash net profit (salaries stay overhead). */
   laborByProjectEgp: Map<number, number>;
@@ -268,6 +289,8 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       fxRateMicro: project.fxRateMicro,
     };
     return [{
+      paymentId: p.id,
+      number: p.number,
       date: p.date,
       kind: p.kind,
       projectId: project.id,
@@ -352,6 +375,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
     statesByProject.set(contract.projectId, list);
   }
   const teamPayables: TeamPayableItem[] = [];
+  const teamAccounts: TeamAccountItem[] = [];
   for (const a of assignments) {
     const project = projectById.get(a.project_id);
     if (!project) continue;
@@ -360,6 +384,14 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       statesByProject.get(a.project_id) ?? [],
       paidByAssignment.get(a.id) ?? 0,
     );
+    teamAccounts.push({
+      assignmentId: a.id,
+      projectId: project.id,
+      currency: a.currency,
+      accruedMinor: payout.releasedMinor,
+      paidMinor: payout.paidOutMinor,
+      dueMinor: payout.dueMinor,
+    });
     if (payout.dueMinor > 0) {
       teamPayables.push({
         assignmentId: a.id,
@@ -431,7 +463,17 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
     }));
   }
 
-  return { projects: projectFinancials, contractStates, allExpenses: expenses, cashIn, readyToCollect, teamPayables, laborByProjectEgp, costsByProject };
+  return {
+    projects: projectFinancials,
+    contractStates,
+    allExpenses: expenses,
+    cashIn,
+    readyToCollect,
+    teamPayables,
+    teamAccounts,
+    laborByProjectEgp,
+    costsByProject,
+  };
 }
 
 export async function loadWorkspaceFinancialsConsistently(

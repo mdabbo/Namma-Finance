@@ -70,17 +70,32 @@ describe("Milestone 6 repository cost views", () => {
       [{ certificateId, amountMinor: payable }],
     );
 
-    profile = (await loadWorkspaceFinancials()).costsByProject.get(projectId)!;
+    let workspace = await loadWorkspaceFinancials();
+    profile = workspace.costsByProject.get(projectId)!;
     expect(profile.actualCashInEgp).toBe(payable);
     expect(profile.accruedCostEgp).toBe(20_000_00);
     expect(profile.actualPaidCostEgp).toBe(0);
+    expect(workspace.teamAccounts).toContainEqual({
+      assignmentId,
+      projectId,
+      currency: "EGP",
+      accruedMinor: 20_000_00,
+      paidMinor: 0,
+      dueMinor: 20_000_00,
+    });
 
     await createPersonPayment({ assignmentId, date: "2026-03-02", amountMinor: 5_000_00, note: "First fee" });
-    profile = (await loadWorkspaceFinancials()).costsByProject.get(projectId)!;
+    workspace = await loadWorkspaceFinancials();
+    profile = workspace.costsByProject.get(projectId)!;
     expect(profile.actualPaidCostEgp).toBe(5_000_00);
     expect(profile.accruedCostEgp).toBe(15_000_00);
     expect(profile.committedCostEgp).toBe(20_000_00);
     expect(profile.forecastCostEgp).toBe(20_000_00);
+    expect(workspace.teamAccounts.find((row) => row.assignmentId === assignmentId)).toMatchObject({
+      accruedMinor: 20_000_00,
+      paidMinor: 5_000_00,
+      dueMinor: 15_000_00,
+    });
 
     rawExec(`UPDATE project_assignments SET archived_at='2026-03-03' WHERE id=${assignmentId}`);
     profile = (await loadWorkspaceFinancials()).costsByProject.get(projectId)!;

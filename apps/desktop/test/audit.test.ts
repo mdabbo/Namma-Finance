@@ -10,7 +10,13 @@ import { createContract } from "../src/repositories/contracts";
 import { createCertificate, setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment, deletePayment, updatePayment } from "../src/repositories/payments";
 import { createStage, deleteStage, updateStage } from "../src/repositories/stages";
-import { finalizePendingRestoreAudit, listAuditRecords, listEntityHistory, listRecentAuditRecords } from "../src/repositories/audit";
+import {
+  finalizePendingRestoreAudit,
+  listAuditRecords,
+  listEntityHistory,
+  listProjectAuditRecords,
+  listRecentAuditRecords,
+} from "../src/repositories/audit";
 
 beforeEach(() => resetDb());
 
@@ -94,6 +100,23 @@ describe("Milestone 8 immutable audit trail", () => {
       "UPDATE",
       "DELETE",
     ]);
+  });
+
+  it("isolates project activity and hides financial events from engineer feeds", async () => {
+    const clientId = await createClient({ name: "Workspace Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("WORK-2026-001", { name: "Workspace Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const otherProjectId = await createProject("WORK-2026-002", { name: "Other Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const stageId = await createStage({ projectId, name: "IFC", sortOrder: 0, startDate: null, endDate: null, status: "PLANNED", completionBp: 0, engineers: null, notes: null });
+    const contractId = await createContract({ projectId, number: "WORK-C-1", title: null, valueMinor: 1_000_00, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-01-01", notes: null });
+
+    const full = await listProjectAuditRecords(projectId, 20);
+    expect(full.some((row) => row.entityType === "contract" && row.entityId === contractId)).toBe(true);
+    expect(full.some((row) => row.entityType === "project_stage" && row.entityId === stageId)).toBe(true);
+    expect(full.some((row) => row.entityType === "project" && row.entityId === otherProjectId)).toBe(false);
+
+    const operational = await listProjectAuditRecords(projectId, 20, true);
+    expect(operational.some((row) => row.entityType === "contract")).toBe(false);
+    expect(operational.every((row) => ["project", "project_stage", "time_entry"].includes(row.entityType))).toBe(true);
   });
 
   it("keeps UUID-only timelines isolated and records the running app version", async () => {

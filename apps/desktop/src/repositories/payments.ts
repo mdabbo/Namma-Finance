@@ -82,6 +82,15 @@ export async function listPaymentsByContract(contractId: number): Promise<Paymen
   return rows.map(mapPayment);
 }
 
+export async function listPaymentsByProject(projectId: number): Promise<PaymentListItem[]> {
+  const rows = await select<PaymentRow>(
+    `${LIST_SQL} AND p.id=$1 AND pm.deleted_at IS NULL AND pm.voided_at IS NULL
+     ORDER BY pm.date DESC, pm.id DESC`,
+    [projectId],
+  );
+  return rows.map(mapPayment);
+}
+
 export async function getPayment(id: number): Promise<PaymentListItem | null> {
   const row = await selectOne<PaymentRow>(`${LIST_SQL} AND pm.id=$1 AND pm.deleted_at IS NULL AND pm.voided_at IS NULL`, [id]);
   return row ? mapPayment(row) : null;
@@ -361,6 +370,12 @@ export function usePayments(includeVoided = false) {
 }
 export function usePaymentsByContract(contractId: number) {
   return useQuery({ queryKey: ["payments", "contract", contractId], queryFn: () => listPaymentsByContract(contractId) });
+}
+export function usePaymentsByProject(projectId: number) {
+  return useQuery({
+    queryKey: ["payments", "project", projectId],
+    queryFn: () => listPaymentsByProject(projectId),
+  });
 }
 export function usePaymentAllocations(paymentId: number) {
   return useQuery({ queryKey: ["payments", paymentId, "allocations"], queryFn: () => listAllocationsByPayment(paymentId) });
