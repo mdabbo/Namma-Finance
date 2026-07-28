@@ -88,6 +88,8 @@ import {
   projectActivityDestination,
   projectAttentionSummary,
   projectTabsForRole,
+  readModelAmount,
+  UNKNOWN_AMOUNT,
   type ProjectFinanceView,
   type ProjectWorkspaceTab,
 } from "./projectWorkspaceModel";
@@ -127,7 +129,7 @@ export function ProjectDetailPage() {
 
   const { data: project } = useProject(projectId);
   const { data: contracts = [] } = useContractsByProject(projectId);
-  const { data: financials } = useWorkspaceFinancials();
+  const { data: financials, isPending: financialsPending } = useWorkspaceFinancials();
   const { data: expenses = [] } = useExpensesByProject(projectId);
   const { data: assignments = [] } = useAssignmentsByProject(projectId);
   const { data: payments = [] } = usePaymentsByProject(projectId);
@@ -270,6 +272,7 @@ export function ProjectDetailPage() {
           projectId={projectId}
           projectCurrency={project.currency}
           financials={financials}
+          financialsPending={financialsPending}
           expenses={expenses}
           payments={payments}
           activeView={financeView}
@@ -281,6 +284,7 @@ export function ProjectDetailPage() {
         <ProjectTeam
           assignments={assignments}
           financials={financials}
+          financialsPending={financialsPending}
           onAdd={() => setAddingMember(true)}
         />
       )}
@@ -838,6 +842,7 @@ function ProjectFinance({
   projectId,
   projectCurrency,
   financials,
+  financialsPending,
   expenses,
   payments,
   activeView,
@@ -846,6 +851,7 @@ function ProjectFinance({
   projectId: number;
   projectCurrency: string;
   financials: WorkspaceFinancials | undefined;
+  financialsPending: boolean;
   expenses: ExpenseListItem[];
   payments: PaymentListItem[];
   activeView: ProjectFinanceView;
@@ -1010,10 +1016,12 @@ function ProjectFinance({
       value: (payment) =>
         financials?.cashIn.find((item) => item.paymentId === payment.id)
           ?.egpMinor ?? 0,
+      // Never print a zero the read model did not produce: until the audited
+      // snapshot resolves, the consolidated amount is unknown, not nil.
       render: (payment) =>
-        base.format(
-          financials?.cashIn.find((item) => item.paymentId === payment.id)
-            ?.egpMinor ?? 0,
+        readModelAmount(
+          financials?.cashIn.find((item) => item.paymentId === payment.id),
+          (cash) => base.format(cash.egpMinor),
         ),
       align: "end",
     },
@@ -1171,6 +1179,7 @@ function ProjectFinance({
           columns={certificateColumns}
           rowKey={(row) => row.certificate.id}
           density="compact"
+          loading={financialsPending}
           onRowClick={() => navigate("/finance/certificates")}
           toolbar={
             <Select
@@ -1260,6 +1269,7 @@ function ProjectFinance({
           columns={receivableColumns}
           rowKey={(row) => row.certificate.id}
           density="compact"
+          loading={financialsPending}
           onRowClick={() => navigate(`/finance/receivables?projectId=${projectId}`)}
           emptyMessage={t("projects.emptyReceivables")}
         />
@@ -1271,10 +1281,12 @@ function ProjectFinance({
 function ProjectTeam({
   assignments,
   financials,
+  financialsPending,
   onAdd,
 }: {
   assignments: AssignmentListItem[];
   financials: WorkspaceFinancials | undefined;
+  financialsPending: boolean;
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
@@ -1308,17 +1320,18 @@ function ProjectTeam({
         }),
       align: "end",
     },
+    // Payout figures belong to the audited read model. Until it resolves,
+    // these columns show "unknown", never a fabricated zero balance.
     {
       key: "accrued",
       header: t("projects.teamAccrued"),
       value: (assignment) =>
         accountOf(assignment.id)?.accruedMinor ?? 0,
       render: (assignment) =>
-        fmt.money(
-          accountOf(assignment.id)?.accruedMinor ?? 0,
-          assignment.currency,
-          { compactFraction: true },
-        ),
+        readModelAmount(accountOf(assignment.id), (account) =>
+          fmt.money(account.accruedMinor, assignment.currency, {
+            compactFraction: true,
+          })),
       align: "end",
     },
     {
@@ -1326,11 +1339,10 @@ function ProjectTeam({
       header: t("people.paidToDate"),
       value: (assignment) => accountOf(assignment.id)?.paidMinor ?? 0,
       render: (assignment) =>
-        fmt.money(
-          accountOf(assignment.id)?.paidMinor ?? 0,
-          assignment.currency,
-          { compactFraction: true },
-        ),
+        readModelAmount(accountOf(assignment.id), (account) =>
+          fmt.money(account.paidMinor, assignment.currency, {
+            compactFraction: true,
+          })),
       align: "end",
     },
     {
@@ -1338,11 +1350,12 @@ function ProjectTeam({
       header: t("team.dueNow"),
       value: (assignment) => accountOf(assignment.id)?.dueMinor ?? 0,
       render: (assignment) => {
-        const due = accountOf(assignment.id)?.dueMinor ?? 0;
-        return due > 0 ? (
+        const account = accountOf(assignment.id);
+        if (!account) return <span className="text-muted">{UNKNOWN_AMOUNT}</span>;
+        return account.dueMinor > 0 ? (
           <Badge
             tone="warning"
-            label={fmt.money(due, assignment.currency, {
+            label={fmt.money(account.dueMinor, assignment.currency, {
               compactFraction: true,
             })}
           />
@@ -1387,6 +1400,7 @@ function ProjectTeam({
           columns={columns}
           rowKey={(assignment) => assignment.id}
           density="compact"
+          loading={financialsPending}
           onRowClick={(assignment) =>
             navigate(`/team/people/${assignment.personId}`)
           }

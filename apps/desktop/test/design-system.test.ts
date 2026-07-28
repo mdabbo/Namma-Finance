@@ -22,7 +22,7 @@ import {
 } from "../src/components/ui";
 import { MoneyInput, parseMoneyInputEdit } from "../src/components/MoneyInput";
 import { buildCsv, isInteractiveTableTarget, type Column } from "../src/components/DataTable";
-import { parseToMinor } from "../src/lib/format";
+import { minorToInput, parseToMinor } from "../src/lib/format";
 
 beforeAll(async () => {
   await i18next.use(initReactI18next).init({
@@ -117,6 +117,34 @@ describe("Milestone 2 design system", () => {
     expect(csv).toContain(",-500");
     // The actions column has no value and is not exported.
     expect(csv.split("\r\n")[2]).toBe("'+PC2,plain,1200");
+  });
+
+  /**
+   * Milestone 4-5 independent-audit regression. `value` carries integer minor
+   * units so sorting stays exact; exporting it verbatim wrote piasters into a
+   * column a spreadsheet sums as pounds — a silent 100x overstatement.
+   */
+  it("exports money columns as major units, never raw minor units", () => {
+    interface Row { unpaidMinor: number; currency: string }
+    const columns: Column<Row>[] = [
+      { key: "currency", header: "Currency", value: (row) => row.currency },
+      {
+        key: "unpaid",
+        header: "Unpaid",
+        value: (row) => row.unpaidMinor,
+        exportValue: (row) => minorToInput(row.unpaidMinor, 2),
+      },
+    ];
+    const csv = buildCsv(columns, [
+      { unpaidMinor: 50_000, currency: "EGP" },
+      { unpaidMinor: 1_234_56, currency: "USD" },
+    ]);
+    const lines = csv.split("\r\n");
+    expect(lines[1]).toBe("EGP,500");
+    expect(lines[2]).toBe("USD,1234.56");
+    // The sortable minor-unit value must never reach the file.
+    expect(csv).not.toContain("50000");
+    expect(csv).not.toContain("123456");
   });
 
   it("does not treat nested table controls as row activation", () => {

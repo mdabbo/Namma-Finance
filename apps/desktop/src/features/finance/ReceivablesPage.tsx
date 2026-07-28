@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AlarmClock, CalendarClock, CircleDollarSign } from "lucide-react";
 import {
+  currencyInfo,
   selectOpenReceivables,
   selectUpcomingCollections,
   type ReceivableCertificate,
@@ -12,7 +13,7 @@ import { usePaymentMutations } from "../../repositories/payments";
 import { DataTable, type Column } from "../../components/DataTable";
 import { KpiCard } from "../../components/KpiCard";
 import { Badge, Button, PageHeader } from "../../components/ui";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
 import { financeContractInputs, inProjectScope, parseFinanceScope } from "./financeSectionModel";
@@ -122,9 +123,18 @@ export function ReceivablesPage() {
       ),
     },
     {
+      key: "currency",
+      header: t("common.currency"),
+      value: (row) => row.currency,
+      width: "90px",
+    },
+    {
       key: "unpaid",
       header: t("certificates.unpaid"),
       value: (row) => row.unpaidMinor,
+      // Sorting uses exact minor units; the export must carry major units so a
+      // spreadsheet does not sum piasters as if they were pounds.
+      exportValue: (row) => minorToInput(row.unpaidMinor, currencyInfo(row.currency).exponent),
       render: (row) => (
         <span className={`font-medium tnum ${row.overdue ? "text-red-600 dark:text-red-400" : ""}`}>
           {fmt.money(row.unpaidMinor, row.currency)}
@@ -134,8 +144,10 @@ export function ReceivablesPage() {
     },
     {
       key: "unpaidBase",
-      header: t("financeSection.consolidated"),
+      header: `${t("financeSection.consolidated")} (${base.code})`,
       value: (row) => row.unpaidEgp,
+      exportValue: (row) =>
+        minorToInput(base.convert(row.unpaidEgp), currencyInfo(base.code).exponent),
       render: (row) => <span className="tnum">{base.format(row.unpaidEgp)}</span>,
       align: "end",
     },

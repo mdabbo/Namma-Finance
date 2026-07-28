@@ -31,6 +31,12 @@ export interface Column<T> {
   header: string;
   /** Value used for sorting and text filtering. */
   value?: (row: T) => string | number | null;
+  /**
+   * Value written to CSV, defaulting to `value`. Money columns MUST set this:
+   * `value` carries integer minor units for exact sorting, which a spreadsheet
+   * would otherwise sum as if it were a major-unit amount.
+   */
+  exportValue?: (row: T) => string | number | null;
   render?: (row: T) => ReactNode;
   sortable?: boolean;
   align?: "start" | "end";
@@ -90,7 +96,9 @@ const NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
  * (plain negative numbers stay untouched so amounts import correctly).
  */
 export function buildCsv<T>(columns: Column<T>[], rows: T[]): string {
-  const exportable = columns.filter((column) => column.value);
+  const exportable = columns
+    .filter((column) => column.exportValue ?? column.value)
+    .map((column) => ({ header: column.header, cell: (column.exportValue ?? column.value)! }));
   const escape = (value: string | number | null | undefined) => {
     const raw = value === null || value === undefined ? "" : String(value);
     const guarded = /^[=+@\t\r]/.test(raw) || (raw.startsWith("-") && !NUMERIC_CELL.test(raw))
@@ -100,7 +108,7 @@ export function buildCsv<T>(columns: Column<T>[], rows: T[]): string {
   };
   const lines = [
     exportable.map((column) => escape(column.header)).join(","),
-    ...rows.map((row) => exportable.map((column) => escape(column.value!(row))).join(",")),
+    ...rows.map((row) => exportable.map((column) => escape(column.cell(row))).join(",")),
   ];
   // UTF-8 BOM so Excel opens Arabic text correctly.
   return "﻿" + lines.join("\r\n") + "\r\n";
