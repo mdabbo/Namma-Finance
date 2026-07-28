@@ -86,7 +86,8 @@ const LIST_SQL = `
   JOIN contracts ct ON ct.id = pc.contract_id
   JOIN projects p ON p.id = ct.project_id
   JOIN clients cl ON cl.id = p.client_id
-  WHERE pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL`;
+  WHERE pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+    AND ct.archived_at IS NULL AND p.archived_at IS NULL`;
 
 export async function listCertificates(): Promise<CertificateListItem[]> {
   const rows = await select<CertificateRow>(`${LIST_SQL} ORDER BY pc.date DESC, pc.id DESC`);

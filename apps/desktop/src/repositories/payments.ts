@@ -70,7 +70,7 @@ const LIST_SQL = `
   JOIN contracts ct ON ct.id = pm.contract_id
   JOIN projects p ON p.id = ct.project_id
   JOIN clients cl ON cl.id = p.client_id
-  WHERE 1=1`;
+  WHERE ct.archived_at IS NULL AND p.archived_at IS NULL`;
 
 export async function listPayments(includeVoided = false): Promise<PaymentListItem[]> {
   const rows = await select<PaymentRow>(`${LIST_SQL} ${includeVoided ? "" : "AND pm.deleted_at IS NULL AND pm.voided_at IS NULL"} ORDER BY pm.date DESC, pm.id DESC`);

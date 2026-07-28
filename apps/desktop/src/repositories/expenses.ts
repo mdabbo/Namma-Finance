@@ -61,6 +61,7 @@ export async function listExpenses(): Promise<ExpenseListItem[]> {
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
      WHERE e.voided_at IS NULL AND e.archived_at IS NULL
+       AND (e.project_id IS NULL OR p.archived_at IS NULL)
      ORDER BY e.date DESC, e.id DESC`,
   );
   return rows.map(mapExpense);
@@ -73,6 +74,7 @@ export async function listExpensesByProject(projectId: number): Promise<ExpenseL
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
      WHERE e.project_id = $1 AND e.voided_at IS NULL AND e.archived_at IS NULL
+       AND p.archived_at IS NULL
      ORDER BY e.date DESC, e.id DESC`,
     [projectId],
   );
