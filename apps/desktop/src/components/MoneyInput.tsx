@@ -1,19 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type InputHTMLAttributes } from "react";
 import { currencyInfo } from "@mep/core";
 import { minorToInput, parseToMinor } from "../lib/format";
 import { Input, cx } from "./ui";
 
-interface MoneyInputProps {
+interface MoneyInputProps
+  extends Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onChange" | "inputMode"> {
   valueMinor: number | null;
   onChange: (minor: number | null) => void;
   currency?: string;
-  className?: string;
-  placeholder?: string;
-  disabled?: boolean;
 }
 
 /** Text field that edits integer minor units as a human decimal amount. */
-export function MoneyInput({ valueMinor, onChange, currency = "EGP", className, placeholder, disabled }: MoneyInputProps) {
+export function MoneyInput({
+  valueMinor,
+  onChange,
+  currency = "EGP",
+  className,
+  placeholder,
+  disabled,
+  "aria-invalid": ariaInvalid,
+  ...inputProps
+}: MoneyInputProps) {
   const exponent = currencyInfo(currency).exponent;
   const [text, setText] = useState(() => minorToInput(valueMinor, exponent));
   const [invalid, setInvalid] = useState(false);
@@ -33,8 +40,9 @@ export function MoneyInput({ valueMinor, onChange, currency = "EGP", className, 
         dir="ltr"
         value={text}
         disabled={disabled}
+        aria-invalid={ariaInvalid ?? invalid}
         placeholder={placeholder ?? "0.00"}
-        className={cx("pe-14 text-end tnum", invalid && "!border-red-400")}
+        className="pe-14 text-end tnum"
         onChange={(e) => {
           const raw = e.target.value;
           setText(raw);
@@ -47,8 +55,11 @@ export function MoneyInput({ valueMinor, onChange, currency = "EGP", className, 
           setInvalid(minor === null);
           if (minor !== null) onChange(minor);
         }}
+        {...inputProps}
       />
-      <span className="pointer-events-none absolute end-3 top-1.5 text-xs font-medium text-slate-400">{currency}</span>
+      <span className="pointer-events-none absolute inset-y-0 end-3 flex items-center text-xs font-medium text-muted">
+        {currency}
+      </span>
     </div>
   );
 }

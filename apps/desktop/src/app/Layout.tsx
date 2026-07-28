@@ -71,7 +71,7 @@ export function Layout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <aside className="flex w-56 shrink-0 flex-col border-e border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <aside className="flex w-56 shrink-0 flex-col border-e border-border-subtle bg-surface">
         <div className="flex items-center gap-2.5 px-4 py-4">
           <img src={logoUrl} alt="NAMAA" className="h-10 w-10 shrink-0" />
           <div>
@@ -92,7 +92,7 @@ export function Layout() {
                   "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   isActive
                     ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
-                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+                    : "text-slate-600 hover:bg-surface-subtle dark:text-slate-300",
                 )}
               >
                 <Icon size={17} />
@@ -101,14 +101,14 @@ export function Layout() {
             );
           })}
         </nav>
-        <div className="border-t border-slate-200 p-3 text-[11px] text-slate-400 dark:border-slate-800">
+        <div className="border-t border-border-subtle p-3 text-[11px] text-muted">
           <Receipt size={12} className="mb-1" />
           {t("dashboard.consolidatedNote", { currency: settings?.baseCurrency ?? "EGP" })}
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 dark:border-slate-800 dark:bg-slate-900">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border-subtle bg-surface px-5">
           <nav aria-label={t("nav.breadcrumbs")} className="min-w-0">
             <ol className="flex min-w-0 items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
               {breadcrumbs.map((item, index) => (
@@ -131,7 +131,7 @@ export function Layout() {
             <button
               onClick={openSearch}
               title={t("common.searchPlaceholder")}
-              className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-400 transition-colors hover:border-brand-300 hover:text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:hover:text-slate-300"
+              className="flex items-center gap-2 rounded-full border border-border-subtle bg-surface-subtle px-3 py-1 text-xs text-muted transition-colors hover:border-brand-300 hover:text-slate-700 dark:hover:text-slate-200"
             >
               <Search size={13} />
               {t("common.search")}
@@ -168,7 +168,7 @@ export function Layout() {
           </div>
         </header>
         {secondary.length > 0 && (
-          <div className="flex h-11 shrink-0 items-end border-b border-slate-200 bg-white px-5 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex h-11 shrink-0 items-end border-b border-border-subtle bg-surface px-5">
             <nav aria-label={t("nav.sectionNavigation")} className="flex max-w-full gap-1 overflow-x-auto">
               {secondary.map((item) => {
                 const isActive = activeSecondary === item.id;

@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { usePaymentMutations, usePayments, type PaymentListItem } from "../../repositories/payments";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, Select } from "../../components/ui";
+import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { useFormat } from "../../lib/format";
 import { PaymentForm } from "./PaymentForm";
 
@@ -67,18 +67,21 @@ export function PaymentsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("payments.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("payments.newPayment")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("payments.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("payments.newPayment")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         toolbar={<>
           <Select className="!w-48" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
             <option value="">{t("payments.kind")}: {t("common.all")}</option>

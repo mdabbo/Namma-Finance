@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { cx } from "../../components/ui";
+import { PageHeader, cx } from "../../components/ui";
 import { CashflowView } from "./CashflowView";
 import { ProfitabilityView } from "./ProfitabilityView";
 import { CostingView } from "./CostingView";
@@ -25,7 +25,7 @@ export function ReportsPage() {
 
   return (
     <div>
-      <h1 className="mb-4 text-xl font-semibold">{t("reports.title")}</h1>
+      <PageHeader title={t("reports.title")} />
       <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-800">
         {TABS.map(({ key, label }) => (
           <button

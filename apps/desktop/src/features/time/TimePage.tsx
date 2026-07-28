@@ -8,7 +8,7 @@ import { usePeople } from "../../repositories/people";
 import { useStagesByProject } from "../../repositories/stages";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, Field, Input, Modal, Select } from "../../components/ui";
+import { Badge, Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
 import { todayIso, useFormat } from "../../lib/format";
 
 /** Parse a decimal-hours string into whole minutes. "1.5" → 90. */
@@ -84,23 +84,30 @@ export function TimePage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{t("time.title")}</h1>
-          <p className="text-xs text-slate-400">
-            {t("time.totalHours")}: <span className="tnum">{Math.round(totalHours * 10) / 10}{t("time.hoursShort")}</span>
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("time.newEntry")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("time.title")}
+        description={
+          <>
+            {t("time.totalHours")}:{" "}
+            <span className="tnum">
+              {Math.round(totalHours * 10) / 10}
+              {t("time.hoursShort")}
+            </span>
+          </>
+        }
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("time.newEntry")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={entries}
         columns={columns}
         rowKey={(e) => e.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
       />
 
       {editing !== null && (
@@ -189,7 +196,7 @@ export function TimeEntryForm({
           </Select>
         </Field>
         <Field label={t("common.date")}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("projects.single")} error={errors.projectId}>
           <Select

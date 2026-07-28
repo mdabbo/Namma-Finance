@@ -6,7 +6,7 @@ import { personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/co
 import { usePeople, usePeopleMutations, type PersonListItem } from "../../repositories/people";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { Badge, Button, Field, Input, Modal, PageHeader, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useFormat } from "../../lib/format";
 
@@ -65,19 +65,22 @@ export function PeoplePage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("people.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("people.newPerson")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("people.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("people.newPerson")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/team/people/${p.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
         toolbar={<>
           <Select className="!w-40" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>

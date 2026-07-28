@@ -22,7 +22,7 @@ import {
 } from "../../repositories/people";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useProjects } from "../../repositories/projects";
-import { Badge, Button, Card, EmptyState, Field, Input, Modal, RatioBar, Select, Textarea } from "../../components/ui";
+import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, RatioBar, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { PrintPortal } from "../../components/PrintPortal";
 import { todayIso, useFormat } from "../../lib/format";
@@ -460,7 +460,7 @@ function PersonPaymentForm({
     <Modal title={`${t("people.newPayment")} — ${assignment.projectName}`} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
         <Field label={t("common.date")}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("common.amount")} error={errors.amountMinor}>
           <MoneyInput currency={assignment.currency} valueMinor={form.amountMinor} onChange={(v) => setForm((f) => ({ ...f, amountMinor: v ?? 0 }))} />

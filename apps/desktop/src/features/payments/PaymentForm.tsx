@@ -6,7 +6,7 @@ import { listAllocationsByPayment, nextPaymentNumber } from "../../repositories/
 import { useProjects } from "../../repositories/projects";
 import { useContractsByProject } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
-import { Button, Card, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { Button, Card, DateInput, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
 import { useSettings } from "../../lib/settings";
@@ -191,7 +191,7 @@ export function PaymentForm({ initial, defaults, onSubmit, onClose, busy }: Paym
           <Input value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))} className="tnum" />
         </Field>
         <Field label={t("common.date")} error={errors.date}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("common.amount")} error={errors.amountMinor}>
           <MoneyInput currency={currency} valueMinor={form.amountMinor} onChange={(v) => setForm((f) => ({ ...f, amountMinor: v ?? 0 }))} />

@@ -8,7 +8,7 @@ import { useClientMutations, useClients, clientCascadeInfo, type ClientListItem 
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button } from "../../components/ui";
+import { Badge, Button, PageHeader } from "../../components/ui";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { ClientForm } from "./ClientForm";
 
@@ -96,13 +96,15 @@ export function ClientsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("clients.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} />
-          {t("clients.newClient")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("clients.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" />
+            {t("clients.newClient")}
+          </Button>
+        }
+      />
 
       <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
         <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
@@ -114,7 +116,8 @@ export function ClientsPage() {
         columns={columns}
         rowKey={(c) => c.id}
         onRowClick={(c) => { if (!c.archivedAt) navigate(`/projects/clients/${c.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
       />
 

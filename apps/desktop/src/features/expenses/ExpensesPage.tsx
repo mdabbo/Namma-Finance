@@ -7,7 +7,7 @@ import { useProjects } from "../../repositories/projects";
 import { useCurrencyRates } from "../../repositories/currencies";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Button, Field, Input, Modal, Select } from "../../components/ui";
+import { Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -84,18 +84,21 @@ export function ExpensesPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("expenses.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("expenses.newExpense")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("expenses.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("expenses.newExpense")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(e) => e.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         toolbar={
           <>
             <Select className="!w-44" value={categoryFilter} onChange={(e) => setCategoryFilter(Number(e.target.value))}>
@@ -195,7 +198,7 @@ function ExpenseForm({
     <Modal title={initial ? t("common.edit") : t("expenses.newExpense")} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
         <Field label={t("common.date")}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("expenses.category")} error={errors.categoryId}>
           <Select value={form.categoryId} onChange={(e) => setForm((f) => ({ ...f, categoryId: Number(e.target.value) }))}>

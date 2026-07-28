@@ -17,7 +17,7 @@ import {
   type DrawingLine,
   type PercentMilestone,
 } from "@mep/core";
-import { Button, Card, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
+import { Button, Card, DateInput, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { bpToInput, parseToBp, useFormat } from "../../lib/format";
 import { useStagesByProject } from "../../repositories/stages";
@@ -207,7 +207,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
           <Input value={form.performanceBondBank} onChange={(e) => setForm((f) => ({ ...f, performanceBondBank: e.target.value }))} />
         </Field>
         <Field label={t("contracts.performanceBondExpiry")}>
-          <Input type="date" value={form.performanceBondExpiry} onChange={(e) => setForm((f) => ({ ...f, performanceBondExpiry: e.target.value }))} />
+          <DateInput value={form.performanceBondExpiry} onChange={(e) => setForm((f) => ({ ...f, performanceBondExpiry: e.target.value }))} />
         </Field>
 
         <Field label={t("contracts.paymentTerms")}>
@@ -221,7 +221,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
           />
         </Field>
         <Field label={t("contracts.signedDate")}>
-          <Input type="date" value={form.signedDate} onChange={(e) => setForm((f) => ({ ...f, signedDate: e.target.value }))} />
+          <DateInput value={form.signedDate} onChange={(e) => setForm((f) => ({ ...f, signedDate: e.target.value }))} />
         </Field>
         <Field label={t("common.notes")} className="col-span-3">
           <Textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
@@ -229,7 +229,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
         {initial && (
           <>
             <Field label={t("contracts.revisionEffectiveDate")}>
-              <Input type="date" value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
+              <DateInput value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
             </Field>
             <Field label={t("contracts.revisionReason")} className="col-span-2">
               <Input value={revisionReason} placeholder={t("contracts.revisionReasonHint")} onChange={(e) => setRevisionReason(e.target.value)} />

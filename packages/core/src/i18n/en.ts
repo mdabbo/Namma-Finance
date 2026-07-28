@@ -51,6 +51,8 @@ export const en = {
     rows: "rows",
     of: "of",
     page: "Page",
+    previousPage: "Previous page",
+    nextPage: "Next page",
     created: "Created",
     updated: "Updated",
     name: "Name",

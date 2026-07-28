@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { GanttChartSquare, LayoutTemplate, Plus, Trash2 } from "lucide-react";
 import { STANDARD_STAGE_KEYS, stageSchema, type ProjectStage, type StageInput, type StageStatus } from "@mep/core";
 import { useStagesByProject, useStageMutations } from "../../repositories/stages";
-import { Badge, Button, Card, EmptyState, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
+import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
 import { useFormat, todayIso } from "../../lib/format";
 
 const STAGE_BADGE: Record<StageStatus, string> = {
@@ -264,10 +264,10 @@ function StageForm({
           <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
         </Field>
         <Field label={t("projects.startDate")}>
-          <Input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
+          <DateInput value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
         </Field>
         <Field label={t("projects.endDate")}>
-          <Input type="date" value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
+          <DateInput value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
         </Field>
         <Field label={t("common.status")}>
           <Select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as StageStatus }))}>

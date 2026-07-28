@@ -8,7 +8,7 @@ import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings } from "../../lib/settings";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, RatioBar, Select } from "../../components/ui";
+import { Badge, Button, PageHeader, RatioBar, Select } from "../../components/ui";
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { ProjectForm } from "./ProjectForm";
@@ -104,23 +104,26 @@ export function ProjectsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("projects.title")}</h1>
-        <Button
-          variant="primary"
-          onClick={async () => setCreating(await nextProjectCode(settings?.projectCodePrefix ?? "PRJ"))}
-        >
-          <Plus size={16} />
-          {t("projects.newProject")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("projects.title")}
+        actions={
+          <Button
+            variant="primary"
+            onClick={async () => setCreating(await nextProjectCode(settings?.projectCodePrefix ?? "PRJ"))}
+          >
+            <Plus size={16} aria-hidden="true" />
+            {t("projects.newProject")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/projects/${p.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         toolbar={
           <>
             <Select className="!w-40" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as ProjectStatus | "")}>

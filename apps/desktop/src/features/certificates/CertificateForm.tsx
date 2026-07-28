@@ -11,7 +11,7 @@ import type { CertificateListItem } from "../../repositories/certificates";
 import { useProjects } from "../../repositories/projects";
 import { useContractsByProject } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
-import { Button, Card, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { Button, Card, DateInput, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { todayIso, useFormat } from "../../lib/format";
 import { useSettings } from "../../lib/settings";
@@ -154,13 +154,13 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
         </Field>
 
         <Field label={t("common.date")}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("certificates.submissionDate")}>
-          <Input type="date" value={form.submissionDate} onChange={(e) => setForm((f) => ({ ...f, submissionDate: e.target.value }))} />
+          <DateInput value={form.submissionDate} onChange={(e) => setForm((f) => ({ ...f, submissionDate: e.target.value }))} />
         </Field>
         <Field label={t("certificates.dueDateOverride")}>
-          <Input type="date" value={form.dueDateOverride} onChange={(e) => setForm((f) => ({ ...f, dueDateOverride: e.target.value }))} />
+          <DateInput value={form.dueDateOverride} onChange={(e) => setForm((f) => ({ ...f, dueDateOverride: e.target.value }))} />
         </Field>
 
         <Field label={t("certificates.gross")} error={errors.grossMinor}>

@@ -34,7 +34,7 @@ export function ConfirmDialog({ title, message, details, confirmLabel, onConfirm
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={onCancel}>{t("common.cancel")}</Button>
-        <Button variant="danger" onClick={onConfirm} disabled={busy}>
+        <Button variant="danger" onClick={onConfirm} disabled={busy} aria-busy={busy}>
           {confirmLabel ?? t("common.delete")}
         </Button>
       </div>

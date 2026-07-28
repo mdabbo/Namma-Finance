@@ -53,6 +53,8 @@ export const ar: Dictionary = {
     rows: "صفوف",
     of: "من",
     page: "صفحة",
+    previousPage: "الصفحة السابقة",
+    nextPage: "الصفحة التالية",
     created: "تاريخ الإنشاء",
     updated: "آخر تعديل",
     name: "الاسم",

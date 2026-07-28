@@ -11,7 +11,7 @@ import { useCurrencyMutations, useCurrencyRates } from "../../repositories/curre
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
 import { invalidateSyncClient, useLastSyncReport, useSyncMutations, useSyncSession } from "../../repositories/sync";
-import { Button, Card, Field, Input, Select, cx } from "../../components/ui";
+import { Button, Card, Field, Input, PageHeader, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
 import { listOpenSyncConflicts, resolveSyncConflict, type SyncConflictResolution } from "../../repositories/syncConflicts";
@@ -38,7 +38,7 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-4xl">
-      <h1 className="mb-4 text-xl font-semibold">{t("settings.title")}</h1>
+      <PageHeader title={t("settings.title")} />
 
       <div className="space-y-4">
         <Card className="p-5">

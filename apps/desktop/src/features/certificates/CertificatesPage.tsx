@@ -7,7 +7,7 @@ import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { PrintPortal } from "../../components/PrintPortal";
-import { Badge, Button, Select } from "../../components/ui";
+import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { todayIso, useFormat } from "../../lib/format";
 import { usePaymentMutations } from "../../repositories/payments";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
@@ -134,18 +134,21 @@ export function CertificatesPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("certificates.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("certificates.newCertificate")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("certificates.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("certificates.newCertificate")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(c) => c.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         toolbar={
           <Select className="!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CertificateStatus | "")}>
             <option value="">{t("common.status")}: {t("common.all")}</option>
