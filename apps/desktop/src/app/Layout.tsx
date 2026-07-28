@@ -17,7 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useSettings, useUpdateSetting } from "../lib/settings";
-import { allowedPath, homePath, useRole } from "../lib/roles";
+import { allowedPath, canMountRoute, roleRedirectTarget, useRoleAccess } from "../lib/roles";
 import { useAutoSync } from "../repositories/sync";
 import { Button, cx } from "../components/ui";
 import { NotificationBell } from "../components/NotificationBell";
@@ -45,16 +45,18 @@ export function Layout() {
   const { t, i18n } = useTranslation();
   const { data: settings } = useSettings();
   const updateSetting = useUpdateSetting();
-  const { openSearch, SearchPortal } = useSearchPalette();
-  const role = useRole();
+  const { role, rolePending } = useRoleAccess();
+  const { openSearch, SearchPortal } = useSearchPalette(role);
   const location = useLocation();
   const navigate = useNavigate();
   useAutoSync();
 
   // role gate: engineers only reach projects & settings
+  const redirectTarget = roleRedirectTarget(role, location.pathname, rolePending);
+  const routeAuthorized = canMountRoute(role, location.pathname, rolePending);
   useEffect(() => {
-    if (!allowedPath(role, location.pathname)) navigate(homePath(role), { replace: true });
-  }, [role, location.pathname, navigate]);
+    if (redirectTarget) navigate(redirectTarget, { replace: true });
+  }, [redirectTarget, navigate]);
 
   const nav = PRIMARY_NAVIGATION.filter((item) => allowedPath(role, item.to));
   const activeSection = activeSectionForPath(location.pathname);
@@ -191,7 +193,7 @@ export function Layout() {
           </div>
         )}
         <main className="min-h-0 flex-1 overflow-y-auto p-5">
-          <Outlet />
+          {routeAuthorized ? <Outlet /> : null}
         </main>
       </div>
       {SearchPortal}

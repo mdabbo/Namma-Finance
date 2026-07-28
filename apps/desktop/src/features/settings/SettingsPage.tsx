@@ -409,7 +409,12 @@ function UsersSection() {
         .eq("user_id", v.userId);
       if (uError) throw new Error(uError.message);
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["user-roles"] }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["user-roles"] }),
+        qc.invalidateQueries({ queryKey: ["role"] }),
+      ]);
+    },
   });
 
   return (

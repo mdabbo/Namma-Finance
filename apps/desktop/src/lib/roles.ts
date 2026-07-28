@@ -18,10 +18,12 @@ import { loadSettings } from "./settings";
  */
 
 export type Role = "ADMIN" | "ACCOUNTANT" | "ENGINEER";
+export type SearchScope = "FULL" | "PROJECTS_ONLY";
+export const ROLE_REFRESH_INTERVAL_MS = 60_000;
 
 export function allowedPath(role: Role, pathname: string): boolean {
   if (role !== "ENGINEER") return true;
-  if (pathname === "/settings" || pathname.startsWith("/settings/")) return true;
+  if (pathname === "/settings") return true;
   if (pathname === "/projects") return true;
   // Project workspaces use a single numeric-id segment. Keep clients, which
   // now live under /projects/clients, outside the engineer role just as they
@@ -31,6 +33,19 @@ export function allowedPath(role: Role, pathname: string): boolean {
 
 export function homePath(role: Role): string {
   return role === "ENGINEER" ? "/projects" : "/overview";
+}
+
+export function searchScopeForRole(role: Role): SearchScope {
+  return role === "ENGINEER" ? "PROJECTS_ONLY" : "FULL";
+}
+
+export function canMountRoute(role: Role, pathname: string, rolePending: boolean): boolean {
+  return !rolePending && allowedPath(role, pathname);
+}
+
+export function roleRedirectTarget(role: Role, pathname: string, rolePending: boolean): string | null {
+  if (rolePending || canMountRoute(role, pathname, rolePending)) return null;
+  return homePath(role);
 }
 
 /**
@@ -61,9 +76,8 @@ export async function refreshRole(): Promise<Role | null> {
   return role;
 }
 
-/** Effective role for UI gating. Backend RLS remains the authority. */
-export function useRole(): Role {
-  const { data } = useQuery({
+function useRoleQuery() {
+  return useQuery({
     queryKey: ["role"],
     queryFn: async () => {
       const settings = await loadSettings();
@@ -71,8 +85,20 @@ export function useRole(): Role {
       return (await refreshRole()) ?? ("ENGINEER" as Role);
     },
     staleTime: 0,
+    refetchInterval: ROLE_REFRESH_INTERVAL_MS,
+    refetchIntervalInBackground: false,
   });
-  return data ?? "ENGINEER";
+}
+
+/** Effective role and loading state for fail-closed route gating. */
+export function useRoleAccess(): { role: Role; rolePending: boolean } {
+  const { data, isPending } = useRoleQuery();
+  return { role: data ?? "ENGINEER", rolePending: isPending };
+}
+
+/** Effective role for UI gating. Backend RLS remains the authority. */
+export function useRole(): Role {
+  return useRoleAccess().role;
 }
 
 export function useInvalidateRole() {

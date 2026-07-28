@@ -6,7 +6,14 @@ import {
   activeSectionForPath,
   breadcrumbsForPath,
 } from "../src/app/navigation";
-import { allowedPath, homePath } from "../src/lib/roles";
+import {
+  ROLE_REFRESH_INTERVAL_MS,
+  allowedPath,
+  canMountRoute,
+  homePath,
+  roleRedirectTarget,
+  searchScopeForRole,
+} from "../src/lib/roles";
 
 describe("Milestone 1 navigation", () => {
   it("exposes exactly the six approved primary sections", () => {
@@ -76,7 +83,33 @@ describe("Milestone 1 navigation", () => {
     expect(allowedPath("ENGINEER", "/projects/clients/12")).toBe(false);
     expect(allowedPath("ENGINEER", "/finance/certificates")).toBe(false);
     expect(allowedPath("ENGINEER", "/settings")).toBe(true);
+    expect(allowedPath("ENGINEER", "/settings/audit")).toBe(false);
+    expect(allowedPath("ENGINEER", "/audit")).toBe(false);
     expect(homePath("ENGINEER")).toBe("/projects");
     expect(homePath("ACCOUNTANT")).toBe("/overview");
+  });
+
+  it("does not redirect from a restricted fallback role while the real role is loading", () => {
+    expect(roleRedirectTarget("ENGINEER", "/overview", true)).toBeNull();
+    expect(roleRedirectTarget("ADMIN", "/overview", false)).toBeNull();
+    expect(roleRedirectTarget("ENGINEER", "/overview", false)).toBe("/projects");
+  });
+
+  it("never mounts protected route content before or after an engineer role resolves", () => {
+    expect(canMountRoute("ENGINEER", "/finance/payments", true)).toBe(false);
+    expect(canMountRoute("ENGINEER", "/finance/payments", false)).toBe(false);
+    expect(canMountRoute("ENGINEER", "/settings/audit", false)).toBe(false);
+    expect(canMountRoute("ACCOUNTANT", "/finance/payments", false)).toBe(true);
+  });
+
+  it("limits engineer global search to project records", () => {
+    expect(searchScopeForRole("ENGINEER")).toBe("PROJECTS_ONLY");
+    expect(searchScopeForRole("ACCOUNTANT")).toBe("FULL");
+    expect(searchScopeForRole("ADMIN")).toBe("FULL");
+  });
+
+  it("periodically revalidates roles so remote downgrades do not remain cached indefinitely", () => {
+    expect(ROLE_REFRESH_INTERVAL_MS).toBeGreaterThan(0);
+    expect(ROLE_REFRESH_INTERVAL_MS).toBeLessThanOrEqual(60_000);
   });
 });

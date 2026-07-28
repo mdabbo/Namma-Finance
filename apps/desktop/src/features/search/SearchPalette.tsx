@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Banknote, Briefcase, Building2, FileSpreadsheet, Search, Users, Wallet } from "lucide-react";
-import { useClients } from "../../repositories/clients";
-import { useProjects } from "../../repositories/projects";
-import { useCertificates } from "../../repositories/certificates";
-import { usePayments } from "../../repositories/payments";
-import { useExpenses } from "../../repositories/expenses";
-import { usePeople } from "../../repositories/people";
+import { useClients, type ClientListItem } from "../../repositories/clients";
+import { useProjects, type ProjectListItem } from "../../repositories/projects";
+import { useCertificates, type CertificateListItem } from "../../repositories/certificates";
+import { usePayments, type PaymentListItem } from "../../repositories/payments";
+import { useExpenses, type ExpenseListItem } from "../../repositories/expenses";
+import { usePeople, type PersonListItem } from "../../repositories/people";
 import { Input } from "../../components/ui";
+import { searchScopeForRole, type Role } from "../../lib/roles";
 
 interface SearchHit {
   id: string;
@@ -18,7 +19,7 @@ interface SearchHit {
   to: string;
 }
 
-export function useSearchPalette() {
+export function useSearchPalette(role: Role) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -34,21 +35,64 @@ export function useSearchPalette() {
   }, []);
 
   const openSearch = useCallback(() => setOpen(true), []);
-  return { openSearch, SearchPortal: open ? <SearchPalette onClose={() => setOpen(false)} /> : null };
+  const close = useCallback(() => setOpen(false), []);
+  const SearchPortal = open
+    ? searchScopeForRole(role) === "PROJECTS_ONLY"
+      ? <ProjectSearchPalette onClose={close} />
+      : <FullSearchPalette onClose={close} />
+    : null;
+  return { openSearch, SearchPortal };
 }
 
-function SearchPalette({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
+interface SearchData {
+  clients: ClientListItem[];
+  projects: ProjectListItem[];
+  certificates: CertificateListItem[];
+  payments: PaymentListItem[];
+  expenses: ExpenseListItem[];
+  people: PersonListItem[];
+}
 
+function ProjectSearchPalette({ onClose }: { onClose: () => void }) {
+  const { data: projects = [] } = useProjects();
+  return (
+    <SearchPalette
+      onClose={onClose}
+      clients={[]}
+      projects={projects}
+      certificates={[]}
+      payments={[]}
+      expenses={[]}
+      people={[]}
+    />
+  );
+}
+
+function FullSearchPalette({ onClose }: { onClose: () => void }) {
   const { data: clients = [] } = useClients();
   const { data: projects = [] } = useProjects();
   const { data: certificates = [] } = useCertificates();
   const { data: payments = [] } = usePayments();
   const { data: expenses = [] } = useExpenses();
   const { data: people = [] } = usePeople();
+  return (
+    <SearchPalette
+      onClose={onClose}
+      clients={clients}
+      projects={projects}
+      certificates={certificates}
+      payments={payments}
+      expenses={expenses}
+      people={people}
+    />
+  );
+}
+
+function SearchPalette({ onClose, clients, projects, certificates, payments, expenses, people }: SearchData & { onClose: () => void }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
 
   const hits = useMemo<SearchHit[]>(() => {
     const q = query.trim().toLowerCase();
