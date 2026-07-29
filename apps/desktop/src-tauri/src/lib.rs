@@ -2542,30 +2542,8 @@ mod financial_transaction_tests {
             .await
             .unwrap();
         for migration in [
-            include_str!("../migrations/0001_initial.sql"),
-            include_str!("../migrations/0002_seed.sql"),
-            include_str!("../migrations/0003_feedback_round1.sql"),
-            include_str!("../migrations/0004_phase2.sql"),
-            include_str!("../migrations/0005_backfill_team_expenses.sql"),
-            include_str!("../migrations/0006_sync_tracking.sql"),
-            include_str!("../migrations/0007_time_tracking.sql"),
-            include_str!("../migrations/0008_financial_record_lifecycle.sql"),
-            include_str!("../migrations/0009_contract_revisions.sql"),
-            include_str!("../migrations/0010_contract_revision_integrity.sql"),
-            include_str!("../migrations/0011_payment_allocation_integrity.sql"),
-            include_str!("../migrations/0012_audit_log.sql"),
-            include_str!("../migrations/0013_audit_remediation.sql"),
-            include_str!("../migrations/0014_backup_hardening.sql"),
-            include_str!("../migrations/0015_backup_audit_hardening.sql"),
-            include_str!("../migrations/0016_domain_validation.sql"),
-            include_str!("../migrations/0017_domain_validation_audit.sql"),
-            include_str!("../migrations/0018_managed_documents.sql"),
-            include_str!("../migrations/0019_document_cache_isolation.sql"),
-            include_str!("../migrations/0020_sync_conflict_safety.sql"),
-            include_str!("../migrations/0021_sync_conflict_remediation.sql"),
-            include_str!("../migrations/0022_numbering_safety.sql"),
-            include_str!("../migrations/0023_numbering_remediation.sql"),
-            include_str!("../migrations/0024_dashboard_snapshot_audit.sql"),
+            include_str!("../migrations/0001_baseline.sql"),
+            include_str!("../migrations/0002_seed_reference_data.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -2888,149 +2866,22 @@ mod financial_transaction_tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // v0.7.0 database rebase (Milestone 7): the development chain
+    // 0001..0024 is consolidated into one baseline. Schema identity stays
+    // 24 — this baseline recreates exactly that schema — so no database
+    // can claim a version whose shape differs. Development databases from
+    // before the rebase fail the plugin checksum check and must be deleted.
     let migrations = vec![
         Migration {
             version: 1,
-            description: "initial_schema",
-            sql: include_str!("../migrations/0001_initial.sql"),
+            description: "baseline_schema",
+            sql: include_str!("../migrations/0001_baseline.sql"),
             kind: MigrationKind::Up,
         },
         Migration {
             version: 2,
-            description: "seed_defaults",
-            sql: include_str!("../migrations/0002_seed.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "feedback_round1",
-            sql: include_str!("../migrations/0003_feedback_round1.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "phase2_stages_documents_recurring",
-            sql: include_str!("../migrations/0004_phase2.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "backfill_team_payment_expenses",
-            sql: include_str!("../migrations/0005_backfill_team_expenses.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "phase3_sync_tracking",
-            sql: include_str!("../migrations/0006_sync_tracking.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 7,
-            description: "time_tracking",
-            sql: include_str!("../migrations/0007_time_tracking.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 8,
-            description: "financial_record_lifecycle",
-            sql: include_str!("../migrations/0008_financial_record_lifecycle.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 9,
-            description: "contract_revisions",
-            sql: include_str!("../migrations/0009_contract_revisions.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 10,
-            description: "contract_revision_integrity",
-            sql: include_str!("../migrations/0010_contract_revision_integrity.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 11,
-            description: "payment_allocation_integrity",
-            sql: include_str!("../migrations/0011_payment_allocation_integrity.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 12,
-            description: "immutable_financial_audit_log",
-            sql: include_str!("../migrations/0012_audit_log.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 13,
-            description: "audit_log_remediation",
-            sql: include_str!("../migrations/0013_audit_remediation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 14,
-            description: "backup_restore_hardening",
-            sql: include_str!("../migrations/0014_backup_hardening.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 15,
-            description: "backup_audit_hardening",
-            sql: include_str!("../migrations/0015_backup_audit_hardening.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 16,
-            description: "domain_validation",
-            sql: include_str!("../migrations/0016_domain_validation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 17,
-            description: "domain_validation_audit",
-            sql: include_str!("../migrations/0017_domain_validation_audit.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 18,
-            description: "managed_documents",
-            sql: include_str!("../migrations/0018_managed_documents.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 19,
-            description: "document_cache_isolation",
-            sql: include_str!("../migrations/0019_document_cache_isolation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 20,
-            description: "sync_conflict_safety",
-            sql: include_str!("../migrations/0020_sync_conflict_safety.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 21,
-            description: "sync_conflict_remediation",
-            sql: include_str!("../migrations/0021_sync_conflict_remediation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 22,
-            description: "numbering_safety",
-            sql: include_str!("../migrations/0022_numbering_safety.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 23,
-            description: "numbering_remediation",
-            sql: include_str!("../migrations/0023_numbering_remediation.sql"),
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 24,
-            description: "dashboard_snapshot_audit",
-            sql: include_str!("../migrations/0024_dashboard_snapshot_audit.sql"),
+            description: "seed_reference_data",
+            sql: include_str!("../migrations/0002_seed_reference_data.sql"),
             kind: MigrationKind::Up,
         },
     ];

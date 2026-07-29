@@ -19,30 +19,8 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, "..", "src-tauri", "migrations");
 const MIGRATIONS = [
-  "0001_initial.sql",
-  "0002_seed.sql",
-  "0003_feedback_round1.sql",
-  "0004_phase2.sql",
-  "0005_backfill_team_expenses.sql",
-  "0006_sync_tracking.sql",
-  "0007_time_tracking.sql",
-  "0008_financial_record_lifecycle.sql",
-  "0009_contract_revisions.sql",
-  "0010_contract_revision_integrity.sql",
-  "0011_payment_allocation_integrity.sql",
-  "0012_audit_log.sql",
-  "0013_audit_remediation.sql",
-  "0014_backup_hardening.sql",
-  "0015_backup_audit_hardening.sql",
-  "0016_domain_validation.sql",
-  "0017_domain_validation_audit.sql",
-  "0018_managed_documents.sql",
-  "0019_document_cache_isolation.sql",
-  "0020_sync_conflict_safety.sql",
-  "0021_sync_conflict_remediation.sql",
-  "0022_numbering_safety.sql",
-  "0023_numbering_remediation.sql",
-  "0024_dashboard_snapshot_audit.sql",
+  "0001_baseline.sql",
+  "0002_seed_reference_data.sql",
 ];
 
 let db: DatabaseSync | null = null;
