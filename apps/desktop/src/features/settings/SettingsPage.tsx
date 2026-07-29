@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, CloudUpload, DatabaseBackup, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
+import { Building2, CloudUpload, DatabaseBackup, FlaskConical, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, Trash2, UsersRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
@@ -10,6 +10,7 @@ import { disableLock, isLockEnabled, lockErrorMessageKey, setLockPassword } from
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
+import { parseDemoWorkspace, useDemoWorkspaceMutations } from "../../repositories/demo";
 import { invalidateSyncClient, useLastSyncReport, useSyncMutations, useSyncSession } from "../../repositories/sync";
 import { Button, Card, Field, Input, PageHeader, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -250,6 +251,8 @@ export function SettingsPage() {
 
         <SyncSection />
 
+        {full && <DemoDataSection />}
+
         {role === "ADMIN" && <UsersSection />}
 
         {full && (
@@ -469,6 +472,37 @@ function UsersSection() {
 }
 
 /** Phase 3: Supabase cloud sync — connection, sign-in, manual & auto sync. */
+/**
+ * Demo data outlives the onboarding panel: once it exists the workspace has
+ * financial activity and the dashboard leaves its empty state, so removal has
+ * to live somewhere permanent or the sample records could never be withdrawn.
+ */
+function DemoDataSection() {
+  const { t } = useTranslation();
+  const { data: settings } = useSettings();
+  const demo = useDemoWorkspaceMutations();
+  if (!parseDemoWorkspace(settings?.demoWorkspace ?? "")) return null;
+  return (
+    <Card className="p-5">
+      <SectionTitle icon={<FlaskConical size={16} />} title={t("settings.demoData")} />
+      <p className="mb-3 text-xs text-slate-400">{t("settings.demoDataNote")}</p>
+      <Button
+        className="!text-red-600"
+        disabled={demo.remove.isPending}
+        onClick={() => demo.remove.mutate()}
+      >
+        <Trash2 size={14} aria-hidden="true" />
+        {t("onboarding.removeDemo")}
+      </Button>
+      {demo.remove.error && (
+        <p className="mt-3 text-xs text-red-600" dir="ltr">
+          {demo.remove.error instanceof Error ? demo.remove.error.message : String(demo.remove.error)}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 function SyncSection() {
   const { t } = useTranslation();
   const role = useRole();

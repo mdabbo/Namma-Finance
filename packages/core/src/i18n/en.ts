@@ -761,6 +761,8 @@ export const en = {
     companyAddress: "Address",
     companyPhone: "Phone",
     companyProfileNote: "Shown on printed documents and used during onboarding.",
+    demoData: "Demo data",
+    demoDataNote: "This workspace contains clearly marked sample records. Removing them archives every demo project, client and person and voids the demo overhead expense; the audit history of the demo period is kept.",
     currencies: "Currencies & exchange rates",
     ratePerEgp: "EGP per 1",
     syncRates: "Update rates from CBE",

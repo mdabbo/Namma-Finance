@@ -6,6 +6,11 @@ target/
 coverage/
 .vite/
 
+# Playwright run artifacts (baselines under *-snapshots/ ARE committed)
+test-results/
+playwright-report/
+.playwright/
+
 # user financial data — never commit
 recovered-data.db
 *.db
