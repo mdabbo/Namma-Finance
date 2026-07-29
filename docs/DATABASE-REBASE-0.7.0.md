@@ -68,6 +68,25 @@ Move-Item (Join-Path $root "mep-finance.db") (Join-Path $dest "mep-finance.db")
 Backups under `%APPDATA%\com.mepfinance.app\backups\` were taken from the old
 chain. They restore only into a pre-rebase build; treat them as archival.
 
+### Pre-rebase backups are refused, by design
+
+A pre-rebase backup reports `schema_version` 24 — exactly like a rebased
+database — so the version number alone cannot tell them apart. What does is the
+migration lineage recorded in `_sqlx_migrations`: a rebased database starts with
+version 1 `baseline_schema`, an old one with version 1 `initial_schema` and 24
+applied migrations.
+
+Restore validation checks that lineage and fails with:
+
+```
+BACKUP_PREDATES_DATABASE_REBASE
+```
+
+The check runs **before any file is touched**. Without it, restoring an old
+backup would replace the live database with a file the migration plugin then
+refuses to open — an app that no longer starts. To read such a backup, check out
+`pre-db-rebase-v0.6.7` and run that build.
+
 To get data back quickly, use **Load demo workspace** on the empty dashboard
 (Milestone 6) — realistic, clearly marked, and removable.
 

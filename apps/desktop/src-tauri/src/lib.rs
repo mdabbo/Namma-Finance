@@ -1531,6 +1531,12 @@ fn chrono_year_utc() -> i32 {
 const CURRENT_SCHEMA_VERSION: i64 = 24;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
+/// Migration lineage after the v0.7.0 rebase. The schema version stays 24
+/// because the baseline recreates that exact schema, so these describe the
+/// FILE sequence and are what distinguishes a rebased database from one built
+/// by the retired 0001..0024 development chain.
+const CURRENT_MIGRATION_VERSION: i64 = 2;
+const BASELINE_MIGRATION_DESCRIPTION: &str = "baseline_schema";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1947,6 +1953,37 @@ async fn validate_backup_path(path: &std::path::Path) -> Result<BackupInspection
             .map_err(|e| e.to_string())?;
             if found != 1 {
                 return Err(format!("BACKUP_WRONG_APPLICATION: missing table {table}"));
+            }
+        }
+        // The v0.7.0 rebase replaced the migration chain, so the schema
+        // version number can no longer separate a compatible database from an
+        // incompatible one — both report 24. The recorded migration lineage
+        // can. Restoring a pre-rebase backup would swap the live database for
+        // one the migration plugin then refuses to open, leaving an app that
+        // will not start, so it is rejected before anything is touched.
+        let has_migrations_table: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        if has_migrations_table == 1 {
+            let first: Option<String> =
+                sqlx::query_scalar("SELECT description FROM _sqlx_migrations WHERE version=1")
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            let highest: i64 =
+                sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations")
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            let lineage_matches = first
+                .as_deref()
+                .map(|description| description == BASELINE_MIGRATION_DESCRIPTION)
+                .unwrap_or(true);
+            if !lineage_matches || highest > CURRENT_MIGRATION_VERSION {
+                return Err("BACKUP_PREDATES_DATABASE_REBASE".into());
             }
         }
         let mut schema: i64 = sqlx::query_scalar("PRAGMA user_version")
@@ -2549,6 +2586,85 @@ mod financial_transaction_tests {
         }
         stamp_runtime_release(&pool).await.unwrap();
         pool.close().await;
+    }
+
+    /// v0.7.0 rebase regression: a backup taken from the retired 0001..0024
+    /// development chain reports schema_version 24 exactly like a rebased
+    /// database, so the version number cannot separate them. Restoring one
+    /// would replace the live database with a file the migration plugin then
+    /// refuses to open, leaving an app that will not start. Validation must
+    /// reject it on lineage, before any file is touched.
+    #[test]
+    fn backup_validation_rejects_pre_rebase_migration_lineage() {
+        tauri::async_runtime::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let live = dir.path().join("live.db");
+            std::fs::write(&live, b"CURRENT-DATA").unwrap();
+
+            let legacy = dir.path().join("legacy.db");
+            migrated_file(&legacy).await;
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&legacy))
+                .await
+                .unwrap();
+            // Same schema and metadata a real pre-rebase backup carries, but
+            // stamped with the retired chain's migration lineage.
+            sqlx::raw_sql(
+                "CREATE TABLE _sqlx_migrations(version BIGINT PRIMARY KEY, description TEXT NOT NULL,\
+                 installed_on TEXT, success BOOLEAN NOT NULL, checksum BLOB, execution_time BIGINT);",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            for (version, description) in [(1_i64, "initial_schema"), (24_i64, "dashboard_snapshot_audit")] {
+                sqlx::query(
+                    "INSERT INTO _sqlx_migrations(version,description,installed_on,success,checksum,execution_time) \
+                     VALUES(?,?,datetime('now'),1,X'00',0)",
+                )
+                .bind(version)
+                .bind(description)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+            pool.close().await;
+
+            assert_eq!(
+                validate_backup_path(&legacy).await.unwrap_err(),
+                "BACKUP_PREDATES_DATABASE_REBASE",
+            );
+            assert_eq!(std::fs::read(&live).unwrap(), b"CURRENT-DATA");
+
+            // A rebased database with the current lineage still validates.
+            let current = dir.path().join("current.db");
+            migrated_file(&current).await;
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&current))
+                .await
+                .unwrap();
+            sqlx::raw_sql(
+                "CREATE TABLE _sqlx_migrations(version BIGINT PRIMARY KEY, description TEXT NOT NULL,\
+                 installed_on TEXT, success BOOLEAN NOT NULL, checksum BLOB, execution_time BIGINT);",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            for (version, description) in [(1_i64, "baseline_schema"), (2_i64, "seed_reference_data")] {
+                sqlx::query(
+                    "INSERT INTO _sqlx_migrations(version,description,installed_on,success,checksum,execution_time) \
+                     VALUES(?,?,datetime('now'),1,X'00',0)",
+                )
+                .bind(version)
+                .bind(description)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+            pool.close().await;
+            assert!(validate_backup_path(&current).await.is_ok());
+        });
     }
 
     #[test]
