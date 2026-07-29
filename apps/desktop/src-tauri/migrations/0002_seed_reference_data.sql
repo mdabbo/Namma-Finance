@@ -19,7 +19,7 @@ INSERT INTO audit_context (id,source,application_version) VALUES (1,'DESKTOP','0
 
 -- ── app_metadata ──
 INSERT INTO app_metadata (key,value) VALUES ('application_id','com.mepfinance.app');
-INSERT INTO app_metadata (key,value) VALUES ('application_version','0.6.7');
+INSERT INTO app_metadata (key,value) VALUES ('application_version','0.7.0');
 INSERT INTO app_metadata (key,value) VALUES ('schema_version','24');
 
 PRAGMA user_version = 24;
