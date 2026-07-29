@@ -73,6 +73,33 @@ export function FinanceOverviewPage() {
     financials.projects.map((item) => [item.project.id, item.project]),
   );
 
+  // A brand-new workspace gets one clear action, not a grid of zero KPIs.
+  if (financials.contractStates.size === 0) {
+    return (
+      <div>
+        <PageHeader
+          title={t("nav.finance")}
+          description={t("financeSection.overviewDescription")}
+        />
+        <Card className="mx-auto mt-6 max-w-xl">
+          <EmptyState
+            icon={CircleDollarSign}
+            title={t("financeSection.emptyWorkspaceTitle")}
+            description={t("financeSection.emptyWorkspaceHint")}
+            action={
+              <Link
+                to="/projects"
+                className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-3 text-sm font-medium text-white shadow-sm hover:bg-brand-700"
+              >
+                {t("dashboard.setup.contract")}
+              </Link>
+            }
+          />
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div>
       <PageHeader

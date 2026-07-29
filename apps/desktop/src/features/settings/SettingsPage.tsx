@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, DatabaseBackup, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
+import { Building2, CloudUpload, DatabaseBackup, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
@@ -41,6 +41,30 @@ export function SettingsPage() {
       <PageHeader title={t("settings.title")} />
 
       <div className="space-y-4">
+        {full && (
+          <Card className="p-5">
+            <SectionTitle icon={<Building2 size={16} />} title={t("settings.companyProfile")} />
+            <div className="grid grid-cols-3 gap-4">
+              {([
+                ["companyName", "settings.companyName"],
+                ["companyAddress", "settings.companyAddress"],
+                ["companyPhone", "settings.companyPhone"],
+              ] as const).map(([key, labelKey]) => (
+                <Field key={key} label={t(labelKey)}>
+                  <Input
+                    defaultValue={settings?.[key] ?? ""}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value !== settings?.[key]) updateSetting.mutate({ key, value });
+                    }}
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-400">{t("settings.companyProfileNote")}</p>
+          </Card>
+        )}
+
         <Card className="p-5">
           <SectionTitle icon={<Languages size={16} />} title={t("settings.general")} />
           <div className="grid grid-cols-3 gap-4">

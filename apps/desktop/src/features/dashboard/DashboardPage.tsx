@@ -7,15 +7,10 @@ import {
   ArrowRight,
   Banknote,
   BriefcaseBusiness,
-  Check,
   CircleDollarSign,
   FileCheck2,
   HandCoins,
-  Landmark,
-  Plus,
-  ReceiptText,
   SlidersHorizontal,
-  Users,
   WalletCards,
 } from "lucide-react";
 import {
@@ -36,11 +31,14 @@ import {
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useClients } from "../../repositories/clients";
 import { useRecentAuditRecords, type AuditRecord } from "../../repositories/audit";
+import { parseDemoWorkspace } from "../../repositories/demo";
+import { useSettings } from "../../lib/settings";
+import { onboardingStatus } from "../onboarding/onboardingModel";
+import { OnboardingPanel, OnboardingResumeCard } from "../onboarding/OnboardingPanel";
 import {
   Badge,
   Button,
   Card,
-  EmptyState,
   ErrorState,
   LoadingState,
   PageHeader,
@@ -116,6 +114,7 @@ export function DashboardPage() {
   const base = useBaseMoney();
   const workspace = useWorkspaceFinancials();
   const clients = useClients(false);
+  const settingsQuery = useSettings();
   const recentActivity = useRecentAuditRecords(6);
 
   const financials = workspace.data;
@@ -224,7 +223,7 @@ export function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, money, base.code, t]);
 
-  if (workspace.isLoading || clients.isLoading) {
+  if (workspace.isLoading || clients.isLoading || settingsQuery.isLoading) {
     return <LoadingState label={t("common.loading")} className="min-h-[50vh]" />;
   }
   if (workspace.isError || clients.isError || !financials || !money) {
@@ -251,54 +250,35 @@ export function DashboardPage() {
     (sum, state) => sum + state.certificates.length,
     0,
   );
-  const setupSteps = [
-    {
-      id: "client",
-      label: t("dashboard.setup.client"),
-      complete: (clients.data?.length ?? 0) > 0,
-      to: "/projects/clients",
-      icon: Users,
-    },
-    {
-      id: "project",
-      label: t("dashboard.setup.project"),
-      complete: financials.projects.length > 0,
-      to: "/projects",
-      icon: BriefcaseBusiness,
-    },
-    {
-      id: "contract",
-      label: t("dashboard.setup.contract"),
-      complete: financials.contractStates.size > 0,
-      to:
-        financials.projects.length > 0
-          ? `/projects/${financials.projects[0]!.project.id}`
-          : "/projects",
-      icon: Landmark,
-    },
-    {
-      id: "certificate",
-      label: t("dashboard.setup.certificate"),
-      complete: certificateCount > 0,
-      to: "/finance/certificates",
-      icon: ReceiptText,
-    },
-  ];
-  const nextStep = setupSteps.find((step) => !step.complete);
   const isNewWorkspace =
     certificateCount === 0 &&
     financials.cashIn.length === 0 &&
     financials.allExpenses.length === 0;
 
   if (isNewWorkspace) {
+    const settings = settingsQuery.data;
+    const onboarding = onboardingStatus({
+      companyName: settings?.companyName ?? "",
+      currencyConfirmed: settings?.onboardingCurrencyDone ?? false,
+      numberingConfirmed: settings?.onboardingNumberingDone ?? false,
+      clientCount: clients.data?.length ?? 0,
+      projectCount: financials.projects.length,
+      contractCount: financials.contractStates.size,
+      skipped: settings?.onboardingSkipped ?? false,
+    });
+    const demoLoaded = parseDemoWorkspace(settings?.demoWorkspace ?? "") !== null;
     return (
       <div>
         <DashboardHeader currency={base.code} />
-        <WorkspaceSetup
-          steps={setupSteps}
-          nextStepId={nextStep?.id ?? null}
-          completed={setupSteps.filter((step) => step.complete).length}
-        />
+        {onboarding.showPanel ? (
+          <OnboardingPanel
+            status={onboarding}
+            firstProjectId={financials.projects[0]?.project.id ?? null}
+            demoLoaded={demoLoaded}
+          />
+        ) : (
+          <OnboardingResumeCard finished={onboarding.finished} demoLoaded={demoLoaded} />
+        )}
       </div>
     );
   }
@@ -662,96 +642,6 @@ function AttentionCard({
         </div>
       </Card>
     </Link>
-  );
-}
-
-function WorkspaceSetup({
-  steps,
-  nextStepId,
-  completed,
-}: {
-  steps: {
-    id: string;
-    label: string;
-    complete: boolean;
-    to: string;
-    icon: ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean | "true" | "false" }>;
-  }[];
-  nextStepId: string | null;
-  completed: number;
-}) {
-  const { t } = useTranslation();
-  const nextStep = steps.find((step) => step.id === nextStepId);
-  return (
-    <Card className="mx-auto mt-8 max-w-3xl overflow-hidden">
-      <div className="border-b border-border-subtle bg-gradient-to-r from-brand-50 to-surface px-6 py-5 dark:bg-slate-900 dark:bg-none">
-        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
-          <BriefcaseBusiness size={20} aria-hidden="true" />
-        </div>
-        <h2 className="text-xl font-semibold tracking-tight">
-          {t("dashboard.setup.title")}
-        </h2>
-        <p className="mt-1 max-w-xl text-sm leading-6 text-muted">
-          {t("dashboard.setup.description")}
-        </p>
-        <div className="mt-4 flex items-center gap-3">
-          <RatioBar ratioBp={(completed * 10_000) / steps.length} className="max-w-xs" />
-          <span className="text-xs text-muted tnum">
-            {t("dashboard.setup.progress", {
-              completed,
-              total: steps.length,
-            })}
-          </span>
-        </div>
-      </div>
-      <div className="grid gap-px bg-border-subtle sm:grid-cols-2">
-        {steps.map(({ id, label, complete, to, icon: Icon }, index) => (
-          <div
-            key={id}
-            className="flex min-h-24 items-center gap-3 bg-surface px-5 py-4"
-          >
-            <div
-              className={cx(
-                "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-                complete
-                  ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300"
-                  : id === nextStepId
-                    ? "bg-brand-50 text-brand-600 dark:bg-brand-950/60 dark:text-brand-300"
-                    : "bg-surface-subtle text-slate-400",
-              )}
-            >
-              {complete ? (
-                <Check size={17} aria-hidden="true" />
-              ) : (
-                <Icon size={17} aria-hidden="true" />
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-muted tnum">
-                {t("dashboard.setup.step", { number: index + 1 })}
-              </p>
-              <p className="truncate text-sm font-medium">{label}</p>
-            </div>
-            {id === nextStepId && (
-              <Link
-                to={to}
-                className="inline-flex min-h-8 shrink-0 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-2.5 text-xs font-medium text-white shadow-sm hover:bg-brand-700"
-              >
-                <Plus size={14} aria-hidden="true" />
-                {t("dashboard.setup.start")}
-              </Link>
-            )}
-          </div>
-        ))}
-      </div>
-      {!nextStep && (
-        <EmptyState
-          icon={Check}
-          title={t("dashboard.setup.complete")}
-          className="!py-6"
-        />
-      )}
-    </Card>
   );
 }
 
