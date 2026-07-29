@@ -52,7 +52,24 @@ function isoDaysAgo(days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-export async function createDemoWorkspace(): Promise<void> {
+let inFlightCreate: Promise<void> | null = null;
+
+/**
+ * Concurrent loads would seed a second set of records while only the last
+ * reference set is persisted, stranding real financial rows with no removal
+ * handle. The global mutation lock is non-reentrant and the seed takes it via
+ * numbering, so callers share one in-flight run instead.
+ */
+export function createDemoWorkspace(): Promise<void> {
+  if (!inFlightCreate) {
+    inFlightCreate = createDemoWorkspaceOnce().finally(() => {
+      inFlightCreate = null;
+    });
+  }
+  return inFlightCreate;
+}
+
+async function createDemoWorkspaceOnce(): Promise<void> {
   const settings = await loadSettings();
   if (parseDemoWorkspace(settings.demoWorkspace)) throw new Error("DEMO_ALREADY_LOADED");
   const refs: DemoWorkspaceRefs = {
@@ -64,9 +81,11 @@ export async function createDemoWorkspace(): Promise<void> {
   try {
     await seedDemoWorkspace(refs);
   } catch (error) {
-    // Best-effort rollback via the same lifecycle operations so a failed seed
-    // never strands half a demo workspace without a removal handle.
-    await removeDemoRefs(refs).catch(() => undefined);
+    // Roll back what was created. Anything that could not be withdrawn keeps a
+    // persisted handle, so a partial seed never strands financial records the
+    // user has no way to remove.
+    const failures = await removeDemoRefs(refs);
+    if (failures.length > 0) await saveSetting("demoWorkspace", JSON.stringify(refs));
     throw error;
   }
   await saveSetting("demoWorkspace", JSON.stringify(refs));
@@ -311,11 +330,37 @@ async function seedDemoWorkspace(refs: DemoWorkspaceRefs): Promise<void> {
   });
 }
 
-async function removeDemoRefs(refs: DemoWorkspaceRefs): Promise<void> {
-  for (const projectId of refs.projectIds) await deleteProject(projectId);
-  for (const clientId of refs.clientIds) await deleteClient(clientId);
-  for (const personId of refs.personIds) await deletePerson(personId);
-  for (const expenseId of refs.overheadExpenseIds) await deleteExpense(expenseId);
+/**
+ * Records the user already archived or voided themselves. Removal must
+ * converge when it has less work to do, not abort and strand the rest.
+ */
+const ALREADY_WITHDRAWN = new Set([
+  "PROJECT_NOT_FOUND_OR_ARCHIVED",
+  "CLIENT_NOT_FOUND_OR_ARCHIVED",
+  "PERSON_NOT_FOUND_OR_ARCHIVED",
+  "EXPENSE_NOT_FOUND_VOIDED_OR_LINKED",
+]);
+
+/**
+ * Withdraw every demo record, skipping the ones already gone and continuing
+ * past individual failures. Returns the failures that genuinely remain so the
+ * caller can keep the removal handle and let the user retry.
+ */
+async function removeDemoRefs(refs: DemoWorkspaceRefs): Promise<string[]> {
+  const failures: string[] = [];
+  const withdraw = async (operation: () => Promise<void>) => {
+    try {
+      await operation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!ALREADY_WITHDRAWN.has(message)) failures.push(message);
+    }
+  };
+  for (const projectId of refs.projectIds) await withdraw(() => deleteProject(projectId));
+  for (const clientId of refs.clientIds) await withdraw(() => deleteClient(clientId));
+  for (const personId of refs.personIds) await withdraw(() => deletePerson(personId));
+  for (const expenseId of refs.overheadExpenseIds) await withdraw(() => deleteExpense(expenseId));
+  return failures;
 }
 
 /**
@@ -329,7 +374,10 @@ export async function removeDemoWorkspace(): Promise<void> {
   const settings = await loadSettings();
   const refs = parseDemoWorkspace(settings.demoWorkspace);
   if (!refs) throw new Error("DEMO_NOT_LOADED");
-  await removeDemoRefs(refs);
+  const failures = await removeDemoRefs(refs);
+  // The handle is only cleared once nothing demo-related is left standing;
+  // otherwise the user would lose the only way to withdraw the remainder.
+  if (failures.length > 0) throw new Error(`DEMO_REMOVAL_INCOMPLETE: ${failures.join("; ")}`);
   await saveSetting("demoWorkspace", "");
 }
 

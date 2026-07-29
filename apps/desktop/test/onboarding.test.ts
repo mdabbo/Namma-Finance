@@ -16,6 +16,8 @@ import {
 import { listCertificates } from "../src/repositories/certificates";
 import { listPayments } from "../src/repositories/payments";
 import { listExpenses } from "../src/repositories/expenses";
+import { deleteProject } from "../src/repositories/projects";
+import { deleteClient } from "../src/repositories/clients";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
 import { loadSettings } from "../src/lib/settings";
 
@@ -123,5 +125,36 @@ describe("Milestone 6 demo workspace", () => {
     await createDemoWorkspace();
     expect(await listCertificates()).toHaveLength(3);
     await expect(createDemoWorkspace()).rejects.toThrow("DEMO_ALREADY_LOADED");
+  });
+
+  /**
+   * Milestone 6 independent-audit regression. Demo records are ordinary rows
+   * the user can archive from the normal pages. Removal used to abort on the
+   * first already-archived record, leaving the demo flag set and the demo
+   * overhead expense permanently reducing the real net cash position with no
+   * way to withdraw it.
+   */
+  it("still withdraws everything after the user archived some demo records", async () => {
+    await createDemoWorkspace();
+    const refs = parseDemoWorkspace((await loadSettings()).demoWorkspace)!;
+
+    await deleteProject(refs.projectIds[0]!);
+    await deleteClient(refs.clientIds[0]!);
+
+    await removeDemoWorkspace();
+
+    expect((await loadSettings()).demoWorkspace).toBe("");
+    expect(await listExpenses()).toHaveLength(0);
+    expect(await listCertificates()).toHaveLength(0);
+    expect((await loadWorkspaceFinancials()).projects).toHaveLength(0);
+  });
+
+  it("joins a concurrent load instead of seeding a second unremovable workspace", async () => {
+    await Promise.all([createDemoWorkspace(), createDemoWorkspace()]);
+    expect(await listCertificates()).toHaveLength(3);
+
+    await removeDemoWorkspace();
+    expect(await listCertificates()).toHaveLength(0);
+    expect(await listExpenses()).toHaveLength(0);
   });
 });
