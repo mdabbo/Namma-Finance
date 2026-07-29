@@ -36,11 +36,15 @@ function e2eBridge(): Plugin {
   };
 }
 
-export default defineConfig(async ({ mode }) => ({
+export default defineConfig(async ({ command, mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
-    ...(mode === "e2e" ? [e2eBridge()] : []),
+    // Dev server only. `mode` is a user-supplied flag, so gating on it alone
+    // would let `vite build --mode e2e` emit a shippable bundle whose database
+    // is a plain HTTP endpoint and whose app lock never consults Rust. A build
+    // never gets the bridges, whatever mode it is given.
+    ...(command === "serve" && mode === "e2e" ? [e2eBridge()] : []),
   ],
   optimizeDeps: {
     // @mep/core is raw workspace TypeScript — let Vite transform it directly

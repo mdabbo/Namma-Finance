@@ -56,6 +56,16 @@ test("loads and removes the demo workspace, leaving no financial records", async
   // once demo data exists — the onboarding panel is gone by then.
   await page.goto("/#/settings");
   await page.getByRole("button", { name: "Remove demo data" }).click();
+
+  // Demo rows are ordinary records the office may have edited, so removal is
+  // confirmed rather than firing on a single click. Cancelling keeps them.
+  const confirm = page.getByRole("dialog");
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  expect(await countRows("projects")).toBe(2);
+
+  await page.getByRole("button", { name: "Remove demo data" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
   await expect(page.getByRole("button", { name: "Remove demo data" }))
     .toBeHidden({ timeout: 30_000 });
 

@@ -67,3 +67,51 @@ describe("Milestone 10 security boundaries",()=>{
     expect(await sha256Hex(new TextEncoder().encode("NAMAA"))).toBe("4c1ab3d390329c05f760dbed02bbcb99b3280705fed9aabee2c2fc3acd10e853");
   });
 });
+
+/**
+ * Milestone 8 independent-audit regression.
+ *
+ * The end-to-end suite swaps the database and app-lock modules for bridges: a
+ * plain HTTP endpoint and a lock that never consults Rust. Those must be
+ * unreachable from anything shippable. `mode` is a user-supplied flag, so
+ * gating on it alone let `vite build --mode e2e` emit a production bundle
+ * carrying both bridges — verified by grepping the emitted assets before this
+ * was fixed.
+ */
+describe("Milestone 8 end-to-end bridge containment", () => {
+  async function pluginNames(command: "serve" | "build", mode: string): Promise<string[]> {
+    const configModule = await import("../vite.config");
+    const factory = configModule.default as unknown as (
+      env: { command: "serve" | "build"; mode: string },
+    ) => Promise<{ plugins: unknown[] }>;
+    const config = await factory({ command, mode });
+    return config.plugins
+      .flat(Infinity as number)
+      .filter((plugin): plugin is { name: string } =>
+        !!plugin && typeof (plugin as { name?: unknown }).name === "string")
+      .map((plugin) => plugin.name);
+  }
+
+  it("never installs the bridge in a build, whatever mode it is given", async () => {
+    for (const mode of ["e2e", "production", "development"]) {
+      expect(await pluginNames("build", mode), `build --mode ${mode}`)
+        .not.toContain("mep-e2e-bridge");
+    }
+  });
+
+  it("installs the bridge only for the e2e dev server", async () => {
+    expect(await pluginNames("serve", "e2e")).toContain("mep-e2e-bridge");
+    expect(await pluginNames("serve", "development")).not.toContain("mep-e2e-bridge");
+  });
+
+  it("keeps the shipped database and lock modules free of bridge fallbacks", () => {
+    const db = readFileSync(resolve(root, "src/lib/db.ts"), "utf8");
+    const lock = readFileSync(resolve(root, "src/lib/lock.ts"), "utf8");
+    // The production modules must reach Rust, never an HTTP endpoint.
+    for (const source of [db, lock]) {
+      expect(source).not.toMatch(/127\.0\.0\.1|localhost|fetch\(/);
+    }
+    expect(db).toContain('from "@tauri-apps/plugin-sql"');
+    expect(lock).toContain('invoke<boolean>("app_lock_enabled")');
+  });
+});

@@ -70,8 +70,19 @@ function readBody(request) {
   });
 }
 
+// Only the app under test may reach this endpoint. It executes arbitrary SQL,
+// so even though it binds to loopback and holds a throwaway in-memory
+// database, it does not advertise itself to every origin on the machine.
+const ALLOWED_ORIGIN = process.env.E2E_APP_ORIGIN ?? "http://localhost:1420";
+
 const server = createServer(async (request, response) => {
-  response.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = request.headers.origin;
+  if (origin && origin !== ALLOWED_ORIGIN) {
+    response.writeHead(403).end();
+    return;
+  }
+  response.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  response.setHeader("Vary", "Origin");
   response.setHeader("Access-Control-Allow-Headers", "content-type");
   response.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   if (request.method === "OPTIONS") {

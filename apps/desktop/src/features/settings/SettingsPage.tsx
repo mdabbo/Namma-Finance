@@ -481,6 +481,7 @@ function DemoDataSection() {
   const { t } = useTranslation();
   const { data: settings } = useSettings();
   const demo = useDemoWorkspaceMutations();
+  const [confirming, setConfirming] = useState(false);
   if (!parseDemoWorkspace(settings?.demoWorkspace ?? "")) return null;
   return (
     <Card className="p-5">
@@ -489,7 +490,7 @@ function DemoDataSection() {
       <Button
         className="!text-red-600"
         disabled={demo.remove.isPending}
-        onClick={() => demo.remove.mutate()}
+        onClick={() => setConfirming(true)}
       >
         <Trash2 size={14} aria-hidden="true" />
         {t("onboarding.removeDemo")}
@@ -498,6 +499,19 @@ function DemoDataSection() {
         <p className="mt-3 text-xs text-red-600" dir="ltr">
           {demo.remove.error instanceof Error ? demo.remove.error.message : String(demo.remove.error)}
         </p>
+      )}
+      {/* Demo records are ordinary rows the office may have edited into real
+          work, so withdrawing them is confirmed like every other destructive
+          action rather than firing on a single click. */}
+      {confirming && (
+        <ConfirmDialog
+          title={t("settings.demoData")}
+          message={t("settings.demoDataConfirm")}
+          confirmLabel={t("common.confirm")}
+          busy={demo.remove.isPending}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => demo.remove.mutate(undefined, { onSettled: () => setConfirming(false) })}
+        />
       )}
     </Card>
   );

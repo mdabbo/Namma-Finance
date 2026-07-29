@@ -763,6 +763,7 @@ export const en = {
     companyProfileNote: "Shown on printed documents and used during onboarding.",
     demoData: "Demo data",
     demoDataNote: "This workspace contains clearly marked sample records. Removing them archives every demo project, client and person and voids the demo overhead expense; the audit history of the demo period is kept.",
+    demoDataConfirm: "Remove the demo workspace? Every demo project, client and person is archived and the demo overhead expense is voided. Any edits you made to those records go with them. The audit history is kept.",
     currencies: "Currencies & exchange rates",
     ratePerEgp: "EGP per 1",
     syncRates: "Update rates from CBE",
