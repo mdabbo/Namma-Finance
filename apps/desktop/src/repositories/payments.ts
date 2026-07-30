@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { desiredCertificateStatus, type Payment, type PaymentAllocation, type PaymentInput } from "@mep/core";
+import {
+  computeCertificate,
+  desiredCertificateStatus,
+  type AdvanceRecoveryMethod,
+  type CertificateStatus,
+  type Payment,
+  type PaymentAllocation,
+  type PaymentInput,
+} from "@mep/core";
 import { invoke } from "@tauri-apps/api/core";
 import { execute, select, selectOne } from "../lib/db";
 import { withLock } from "../lib/mutex";
@@ -186,66 +194,132 @@ async function validatePaymentWrite(
   }
 }
 
-interface CertificateStatusUpdate {
-  certificateId: number;
-  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "PAID";
+interface CertificatePayableRow {
+  id: number;
+  status: CertificateStatus;
+  grossMinor: number;
+  discountMinor: number;
+  manualAdvanceRecoveryMinor: number | null;
+  contractValueMinor: number;
+  vatBp: number;
+  retentionBp: number;
+  withholdingBp: number;
+  advanceMinor: number;
+  advanceMethod: AdvanceRecoveryMethod;
 }
 
-async function deriveStatusUpdates(deltas: Map<number, number>): Promise<CertificateStatusUpdate[]> {
-  if (deltas.size === 0) return [];
-  const { loadWorkspaceFinancials } = await import("./financials");
-  const workspace = await loadWorkspaceFinancials();
-  const updates: CertificateStatusUpdate[] = [];
-  for (const state of workspace.contractStates.values()) {
-    for (const certificate of state.certificates) {
-      const delta = deltas.get(certificate.certificate.id);
-      if (delta === undefined) continue;
-      const status = desiredCertificateStatus(
-        certificate.certificate.status,
-        certificate.breakdown.netPayableMinor,
-        Math.max(0, certificate.paidMinor + delta),
-      );
-      if (status !== certificate.certificate.status) updates.push({ certificateId: certificate.certificate.id, status });
+/**
+ * Every live certificate of a contract with its net payable, in the order the
+ * advance is recovered. Mirrors `load_contract_payables` in the Rust command
+ * layer; advance recovery is cumulative across billable certificates, so the
+ * whole contract is walked rather than one certificate in isolation.
+ */
+async function loadContractPayables(contractId: number): Promise<{ id: number; status: CertificateStatus; netPayableMinor: number }[]> {
+  const rows = await select<CertificatePayableRow>(
+    `SELECT pc.id, pc.status, pc.gross_minor AS grossMinor, pc.discount_minor AS discountMinor,
+            pc.manual_advance_recovery_minor AS manualAdvanceRecoveryMinor,
+            COALESCE(pc.contract_value_minor_snapshot,c.value_minor) AS contractValueMinor,
+            COALESCE(pc.vat_bp_snapshot,c.vat_bp) AS vatBp,
+            COALESCE(pc.retention_bp_snapshot,c.retention_bp) AS retentionBp,
+            COALESCE(pc.withholding_bp_snapshot,c.withholding_bp) AS withholdingBp,
+            COALESCE(pc.advance_minor_snapshot,c.advance_minor) AS advanceMinor,
+            COALESCE(pc.advance_method_snapshot,c.advance_recovery_method) AS advanceMethod
+     FROM payment_certificates pc JOIN contracts c ON c.id=pc.contract_id
+     WHERE pc.contract_id=$1 AND pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+     ORDER BY pc.seq, pc.id`,
+    [contractId],
+  );
+  let recoveredBefore = 0;
+  return rows.map((row) => {
+    if (row.status === "DRAFT") return { id: row.id, status: row.status, netPayableMinor: 0 };
+    const breakdown = computeCertificate({
+      grossMinor: row.grossMinor,
+      discountMinor: row.discountMinor,
+      vatBp: row.vatBp,
+      retentionBp: row.retentionBp,
+      withholdingBp: row.withholdingBp,
+      advance: {
+        method: row.advanceMethod,
+        contractValueMinor: row.contractValueMinor,
+        advanceMinor: row.advanceMinor,
+        recoveredBeforeMinor: recoveredBefore,
+        manualRecoveryMinor: row.manualAdvanceRecoveryMinor,
+      },
+    });
+    recoveredBefore += breakdown.advanceRecoveryMinor;
+    return { id: row.id, status: row.status, netPayableMinor: breakdown.netPayableMinor };
+  });
+}
+
+/** Allocations that count as collected: only those of still-live payments. */
+async function validAllocatedMinor(certificateId: number): Promise<number> {
+  const row = await selectOne<{ allocated: number }>(
+    `SELECT COALESCE(SUM(a.amount_minor),0) AS allocated
+     FROM payment_certificate_allocations a JOIN payments p ON p.id=a.payment_id
+     WHERE a.certificate_id=$1 AND p.deleted_at IS NULL AND p.voided_at IS NULL`,
+    [certificateId],
+  );
+  return row?.allocated ?? 0;
+}
+
+/**
+ * Recalculate collection status for the given certificates from stored payment
+ * evidence. Must be called inside an open transaction.
+ *
+ * This is the fallback engine used when the Rust command layer is absent (the
+ * test harness and the end-to-end browser bridge). Production always goes
+ * through `reconcile_certificates` in Rust; both read the same rows and apply
+ * the same `desiredCertificateStatus` rule, so the two agree by construction.
+ */
+async function reconcileWithinTransaction(certificateIds: number[]): Promise<number> {
+  const unique = [...new Set(certificateIds)];
+  if (unique.length === 0) return 0;
+  const contracts = await select<{ contractId: number }>(
+    `SELECT DISTINCT contract_id AS contractId FROM payment_certificates
+     WHERE id IN (${unique.map((_, index) => `$${index + 1}`).join(",")})
+       AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL`,
+    unique,
+  );
+  const wanted = new Set(unique);
+  let changed = 0;
+  for (const { contractId } of contracts) {
+    for (const payable of await loadContractPayables(contractId)) {
+      if (payable.status === "DRAFT" || !wanted.has(payable.id)) continue;
+      const allocated = await validAllocatedMinor(payable.id);
+      const desired = desiredCertificateStatus(payable.status, payable.netPayableMinor, allocated);
+      if (desired === payable.status) continue;
+      await execute("UPDATE payment_certificates SET status=$1 WHERE id=$2 AND deleted_at IS NULL", [desired, payable.id]);
+      changed += 1;
     }
   }
-  return updates;
+  return changed;
 }
 
-async function applyStatusUpdates(updates: CertificateStatusUpdate[]): Promise<void> {
-  for (const update of updates) {
-    await execute("UPDATE payment_certificates SET status=$1 WHERE id=$2 AND deleted_at IS NULL", [update.status, update.certificateId]);
-  }
-}
-
-/** Derive PAID in both directions from live payment allocations only. */
+/**
+ * Recalculate payment-driven certificate statuses from stored evidence.
+ *
+ * Callers pass certificate identities only — never a status — so an import or
+ * sync pull cannot assert an outcome. An empty list reconciles everything.
+ */
 export async function reconcileCertificateStatuses(certificateIds?: number[]): Promise<number> {
-  const wanted = certificateIds ? new Set(certificateIds) : null;
-  if (wanted?.size === 0) return 0;
-  const { loadWorkspaceFinancials } = await import("./financials");
-  const ws = await loadWorkspaceFinancials();
-  const updates: CertificateStatusUpdate[] = [];
-  for (const state of ws.contractStates.values()) {
-    for (const cs of state.certificates) {
-      if (wanted && !wanted.has(cs.certificate.id)) continue;
-      const desired = desiredCertificateStatus(cs.certificate.status, cs.breakdown.netPayableMinor, cs.paidMinor);
-      if (desired === cs.certificate.status) continue;
-      updates.push({ certificateId: cs.certificate.id, status: desired });
-    }
-  }
-  if (updates.length === 0) return 0;
+  if (certificateIds?.length === 0) return 0;
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("update_certificate_statuses_atomic", { statusUpdates: updates });
-  } else {
-    await execute("BEGIN IMMEDIATE");
-    try {
-      await applyStatusUpdates(updates);
-      await execute("COMMIT");
-    } catch (error) {
-      await execute("ROLLBACK");
-      throw error;
-    }
+    return invoke<number>("reconcile_certificates_atomic", { certificateIds: certificateIds ?? [] });
   }
-  return updates.length;
+  const targets = certificateIds ?? (await select<{ id: number }>(
+    `SELECT id FROM payment_certificates
+     WHERE deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL`,
+  )).map((row) => row.id);
+  if (targets.length === 0) return 0;
+  await execute("BEGIN IMMEDIATE");
+  try {
+    const changed = await reconcileWithinTransaction(targets);
+    await execute("COMMIT");
+    return changed;
+  } catch (error) {
+    await execute("ROLLBACK");
+    throw error;
+  }
 }
 
 /** Create a real payment and its allocations atomically. */
@@ -260,12 +334,9 @@ export async function nextPaymentNumber(prefix = "PAY", date = new Date()): Prom
 
 async function createPaymentUnlocked(input: PaymentInput, allocations: AllocationInput[]): Promise<number> {
   await validatePaymentWrite(input, allocations);
-  const deltas = new Map<number, number>();
-  for (const allocation of allocations) deltas.set(allocation.certificateId, (deltas.get(allocation.certificateId) ?? 0) + allocation.amountMinor);
-  const statusUpdates = await deriveStatusUpdates(deltas);
   let paymentId: number;
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    paymentId = await invoke<number>("create_payment_atomic", { input, allocations, statusUpdates });
+    paymentId = await invoke<number>("create_payment_atomic", { input, allocations });
   } else {
     await execute("BEGIN IMMEDIATE");
     try {
@@ -282,7 +353,7 @@ async function createPaymentUnlocked(input: PaymentInput, allocations: Allocatio
           [paymentId, a.certificateId, a.amountMinor],
         );
       }
-      await applyStatusUpdates(statusUpdates);
+      await reconcileWithinTransaction(allocations.map((allocation) => allocation.certificateId));
       await execute("COMMIT");
     } catch (error) {
       await execute("ROLLBACK");
@@ -308,12 +379,14 @@ async function updatePaymentUnlocked(id: number, input: PaymentInput, allocation
     throw new Error("LEGACY_DUPLICATE_ALLOCATIONS_REQUIRE_REVIEW");
   }
   await validatePaymentWrite(input, allocations, new Map(previous.map((item) => [item.certificateId, item.amountMinor])));
-  const deltas = new Map<number, number>();
-  for (const allocation of previous) deltas.set(allocation.certificateId, (deltas.get(allocation.certificateId) ?? 0) - allocation.amountMinor);
-  for (const allocation of allocations) deltas.set(allocation.certificateId, (deltas.get(allocation.certificateId) ?? 0) + allocation.amountMinor);
-  const statusUpdates = await deriveStatusUpdates(deltas);
+  // The union of what this payment used to settle and what it settles now, so a
+  // certificate dropped from the payment reopens.
+  const touched = [
+    ...previous.map((item) => item.certificateId),
+    ...allocations.map((allocation) => allocation.certificateId),
+  ];
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("update_payment_atomic", { paymentId: id, input, allocations, statusUpdates });
+    await invoke("update_payment_atomic", { paymentId: id, input, allocations });
   } else {
     await execute("BEGIN IMMEDIATE");
     try {
@@ -330,7 +403,7 @@ async function updatePaymentUnlocked(id: number, input: PaymentInput, allocation
           [id, a.certificateId, a.amountMinor],
         );
       }
-      await applyStatusUpdates(statusUpdates);
+      await reconcileWithinTransaction(touched);
       await execute("COMMIT");
     } catch (error) {
       await execute("ROLLBACK");
@@ -345,18 +418,18 @@ export function deletePayment(id: number): Promise<void> {
 }
 
 async function deletePaymentUnlocked(id: number): Promise<void> {
+  // Captured before voiding: once the payment is not live its allocations stop
+  // counting as evidence, so the certificates it settled must reopen.
   const previous = await listAllocationsByPayment(id);
-  const deltas = new Map<number, number>();
-  for (const allocation of previous) deltas.set(allocation.certificateId, (deltas.get(allocation.certificateId) ?? 0) - allocation.amountMinor);
-  const statusUpdates = await deriveStatusUpdates(deltas);
+  const touched = previous.map((item) => item.certificateId);
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("void_payment_atomic", { paymentId: id, statusUpdates });
+    await invoke("void_payment_atomic", { paymentId: id });
   } else {
     await execute("BEGIN IMMEDIATE");
     try {
     const result = await execute("UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='Voided by user' WHERE id=$1 AND voided_at IS NULL", [id]);
     if (result.rowsAffected !== 1) throw new Error("PAYMENT_NOT_FOUND_OR_VOIDED");
-      await applyStatusUpdates(statusUpdates);
+      await reconcileWithinTransaction(touched);
       await execute("COMMIT");
     } catch (error) {
       await execute("ROLLBACK");

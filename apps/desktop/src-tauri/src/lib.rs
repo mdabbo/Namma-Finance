@@ -283,39 +283,6 @@ struct AllocationCommandInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CertificateStatusCommandInput {
-    certificate_id: i64,
-    status: String,
-}
-
-async fn apply_certificate_statuses(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    updates: Vec<CertificateStatusCommandInput>,
-) -> Result<(), String> {
-    for update in updates {
-        if !matches!(
-            update.status.as_str(),
-            "DRAFT" | "SUBMITTED" | "APPROVED" | "PAID"
-        ) {
-            return Err("invalid certificate status".into());
-        }
-        let result = sqlx::query(
-            "UPDATE payment_certificates SET status=? WHERE id=? AND deleted_at IS NULL",
-        )
-        .bind(update.status)
-        .bind(update.certificate_id)
-        .execute(&mut **tx)
-        .await
-        .map_err(|e| e.to_string())?;
-        if result.rows_affected() != 1 {
-            return Err("certificate status target not found".into());
-        }
-    }
-    Ok(())
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct PersonPaymentCommandInput {
     assignment_id: i64,
     date: String,
@@ -577,19 +544,78 @@ fn mul_div_round_i64(amount: i64, numerator: i64, denominator: i64) -> Result<i6
     i64::try_from(rounded).map_err(|_| "financial calculation overflow".to_string())
 }
 
-async fn validate_allocation_capacities(
+/// One certificate's derived payable position, computed from source records
+/// only. `net_payable_minor` mirrors `computeCertificate` in @mep/core: base
+/// (gross − discount), VAT, retention and withholding applied to that base,
+/// less advance recovery capped at the un-recovered remainder.
+struct CertificatePayable {
+    id: i64,
+    status: String,
+    net_payable_minor: i64,
+}
+
+/// Net payable for one certificate, and the advance it recovers.
+///
+/// Pure counterpart of `computeCertificate` in @mep/core:
+///   base        = gross - discount
+///   VAT         = base x vatBp
+///   retention   = base x retentionBp
+///   withholding = base x withholdingBp
+///   advance     = PROPORTIONAL: base x advance / contractValue, else the
+///                 manual figure, both capped at the un-recovered remainder
+///   net payable = base + VAT - retention - advance - withholding
+///
+/// Kept free of I/O so `fixtures/certificate-financials.json` can assert it
+/// against the TypeScript engine.
+#[allow(clippy::too_many_arguments)]
+fn certificate_net_payable(
+    gross_minor: i64,
+    discount_minor: i64,
+    vat_bp: i64,
+    retention_bp: i64,
+    withholding_bp: i64,
+    advance_minor: i64,
+    advance_method: &str,
+    manual_recovery_minor: Option<i64>,
+    contract_value_minor: i64,
+    recovered_before_minor: i64,
+) -> Result<(i64, i64), String> {
+    let base = gross_minor
+        .checked_sub(discount_minor)
+        .ok_or_else(|| "invalid certificate base".to_string())?;
+    let vat = mul_div_round_i64(base, vat_bp, 10_000)?;
+    let retention = mul_div_round_i64(base, retention_bp, 10_000)?;
+    let withholding = mul_div_round_i64(base, withholding_bp, 10_000)?;
+    let remaining_advance = advance_minor.saturating_sub(recovered_before_minor).max(0);
+    let calculated_recovery = if advance_method == "MANUAL" {
+        manual_recovery_minor.unwrap_or(0)
+    } else if contract_value_minor <= 0 {
+        0
+    } else {
+        mul_div_round_i64(base, advance_minor, contract_value_minor)?
+    };
+    let recovery = calculated_recovery.min(remaining_advance);
+    let net_payable = base
+        .checked_add(vat)
+        .and_then(|v| v.checked_sub(retention))
+        .and_then(|v| v.checked_sub(recovery))
+        .and_then(|v| v.checked_sub(withholding))
+        .ok_or_else(|| "certificate payable overflow".to_string())?;
+    Ok((net_payable, recovery))
+}
+
+/// Load every live certificate of a contract with its net payable, in the
+/// order the advance is recovered (`seq`, then `id`).
+///
+/// Advance recovery is cumulative across *billable* certificates, so a single
+/// certificate's payable cannot be computed in isolation — the whole contract
+/// is walked in sequence. Drafts are carried in the result (callers need to
+/// reject allocations against them) but never consume advance, matching
+/// `isBillable` on the TypeScript side.
+async fn load_contract_payables(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     contract_id: i64,
-    allocations: &[AllocationCommandInput],
-    excluding_payment_id: Option<i64>,
-) -> Result<(), String> {
-    if allocations.is_empty() {
-        return Ok(());
-    }
-    let requested: std::collections::HashMap<i64, i64> = allocations
-        .iter()
-        .map(|allocation| (allocation.certificate_id, allocation.amount_minor))
-        .collect();
+) -> Result<Vec<CertificatePayable>, String> {
     let rows = sqlx::query(
         "SELECT pc.id,pc.status,pc.gross_minor,pc.discount_minor,pc.manual_advance_recovery_minor,
                 COALESCE(pc.contract_value_minor_snapshot,c.value_minor) contract_value_minor,
@@ -606,79 +632,219 @@ async fn validate_allocation_capacities(
     .fetch_all(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
+
+    let mut payables = Vec::with_capacity(rows.len());
     let mut recovered_advance = 0_i64;
-    let mut found = std::collections::HashSet::new();
     for row in rows {
-        let certificate_id: i64 = row.try_get("id").map_err(|e| e.to_string())?;
+        let id: i64 = row.try_get("id").map_err(|e| e.to_string())?;
         let status: String = row.try_get("status").map_err(|e| e.to_string())?;
         if status == "DRAFT" {
-            if requested.contains_key(&certificate_id) {
+            payables.push(CertificatePayable {
+                id,
+                status,
+                net_payable_minor: 0,
+            });
+            continue;
+        }
+        let method: String = row.try_get("advance_method").map_err(|e| e.to_string())?;
+        let (net_payable_minor, recovery) = certificate_net_payable(
+            row.try_get("gross_minor").map_err(|e| e.to_string())?,
+            row.try_get("discount_minor").map_err(|e| e.to_string())?,
+            row.try_get("vat_bp").map_err(|e| e.to_string())?,
+            row.try_get("retention_bp").map_err(|e| e.to_string())?,
+            row.try_get("withholding_bp").map_err(|e| e.to_string())?,
+            row.try_get("advance_minor").map_err(|e| e.to_string())?,
+            &method,
+            row.try_get("manual_advance_recovery_minor")
+                .map_err(|e| e.to_string())?,
+            row.try_get("contract_value_minor")
+                .map_err(|e| e.to_string())?,
+            recovered_advance,
+        )?;
+        recovered_advance = recovered_advance
+            .checked_add(recovery)
+            .ok_or_else(|| "advance recovery overflow".to_string())?;
+        payables.push(CertificatePayable {
+            id,
+            status,
+            net_payable_minor,
+        });
+    }
+    Ok(payables)
+}
+
+/// Allocations against a certificate that count as collected: rows belonging to
+/// payments that are still live. A voided or soft-deleted payment is not
+/// evidence, so its allocations never hold a certificate at PAID.
+async fn valid_allocated_minor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    certificate_id: i64,
+) -> Result<i64, String> {
+    sqlx::query_scalar(
+        "SELECT COALESCE(SUM(a.amount_minor),0) FROM payment_certificate_allocations a
+         JOIN payments p ON p.id=a.payment_id
+         WHERE a.certificate_id=? AND p.deleted_at IS NULL AND p.voided_at IS NULL",
+    )
+    .bind(certificate_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The collection-status rule, identical to `desiredCertificateStatus` in
+/// @mep/core. Collection settles an approved claim; it never advances the
+/// approval workflow, so SUBMITTED is returned untouched however much cash has
+/// arrived. Drafts are never reconciliation targets.
+fn derive_certificate_status(
+    current: &str,
+    net_payable_minor: i64,
+    allocated_minor: i64,
+) -> String {
+    if current == "DRAFT" || current == "SUBMITTED" {
+        return current.to_string();
+    }
+    let fully_collected = net_payable_minor > 0 && allocated_minor >= net_payable_minor;
+    if fully_collected {
+        return "PAID".to_string();
+    }
+    if current == "PAID" {
+        return "APPROVED".to_string();
+    }
+    current.to_string()
+}
+
+/// Recalculate collection status for the given certificates from payment
+/// evidence, inside the caller's transaction.
+///
+/// This is the only path that writes a payment-driven certificate status. The
+/// frontend supplies certificate *identities* to reconcile — never a status —
+/// so a stale or manipulated client cannot assert that a certificate is paid.
+/// An empty list reconciles every live certificate, which is what a sync pull
+/// or bulk import needs.
+async fn reconcile_certificates(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    certificate_ids: &[i64],
+) -> Result<usize, String> {
+    let contract_rows = if certificate_ids.is_empty() {
+        sqlx::query(
+            "SELECT DISTINCT contract_id FROM payment_certificates
+             WHERE deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL",
+        )
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        let placeholders = vec!["?"; certificate_ids.len()].join(",");
+        let sql = format!(
+            "SELECT DISTINCT contract_id FROM payment_certificates
+             WHERE id IN ({placeholders}) AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in certificate_ids {
+            query = query.bind(id);
+        }
+        query
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    let targeted: Option<std::collections::HashSet<i64>> = if certificate_ids.is_empty() {
+        None
+    } else {
+        Some(certificate_ids.iter().copied().collect())
+    };
+
+    let mut changed = 0_usize;
+    for contract_row in contract_rows {
+        let contract_id: i64 = contract_row
+            .try_get("contract_id")
+            .map_err(|e| e.to_string())?;
+        // Walking the whole contract keeps advance recovery cumulative even
+        // when only one of its certificates was targeted.
+        for payable in load_contract_payables(tx, contract_id).await? {
+            if payable.status == "DRAFT" {
+                continue;
+            }
+            if let Some(wanted) = &targeted {
+                if !wanted.contains(&payable.id) {
+                    continue;
+                }
+            }
+            let allocated = valid_allocated_minor(tx, payable.id).await?;
+            let desired =
+                derive_certificate_status(&payable.status, payable.net_payable_minor, allocated);
+            if desired == payable.status {
+                continue;
+            }
+            sqlx::query(
+                "UPDATE payment_certificates SET status=? WHERE id=? AND deleted_at IS NULL",
+            )
+            .bind(&desired)
+            .bind(payable.id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+/// Certificate ids an existing payment currently allocates to.
+async fn allocated_certificate_ids(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payment_id: i64,
+) -> Result<Vec<i64>, String> {
+    let rows = sqlx::query(
+        "SELECT DISTINCT certificate_id FROM payment_certificate_allocations WHERE payment_id=?",
+    )
+    .bind(payment_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|row| row.try_get("certificate_id").map_err(|e| e.to_string()))
+        .collect()
+}
+
+async fn validate_allocation_capacities(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    contract_id: i64,
+    allocations: &[AllocationCommandInput],
+    excluding_payment_id: Option<i64>,
+) -> Result<(), String> {
+    if allocations.is_empty() {
+        return Ok(());
+    }
+    let requested: std::collections::HashMap<i64, i64> = allocations
+        .iter()
+        .map(|allocation| (allocation.certificate_id, allocation.amount_minor))
+        .collect();
+    let payables = load_contract_payables(tx, contract_id).await?;
+    let mut found = std::collections::HashSet::new();
+    for payable in payables {
+        if payable.status == "DRAFT" {
+            if requested.contains_key(&payable.id) {
                 return Err("ALLOCATION_REQUIRES_BILLABLE_CERTIFICATE".into());
             }
             continue;
         }
-        let gross: i64 = row.try_get("gross_minor").map_err(|e| e.to_string())?;
-        let discount: i64 = row.try_get("discount_minor").map_err(|e| e.to_string())?;
-        let base = gross
-            .checked_sub(discount)
-            .ok_or_else(|| "invalid certificate base".to_string())?;
-        let vat = mul_div_round_i64(
-            base,
-            row.try_get("vat_bp").map_err(|e| e.to_string())?,
-            10_000,
-        )?;
-        let retention = mul_div_round_i64(
-            base,
-            row.try_get("retention_bp").map_err(|e| e.to_string())?,
-            10_000,
-        )?;
-        let withholding = mul_div_round_i64(
-            base,
-            row.try_get("withholding_bp").map_err(|e| e.to_string())?,
-            10_000,
-        )?;
-        let advance_minor: i64 = row.try_get("advance_minor").map_err(|e| e.to_string())?;
-        let remaining_advance = advance_minor.saturating_sub(recovered_advance).max(0);
-        let method: String = row.try_get("advance_method").map_err(|e| e.to_string())?;
-        let calculated_recovery = if method == "MANUAL" {
-            row.try_get::<Option<i64>, _>("manual_advance_recovery_minor")
-                .map_err(|e| e.to_string())?
-                .unwrap_or(0)
-        } else {
-            let contract_value: i64 = row
-                .try_get("contract_value_minor")
-                .map_err(|e| e.to_string())?;
-            if contract_value <= 0 {
-                0
-            } else {
-                mul_div_round_i64(base, advance_minor, contract_value)?
-            }
-        };
-        let recovery = calculated_recovery.min(remaining_advance);
-        recovered_advance = recovered_advance
-            .checked_add(recovery)
-            .ok_or_else(|| "advance recovery overflow".to_string())?;
-        let net_payable = base
-            .checked_add(vat)
-            .and_then(|v| v.checked_sub(retention))
-            .and_then(|v| v.checked_sub(recovery))
-            .and_then(|v| v.checked_sub(withholding))
-            .ok_or_else(|| "certificate payable overflow".to_string())?;
-        if let Some(requested_amount) = requested.get(&certificate_id) {
-            found.insert(certificate_id);
+        if let Some(requested_amount) = requested.get(&payable.id) {
+            found.insert(payable.id);
             let allocated: i64 = sqlx::query_scalar(
                 "SELECT COALESCE(SUM(a.amount_minor),0) FROM payment_certificate_allocations a
                  JOIN payments p ON p.id=a.payment_id
                  WHERE a.certificate_id=? AND p.deleted_at IS NULL AND p.voided_at IS NULL
                    AND (? IS NULL OR p.id<>?)",
             )
-            .bind(certificate_id)
+            .bind(payable.id)
             .bind(excluding_payment_id)
             .bind(excluding_payment_id)
             .fetch_one(&mut **tx)
             .await
             .map_err(|e| e.to_string())?;
-            let capacity = net_payable.saturating_sub(allocated).max(0);
+            let capacity = payable.net_payable_minor.saturating_sub(allocated).max(0);
             if *requested_amount > capacity {
                 return Err("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID".into());
             }
@@ -694,7 +860,6 @@ async fn insert_payment_transaction(
     pool: &sqlx::SqlitePool,
     input: PaymentCommandInput,
     allocations: Vec<AllocationCommandInput>,
-    status_updates: Vec<CertificateStatusCommandInput>,
 ) -> Result<i64, String> {
     let mut tx = begin_immediate(pool).await?;
     validate_allocation_capacities(&mut tx, input.contract_id, &allocations, None).await?;
@@ -705,6 +870,7 @@ async fn insert_payment_transaction(
     .bind(input.amount_minor).bind(input.method).bind(input.bank).bind(input.reference).bind(input.notes)
     .execute(&mut *tx).await.map_err(|e| e.to_string())?;
     let payment_id = result.last_insert_rowid();
+    let mut touched: Vec<i64> = Vec::new();
     for allocation in allocations {
         let certificate = sqlx::query(
             "SELECT contract_id FROM payment_certificates WHERE id=? AND deleted_at IS NULL",
@@ -723,8 +889,11 @@ async fn insert_payment_transaction(
         sqlx::query("INSERT INTO payment_certificate_allocations (payment_id, certificate_id, amount_minor) VALUES (?,?,?)")
             .bind(payment_id).bind(allocation.certificate_id).bind(allocation.amount_minor)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        touched.push(allocation.certificate_id);
     }
-    apply_certificate_statuses(&mut tx, status_updates).await?;
+    // Status follows the evidence just written, derived here inside the same
+    // transaction rather than accepted from the caller.
+    reconcile_certificates(&mut tx, &touched).await?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(payment_id)
 }
@@ -734,7 +903,6 @@ async fn replace_payment_transaction(
     payment_id: i64,
     input: PaymentCommandInput,
     allocations: Vec<AllocationCommandInput>,
-    status_updates: Vec<CertificateStatusCommandInput>,
 ) -> Result<(), String> {
     let mut tx = begin_immediate(pool).await?;
     let legacy_duplicates: i64 = sqlx::query_scalar(
@@ -749,6 +917,10 @@ async fn replace_payment_transaction(
     }
     validate_allocation_capacities(&mut tx, input.contract_id, &allocations, Some(payment_id))
         .await?;
+    // Captured before the rows are deleted: a certificate dropped from this
+    // payment must still be reconciled so it reopens.
+    let mut touched = allocated_certificate_ids(&mut tx, payment_id).await?;
+    let mut new_ids: Vec<i64> = Vec::new();
     sqlx::query("DELETE FROM payment_certificate_allocations WHERE payment_id=?")
         .bind(payment_id)
         .execute(&mut *tx)
@@ -781,8 +953,14 @@ async fn replace_payment_transaction(
         sqlx::query("INSERT INTO payment_certificate_allocations (payment_id, certificate_id, amount_minor) VALUES (?,?,?)")
             .bind(payment_id).bind(allocation.certificate_id).bind(allocation.amount_minor)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        new_ids.push(allocation.certificate_id);
     }
-    apply_certificate_statuses(&mut tx, status_updates).await?;
+    // Reconcile the union of the certificates this payment used to settle and
+    // the ones it settles now, so a reallocation reopens the old certificate.
+    touched.extend(new_ids);
+    touched.sort_unstable();
+    touched.dedup();
+    reconcile_certificates(&mut tx, &touched).await?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -793,7 +971,6 @@ async fn create_payment_atomic(
     db_instances: State<'_, DbInstances>,
     input: PaymentCommandInput,
     allocations: Vec<AllocationCommandInput>,
-    status_updates: Vec<CertificateStatusCommandInput>,
 ) -> Result<i64, String> {
     validate_payment_input(&input, &allocations)?;
     let instances = db_instances.0.read().await;
@@ -801,7 +978,7 @@ async fn create_payment_atomic(
         Some(DbPool::Sqlite(pool)) => pool,
         _ => return Err("database is not loaded".into()),
     };
-    insert_payment_transaction(pool, input, allocations, status_updates).await
+    insert_payment_transaction(pool, input, allocations).await
 }
 
 /// Replace payment evidence and allocations as one all-or-nothing operation.
@@ -811,7 +988,6 @@ async fn update_payment_atomic(
     payment_id: i64,
     input: PaymentCommandInput,
     allocations: Vec<AllocationCommandInput>,
-    status_updates: Vec<CertificateStatusCommandInput>,
 ) -> Result<(), String> {
     validate_payment_input(&input, &allocations)?;
     let instances = db_instances.0.read().await;
@@ -819,14 +995,13 @@ async fn update_payment_atomic(
         Some(DbPool::Sqlite(pool)) => pool,
         _ => return Err("database is not loaded".into()),
     };
-    replace_payment_transaction(pool, payment_id, input, allocations, status_updates).await
+    replace_payment_transaction(pool, payment_id, input, allocations).await
 }
 
 #[tauri::command]
 async fn void_payment_atomic(
     db_instances: State<'_, DbInstances>,
     payment_id: i64,
-    status_updates: Vec<CertificateStatusCommandInput>,
 ) -> Result<(), String> {
     let instances = db_instances.0.read().await;
     let pool = match instances.get("sqlite:mep-finance.db") {
@@ -834,6 +1009,9 @@ async fn void_payment_atomic(
         _ => return Err("database is not loaded".into()),
     };
     let mut tx = begin_immediate(pool).await?;
+    // Captured before voiding: once the payment is not live its allocations no
+    // longer count as evidence, and the certificates it settled must reopen.
+    let touched = allocated_certificate_ids(&mut tx, payment_id).await?;
     let result = sqlx::query(
         "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='Voided by user' WHERE id=? AND voided_at IS NULL",
     )
@@ -844,26 +1022,29 @@ async fn void_payment_atomic(
     if result.rows_affected() != 1 {
         return Err("payment not found or already voided".into());
     }
-    apply_certificate_statuses(&mut tx, status_updates).await?;
+    reconcile_certificates(&mut tx, &touched).await?;
     tx.commit().await.map_err(|e| e.to_string())
 }
 
+/// Recalculate payment-driven certificate statuses from stored evidence.
+///
+/// Takes certificate *identities* only — never a status — so a bulk import or
+/// sync pull can ask for reconciliation without being able to assert an
+/// outcome. An empty list reconciles every live certificate.
 #[tauri::command]
-async fn update_certificate_statuses_atomic(
+async fn reconcile_certificates_atomic(
     db_instances: State<'_, DbInstances>,
-    status_updates: Vec<CertificateStatusCommandInput>,
-) -> Result<(), String> {
-    if status_updates.is_empty() {
-        return Ok(());
-    }
+    certificate_ids: Vec<i64>,
+) -> Result<usize, String> {
     let instances = db_instances.0.read().await;
     let pool = match instances.get("sqlite:mep-finance.db") {
         Some(DbPool::Sqlite(pool)) => pool,
         _ => return Err("database is not loaded".into()),
     };
     let mut tx = begin_immediate(pool).await?;
-    apply_certificate_statuses(&mut tx, status_updates).await?;
-    tx.commit().await.map_err(|e| e.to_string())
+    let changed = reconcile_certificates(&mut tx, &certificate_ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -2462,6 +2643,66 @@ mod financial_transaction_tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 
+    /// The certificate calculation exists in Rust (for the payment transaction
+    /// that owns status) and in TypeScript (for the read model). Both assert
+    /// this one fixture file so the two engines cannot drift; the TypeScript
+    /// side is packages/core/tests/sharedFixtures.test.ts.
+    #[test]
+    fn certificate_fixtures_match_typescript() {
+        let raw = include_str!("../../../../fixtures/certificate-financials.json");
+        let fixtures: serde_json::Value = serde_json::from_str(raw).expect("fixture json");
+
+        let net_cases = fixtures["netPayable"].as_array().expect("netPayable array");
+        assert!(net_cases.len() >= 15, "net payable fixtures too thin");
+        for case in net_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let manual = if case["manualRecoveryMinor"].is_null() {
+                None
+            } else {
+                Some(case["manualRecoveryMinor"].as_i64().unwrap())
+            };
+            let (net, recovery) = certificate_net_payable(
+                case["grossMinor"].as_i64().unwrap(),
+                case["discountMinor"].as_i64().unwrap(),
+                case["vatBp"].as_i64().unwrap(),
+                case["retentionBp"].as_i64().unwrap(),
+                case["withholdingBp"].as_i64().unwrap(),
+                case["advanceMinor"].as_i64().unwrap(),
+                case["advanceMethod"].as_str().unwrap(),
+                manual,
+                case["contractValueMinor"].as_i64().unwrap(),
+                case["recoveredBeforeMinor"].as_i64().unwrap(),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                net,
+                case["expectedNetPayableMinor"].as_i64().unwrap(),
+                "net payable mismatch: {name}"
+            );
+            assert_eq!(
+                recovery,
+                case["expectedRecoveryMinor"].as_i64().unwrap(),
+                "advance recovery mismatch: {name}"
+            );
+        }
+
+        let status_cases = fixtures["status"].as_array().expect("status array");
+        assert!(status_cases.len() >= 14, "status fixtures too thin");
+        for case in status_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let derived = derive_certificate_status(
+                case["current"].as_str().unwrap(),
+                case["netPayableMinor"].as_i64().unwrap(),
+                case["allocatedMinor"].as_i64().unwrap(),
+            );
+            assert_eq!(
+                derived,
+                case["expected"].as_str().unwrap(),
+                "status mismatch: {name}"
+            );
+        }
+    }
+
     #[test]
     fn failed_allocation_rolls_back_inserted_payment() {
         tauri::async_runtime::block_on(async {
@@ -2495,7 +2736,6 @@ mod financial_transaction_tests {
                     certificate_id: 999,
                     amount_minor: 10_000,
                 }],
-                vec![],
             )
             .await;
 
@@ -2548,7 +2788,6 @@ mod financial_transaction_tests {
                     certificate_id: 999,
                     amount_minor: 10_000,
                 }],
-                vec![],
             )
             .await;
 
@@ -3033,7 +3272,7 @@ pub fn run() {
             create_payment_atomic,
             update_payment_atomic,
             void_payment_atomic,
-            update_certificate_statuses_atomic,
+            reconcile_certificates_atomic,
             create_person_payment_atomic,
             delete_person_payment_atomic,
             create_milestone_certificates_atomic,
