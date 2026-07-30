@@ -216,6 +216,74 @@ describe("cancelled assignments", () => {
     );
     expect(entry).toMatchObject({ action: "STATUS_CHANGE", reason: "Client withdrew" });
   });
+
+  /**
+   * Audit regression: the frozen figure decides committed cost and the balance
+   * owed, and it used to be rewritable by any UPDATE that left lifecycle_status
+   * alone — no trigger validated it and no audit row was written. Reproduced
+   * against this schema before migration 0004.
+   */
+  it("refuses to rewrite the frozen earned figure or the reason after cancelling", async () => {
+    const { contractId, assignmentId } = await workspace();
+    await collect(contractId, 100_000, "PC-1");
+    await cancelAssignment(assignmentId, "Scope stopped");
+    const frozen = () => rawOne<{ e: number; r: string }>(
+      `SELECT earned_minor_at_cancellation AS e, cancellation_reason AS r
+         FROM project_assignments WHERE id=${assignmentId}`,
+    );
+    const before = frozen();
+
+    expect(() => rawExec(
+      `UPDATE project_assignments SET earned_minor_at_cancellation=999999 WHERE id=${assignmentId}`,
+    )).toThrow(/CANCELLATION_EVIDENCE_IS_FINAL/);
+    expect(() => rawExec(
+      `UPDATE project_assignments SET cancellation_reason='rewritten' WHERE id=${assignmentId}`,
+    )).toThrow(/CANCELLATION_EVIDENCE_IS_FINAL/);
+    expect(() => rawExec(
+      `UPDATE project_assignments SET cancelled_at='2020-01-01' WHERE id=${assignmentId}`,
+    )).toThrow(/CANCELLATION_EVIDENCE_IS_FINAL/);
+
+    expect(frozen()).toEqual(before);
+  });
+
+  it("refuses to park a frozen earned figure on work that was never cancelled", async () => {
+    const { assignmentId } = await workspace();
+    expect(() => rawExec(
+      `UPDATE project_assignments SET earned_minor_at_cancellation=50_000 WHERE id=${assignmentId}`,
+    )).toThrow(/FROZEN_EARNED_REQUIRES_CANCELLATION/);
+    expect(() => rawExec(
+      `INSERT INTO project_assignments (person_id,project_id,agreed_minor,currency,fx_rate_micro,earned_minor_at_cancellation)
+       SELECT person_id,project_id,agreed_minor,currency,fx_rate_micro,1000
+         FROM project_assignments WHERE id=${assignmentId}`,
+    )).toThrow(/FROZEN_EARNED_REQUIRES_CANCELLATION/);
+  });
+
+  /**
+   * Race regression: the frozen figure is derived from a workspace-wide read and
+   * is final once written, so the derivation must not interleave with a team
+   * payment or a collection. cancelAssignment now runs on the same global
+   * financial lock as payments and reconciliation.
+   */
+  it("freezes a figure consistent with the evidence when a payment races the cancellation", async () => {
+    const { contractId, assignmentId } = await workspace();
+    await collect(contractId, 100_000, "PC-1");
+
+    await Promise.all([
+      cancelAssignment(assignmentId, "Called off mid-run"),
+      createPersonPayment({ assignmentId, date: "2026-07-06", amountMinor: 10_000, note: "racing" }),
+    ]);
+
+    // Whichever order the lock granted, the frozen figure is the earned value
+    // released by the collected certificate — never a partial or doubled read.
+    const row = rawOne<{ e: number }>(
+      `SELECT earned_minor_at_cancellation AS e FROM project_assignments WHERE id=${assignmentId}`,
+    );
+    expect(row?.e).toBe(30_000);
+    // Paid money is preserved and committed cost never drops below it.
+    const p = await position(assignmentId);
+    expect(p).toMatchObject({ accruedMinor: 30_000, paidMinor: 10_000, dueMinor: 20_000 });
+    expect(p!.committedMinor).toBeGreaterThanOrEqual(p!.paidMinor);
+  });
 });
 
 describe("archiving is visibility, not accounting", () => {

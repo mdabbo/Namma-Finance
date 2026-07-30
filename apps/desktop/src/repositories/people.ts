@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type { AssignmentInput, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { withLock } from "../lib/mutex";
 
 interface PersonRow {
   id: number;
@@ -207,7 +208,17 @@ export async function completeAssignment(id: number): Promise<void> {
  * the unearned remainder leaves the project's committed cost. A reason is
  * required: removing a commitment is an accounting decision.
  */
-export async function cancelAssignment(id: number, reason: string): Promise<void> {
+export function cancelAssignment(id: number, reason: string): Promise<void> {
+  // Serialised on the same global financial lock as payments, milestone
+  // reconciliation and number reservation. The frozen figure is derived from a
+  // workspace-wide read and is final once written, so a team payment or a
+  // certificate collection committing between that read and the write would
+  // freeze a figure that never matched the evidence. The lock closes that
+  // window; migration 0004 makes the result tamper-evident.
+  return withLock(() => cancelAssignmentUnlocked(id, reason));
+}
+
+async function cancelAssignmentUnlocked(id: number, reason: string): Promise<void> {
   const trimmed = reason.trim();
   if (!trimmed) throw new Error("CANCELLATION_REASON_REQUIRED");
   const earnedMinor = await assignmentEarnedMinor(id);

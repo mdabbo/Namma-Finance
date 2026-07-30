@@ -87,6 +87,37 @@ describe("assignmentCostPosition", () => {
     }).dueMinor).toBe(0);
   });
 
+  /**
+   * Regression: person payments are not capped, so paid can exceed the agreed
+   * fee or the frozen earned figure. Committed cost must never report less than
+   * cash already spent, or project committed/accrued/actual stop reconciling.
+   */
+  it("never commits less than what was actually paid out", () => {
+    expect(assignmentCostPosition({
+      lifecycle: "CANCELLED",
+      agreedMinor: 60_000,
+      releasedMinor: 45_000,
+      paidOutMinor: 50_000,
+      earnedAtCancellationMinor: 12_000,
+    })).toMatchObject({ earnedMinor: 12_000, paidMinor: 50_000, dueMinor: 0, committedMinor: 50_000 });
+
+    expect(assignmentCostPosition({
+      lifecycle: "ACTIVE",
+      agreedMinor: 60_000,
+      releasedMinor: 10_000,
+      paidOutMinor: 75_000,
+      earnedAtCancellationMinor: null,
+    }).committedMinor).toBe(75_000);
+
+    expect(assignmentCostPosition({
+      lifecycle: "COMPLETED",
+      agreedMinor: 60_000,
+      releasedMinor: 60_000,
+      paidOutMinor: 61_000,
+      earnedAtCancellationMinor: null,
+    }).committedMinor).toBe(61_000);
+  });
+
   it("treats a cancelled assignment with no frozen figure as having earned nothing", () => {
     expect(assignmentCostPosition({
       lifecycle: "CANCELLED",

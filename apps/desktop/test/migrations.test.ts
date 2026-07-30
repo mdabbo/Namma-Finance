@@ -59,12 +59,13 @@ describe("baseline database creation", () => {
     const database = freshDb();
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    // Schema identity is 25: the baseline recreates schema 24 and the
-    // assignment-lifecycle migration carries it forward, so no database can
-    // claim a version whose shape differs.
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
+    // Schema identity is 26: the baseline recreates schema 24, the
+    // assignment-lifecycle migration carries it to 25 and the cancellation
+    // evidence integrity migration to 26, so no database can claim a version
+    // whose shape differs.
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 26 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "25" });
+      .toEqual({ value: "26" });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='application_id'").get())
       .toEqual({ value: "com.mepfinance.app" });
   });
@@ -80,6 +81,21 @@ describe("baseline database creation", () => {
       "cancellation_reason", "earned_minor_at_cancellation", "archived_at",
     ]) {
       expect(columns.has(column), `missing column ${column}`).toBe(true);
+    }
+  });
+
+  it("makes cancellation evidence final and refuses it on live work", () => {
+    const database = freshDb();
+    const triggers = new Set(
+      (database.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[])
+        .map((row) => row.name),
+    );
+    for (const trigger of [
+      "validate_cancellation_evidence_final",
+      "validate_frozen_earned_requires_cancellation_insert",
+      "validate_frozen_earned_requires_cancellation_update",
+    ]) {
+      expect(triggers.has(trigger), `missing trigger ${trigger}`).toBe(true);
     }
   });
 

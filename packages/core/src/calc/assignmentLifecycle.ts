@@ -43,6 +43,12 @@ export interface AssignmentCostPosition {
    * agreed fee, because the scope is either still running or done and will be
    * owed as the client pays. CANCELLED carries only what was earned, so the
    * unearned remainder stops inflating the project's committed cost.
+   *
+   * Never below what has actually been paid out: person payments are not capped
+   * at the agreed fee or at the frozen earned figure, and money already spent is
+   * committed by definition. Without the floor, an overpaid assignment reported
+   * a committed cost lower than its own actual paid cost, so project committed,
+   * accrued and actual cost stopped reconciling.
    */
   committedMinor: number;
 }
@@ -53,13 +59,13 @@ export function assignmentCostPosition(input: AssignmentCostInput): AssignmentCo
     input.lifecycle === "CANCELLED"
       ? Math.max(0, input.earnedAtCancellationMinor ?? 0)
       : Math.max(0, input.releasedMinor);
-  const committedMinor =
+  const commitment =
     input.lifecycle === "CANCELLED" ? earnedMinor : Math.max(0, input.agreedMinor);
   return {
     earnedMinor,
     paidMinor,
     dueMinor: Math.max(0, earnedMinor - paidMinor),
-    committedMinor,
+    committedMinor: Math.max(commitment, paidMinor),
   };
 }
 
