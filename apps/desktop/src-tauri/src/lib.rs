@@ -2617,7 +2617,10 @@ mod financial_transaction_tests {
             .execute(&pool)
             .await
             .unwrap();
-            for (version, description) in [(1_i64, "initial_schema"), (24_i64, "dashboard_snapshot_audit")] {
+            for (version, description) in [
+                (1_i64, "initial_schema"),
+                (24_i64, "dashboard_snapshot_audit"),
+            ] {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations(version,description,installed_on,success,checksum,execution_time) \
                      VALUES(?,?,datetime('now'),1,X'00',0)",
@@ -2651,7 +2654,9 @@ mod financial_transaction_tests {
             .execute(&pool)
             .await
             .unwrap();
-            for (version, description) in [(1_i64, "baseline_schema"), (2_i64, "seed_reference_data")] {
+            for (version, description) in
+                [(1_i64, "baseline_schema"), (2_i64, "seed_reference_data")]
+            {
                 sqlx::query(
                     "INSERT INTO _sqlx_migrations(version,description,installed_on,success,checksum,execution_time) \
                      VALUES(?,?,datetime('now'),1,X'00',0)",
