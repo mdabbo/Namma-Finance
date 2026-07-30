@@ -105,10 +105,10 @@ export function PaymentsPage() {
       header: "",
       sortable: false,
       width: "120px",
-      render: (p) => p.deletedAt ? <Badge value="CANCELLED" label={t("lifecycle.void")} /> : (
+      render: (p) => p.deletedAt ? <Badge value="CANCELLED" label={t("lifecycle.voided")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("common.delete")}</Button>
+          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("lifecycle.voidPayment")}</Button>
         </div>
       ),
     },
@@ -183,10 +183,13 @@ export function PaymentsPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.number}`}
+          title={t("lifecycle.voidPayment")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidPayment")} (${deleting.number})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

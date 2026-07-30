@@ -73,8 +73,12 @@ export async function updatePerson(id: number, input: PersonInput): Promise<void
   );
 }
 
-export async function deletePerson(id: number): Promise<void> {
-  const result = await execute("UPDATE people SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the person is hidden but their assignments and payments remain. */
+export async function deletePerson(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE people SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("PERSON_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -386,7 +390,10 @@ export function usePeopleMutations() {
       mutationFn: (v: { id: number; input: PersonInput }) => updatePerson(v.id, v.input),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deletePerson, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deletePerson(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
     createAssignment: useMutation({ mutationFn: createAssignment, onSuccess: invalidate }),
     updateAssignment: useMutation({
       mutationFn: (v: { id: number; input: AssignmentInput }) => updateAssignment(v.id, v.input),

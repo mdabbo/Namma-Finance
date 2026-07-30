@@ -154,8 +154,12 @@ export async function projectCascadeInfo(id: number) {
   return row ?? { contracts: 0, certificates: 0, payments: 0, expenses: 0 };
 }
 
-export async function deleteProject(id: number): Promise<void> {
-  const result = await execute("UPDATE projects SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the project is hidden but its contracts and history remain. */
+export async function deleteProject(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE projects SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("PROJECT_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -185,6 +189,9 @@ export function useProjectMutations() {
       mutationFn: (v: { id: number; input: ProjectInput; revision?: RevisionMetadata }) => updateProject(v.id, v.input, v.revision),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteProject, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteProject(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
   };
 }

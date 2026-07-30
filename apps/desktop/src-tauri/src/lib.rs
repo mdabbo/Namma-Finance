@@ -1004,19 +1004,25 @@ async fn update_payment_atomic(
 async fn void_payment_atomic(
     db_instances: State<'_, DbInstances>,
     payment_id: i64,
+    reason: Option<String>,
 ) -> Result<(), String> {
     let instances = db_instances.0.read().await;
     let pool = match instances.get("sqlite:mep-finance.db") {
         Some(DbPool::Sqlite(pool)) => pool,
         _ => return Err("database is not loaded".into()),
     };
+    let void_reason = reason
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "Voided by user".to_string());
     let mut tx = begin_immediate(pool).await?;
     // Captured before voiding: once the payment is not live its allocations no
     // longer count as evidence, and the certificates it settled must reopen.
     let touched = allocated_certificate_ids(&mut tx, payment_id).await?;
     let result = sqlx::query(
-        "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='Voided by user' WHERE id=? AND voided_at IS NULL",
+        "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=? WHERE id=? AND voided_at IS NULL",
     )
+    .bind(&void_reason)
     .bind(payment_id)
     .execute(&mut *tx)
     .await

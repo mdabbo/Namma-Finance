@@ -94,7 +94,7 @@ export function ExpensesPage() {
         e.personPaymentId !== null ? null : (
           <div className="flex justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
             <Button variant="ghost" onClick={() => setEditing(e)}>{t("common.edit")}</Button>
-            <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(e)}>{t("common.delete")}</Button>
+            <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(e)}>{t("lifecycle.voidExpense")}</Button>
           </div>
         ),
     },
@@ -183,10 +183,13 @@ export function ExpensesPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.description}`}
+          title={t("lifecycle.voidExpense")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidExpense")} (${deleting.description})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

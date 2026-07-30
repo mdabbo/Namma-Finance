@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, FileDown, Plus, Trash2 } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, FileDown, Plus, Trash2 } from "lucide-react";
 import {
   assignmentSchema,
   computeAssignmentAccount,
@@ -108,8 +108,8 @@ export function PersonDetailPage() {
                       <Plus size={14} /> {t("people.newPayment")}
                     </Button>
                     <Button variant="ghost" onClick={() => setAssignmentModal(a)}>{t("common.edit")}</Button>
-                    <Button variant="ghost" className="!text-red-600" onClick={() => mutations.removeAssignment.mutate(a.id)}>
-                      <Trash2 size={14} />
+                    <Button variant="ghost" title={t("lifecycle.archiveAssignment")} aria-label={t("lifecycle.archiveAssignment")} onClick={() => mutations.removeAssignment.mutate(a.id)}>
+                      <Archive size={14} />
                     </Button>
                   </div>
                 </div>

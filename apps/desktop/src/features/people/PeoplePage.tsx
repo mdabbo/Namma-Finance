@@ -68,7 +68,7 @@ export function PeoplePage() {
       render: (p) => p.archivedAt ? <Badge value="CANCELLED" label={t("lifecycle.archived")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("common.delete")}</Button>
+          <Button variant="ghost" onClick={() => setDeleting(p)}>{t("lifecycle.archivePerson")}</Button>
         </div>
       ),
     },
@@ -133,11 +133,14 @@ export function PeoplePage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.name}`}
+          title={t("lifecycle.archivePerson")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchivePerson")} (${deleting.name})`}
           details={[t("people.assignments"), t("people.payments")]}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={() => mutations.remove.mutate({ id: deleting.id }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

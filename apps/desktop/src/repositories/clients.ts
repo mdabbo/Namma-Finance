@@ -84,8 +84,12 @@ export async function clientCascadeInfo(id: number) {
   return row ?? { projects: 0, contracts: 0, certificates: 0, payments: 0 };
 }
 
-export async function deleteClient(id: number): Promise<void> {
-  const result = await execute("UPDATE clients SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the client is hidden but every linked record is retained. */
+export async function deleteClient(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE clients SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("CLIENT_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -114,6 +118,9 @@ export function useClientMutations() {
       mutationFn: (v: { id: number; input: ClientInput }) => updateClient(v.id, v.input),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteClient, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteClient(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
   };
 }

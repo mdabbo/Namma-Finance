@@ -166,7 +166,9 @@ export function CertificatesPage() {
             <FileDown size={15} />
           </Button>
           <Button variant="ghost" onClick={() => setEditing(c)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(c)}>{t("common.delete")}</Button>
+          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(c)}>
+            {t("lifecycle.voidCertificate")}
+          </Button>
         </div>
       ),
     },
@@ -242,10 +244,13 @@ export function CertificatesPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.number}`}
+          title={t("lifecycle.voidCertificate")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidCertificate")} (${deleting.number})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
 

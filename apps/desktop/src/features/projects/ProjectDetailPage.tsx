@@ -342,12 +342,15 @@ export function ProjectDetailPage() {
 
       {deletingContract && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deletingContract.contract.number}`}
+          title={t("lifecycle.archiveContract")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchiveContract")} (${deletingContract.contract.number})`}
           details={deletingContract.details}
           busy={contractMutations.remove.isPending}
           onCancel={() => setDeletingContract(null)}
           onConfirm={() =>
-            contractMutations.remove.mutate(deletingContract.contract.id, {
+            contractMutations.remove.mutate({ id: deletingContract.contract.id }, {
               onSuccess: () => setDeletingContract(null),
             })
           }
@@ -748,10 +751,9 @@ function ProjectContracts({
           <Button
             variant="ghost"
             size="sm"
-            className="!text-red-600"
             onClick={() => onDelete(contract)}
           >
-            {t("common.delete")}
+            {t("lifecycle.archiveContract")}
           </Button>
         </div>
       ),

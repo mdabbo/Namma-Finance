@@ -75,7 +75,6 @@ export function ClientsPage() {
           </Button>
           <Button
             variant="ghost"
-            className="!text-red-600"
             onClick={async () => {
               const info = await clientCascadeInfo(c.id);
               const details = [
@@ -87,7 +86,7 @@ export function ClientsPage() {
               setDeleting({ client: c, details });
             }}
           >
-            {t("common.delete")}
+            {t("lifecycle.archiveClient")}
           </Button>
         </div>
       ),
@@ -135,11 +134,14 @@ export function ClientsPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.client.name}`}
+          title={t("lifecycle.archiveClient")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchiveClient")} (${deleting.client.name})`}
           details={deleting.details}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.client.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={() => mutations.remove.mutate({ id: deleting.client.id }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

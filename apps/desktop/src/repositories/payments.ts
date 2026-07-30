@@ -413,22 +413,23 @@ async function updatePaymentUnlocked(id: number, input: PaymentInput, allocation
   }
 }
 
-/** Soft delete — history matters for payments. Allocations of deleted payments are ignored by calc. */
-export function deletePayment(id: number): Promise<void> {
-  return withLock(() => deletePaymentUnlocked(id));
+/** Void (soft) — history matters for payments. Allocations of voided payments are ignored by calc. */
+export function deletePayment(id: number, reason?: string): Promise<void> {
+  return withLock(() => deletePaymentUnlocked(id, reason));
 }
 
-async function deletePaymentUnlocked(id: number): Promise<void> {
+async function deletePaymentUnlocked(id: number, reason?: string): Promise<void> {
   // Captured before voiding: once the payment is not live its allocations stop
   // counting as evidence, so the certificates it settled must reopen.
   const previous = await listAllocationsByPayment(id);
   const touched = previous.map((item) => item.certificateId);
+  const voidReason = reason?.trim() || "Voided by user";
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("void_payment_atomic", { paymentId: id });
+    await invoke("void_payment_atomic", { paymentId: id, reason: voidReason });
   } else {
     await execute("BEGIN IMMEDIATE");
     try {
-    const result = await execute("UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='Voided by user' WHERE id=$1 AND voided_at IS NULL", [id]);
+    const result = await execute("UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL", [id, voidReason]);
     if (result.rowsAffected !== 1) throw new Error("PAYMENT_NOT_FOUND_OR_VOIDED");
       await reconcileWithinTransaction(touched);
       await execute("COMMIT");
@@ -473,6 +474,9 @@ export function usePaymentMutations() {
         updatePayment(v.id, v.input, v.allocations),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deletePayment, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deletePayment(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
   };
 }

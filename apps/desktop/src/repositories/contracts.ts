@@ -205,8 +205,12 @@ export async function contractCascadeInfo(id: number) {
   return row ?? { certificates: 0, payments: 0 };
 }
 
-export async function deleteContract(id: number): Promise<void> {
-  const result = await execute("UPDATE contracts SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the contract is hidden but its certificates and payments remain. */
+export async function deleteContract(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE contracts SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("CONTRACT_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -249,6 +253,9 @@ export function useContractMutations() {
       },
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteContract, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteContract(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
   };
 }

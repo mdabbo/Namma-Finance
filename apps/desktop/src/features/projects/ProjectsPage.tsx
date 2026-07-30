@@ -89,7 +89,6 @@ export function ProjectsPage() {
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
           <Button
             variant="ghost"
-            className="!text-red-600"
             onClick={async () => {
               const info = await projectCascadeInfo(p.id);
               setDeleting({
@@ -103,7 +102,7 @@ export function ProjectsPage() {
               });
             }}
           >
-            {t("common.delete")}
+            {t("lifecycle.archiveProject")}
           </Button>
         </div>
       ),
@@ -185,11 +184,15 @@ export function ProjectsPage() {
       )}
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.project.name}`}
+          title={t("lifecycle.archiveProject")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          requireReason
+          message={`${t("lifecycle.confirmArchiveProject")} (${deleting.project.name})`}
           details={deleting.details}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.project.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.project.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

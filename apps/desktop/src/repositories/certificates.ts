@@ -220,10 +220,18 @@ async function assertCertificateHasNoLiveAllocations(id: number): Promise<void> 
   if ((row?.count ?? 0) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT");
 }
 
-/** Soft delete — history matters for certificates. */
-export async function deleteCertificate(id: number): Promise<void> {
+/**
+ * Void (soft) — the certificate stops counting toward invoiced and outstanding
+ * amounts but its record and audit history are kept. The schema forbids hard
+ * deletion of a certificate (BEFORE DELETE raises PROTECTED_FINANCIAL_RECORD_USE_VOID),
+ * so voiding is the only removal path, whatever the certificate's status.
+ */
+export async function deleteCertificate(id: number, reason?: string): Promise<void> {
   await assertCertificateHasNoLiveAllocations(id);
-  const result = await execute("UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='Voided by user' WHERE id=$1 AND voided_at IS NULL", [id]);
+  const result = await execute(
+    "UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL",
+    [id, reason?.trim() || "Voided by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND_OR_VOIDED");
 }
 
@@ -267,6 +275,9 @@ export function useCertificateMutations() {
       },
       onSettled: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteCertificate, onSettled: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteCertificate(v.id, v.reason),
+      onSettled: invalidate,
+    }),
   };
 }

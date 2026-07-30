@@ -5,7 +5,32 @@ export const en = {
     archived: "Archived",
     archive: "Archive",
     void: "Void",
+    voided: "Voided",
     reversed: "Reversed",
+    reason: "Reason",
+    reasonPlaceholder: "Explain why — this is kept in the audit history",
+    archiveClient: "Archive client",
+    archiveProject: "Archive project",
+    archivePerson: "Archive person",
+    archiveContract: "Archive contract",
+    archiveAssignment: "Archive assignment",
+    voidPayment: "Void payment",
+    voidExpense: "Void expense",
+    voidCertificate: "Void certificate",
+    confirmArchiveClient:
+      "This client will be archived and hidden from active lists. Its projects, contracts, and history remain available, and you can restore it later.",
+    confirmArchiveProject:
+      "This project will be archived and hidden from active lists. Its contracts, certificates, and history remain available, and you can restore it later.",
+    confirmArchivePerson:
+      "This person will be archived and hidden from active lists. Their assignments, payments, and history remain available, and you can restore them later.",
+    confirmArchiveContract:
+      "This contract will be archived and hidden from active lists. Its certificates, payments, and history remain available.",
+    confirmVoidPayment:
+      "This payment will be voided. The original payment and its audit history remain available, and the certificate balances it settled will be recalculated.",
+    confirmVoidExpense:
+      "This expense will be voided. It stops counting toward project and overhead cost, but the record and its audit history remain available.",
+    confirmVoidCertificate:
+      "This certificate will be voided. It stops counting toward invoiced and outstanding amounts, but the record and its audit history remain available.",
   },
   common: {
     appName: "NAMAA Finance",
