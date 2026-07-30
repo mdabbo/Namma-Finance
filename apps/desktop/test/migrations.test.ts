@@ -59,13 +59,28 @@ describe("baseline database creation", () => {
     const database = freshDb();
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    // Schema identity stays 24: the baseline recreates exactly that schema, so
-    // no database can claim a version whose shape differs.
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 24 });
+    // Schema identity is 25: the baseline recreates schema 24 and the
+    // assignment-lifecycle migration carries it forward, so no database can
+    // claim a version whose shape differs.
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "24" });
+      .toEqual({ value: "25" });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='application_id'").get())
       .toEqual({ value: "com.mepfinance.app" });
+  });
+
+  it("carries the assignment lifecycle columns", () => {
+    const database = freshDb();
+    const columns = new Set(
+      (database.prepare("PRAGMA table_info(project_assignments)").all() as { name: string }[])
+        .map((column) => column.name),
+    );
+    for (const column of [
+      "lifecycle_status", "completed_at", "cancelled_at",
+      "cancellation_reason", "earned_minor_at_cancellation", "archived_at",
+    ]) {
+      expect(columns.has(column), `missing column ${column}`).toBe(true);
+    }
   });
 
   it("carries every table the application depends on", () => {
@@ -250,12 +265,12 @@ describe("baseline financial integrity constraints", () => {
   it("redacts backup paths in audit evidence", () => {
     const database = freshDb();
     database.exec(`INSERT INTO backups_log(path,kind,filename,database_version,application_version,sha256_checksum,backup_type,source_device)
-                   VALUES('C:/secret/test.db','MANUAL','test.db',24,'0.6.7','abc','SAFETY','device-a')`);
+                   VALUES('C:/secret/test.db','MANUAL','test.db',25,'0.7.0','abc','SAFETY','device-a')`);
     const row = database.prepare("SELECT after_json FROM audit_logs WHERE entity_type='backup' ORDER BY id DESC LIMIT 1").get() as {
       after_json: string;
     };
     expect(JSON.parse(row.after_json)).toMatchObject({
-      backupType: "SAFETY", filename: "test.db", databaseVersion: 24, path: "[REDACTED]",
+      backupType: "SAFETY", filename: "test.db", databaseVersion: 25, path: "[REDACTED]",
     });
     expect(row.after_json).not.toContain("C:/secret");
   });

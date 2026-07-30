@@ -1711,14 +1711,14 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 24;
+const CURRENT_SCHEMA_VERSION: i64 = 25;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 /// Migration lineage after the v0.7.0 rebase. The schema version stays 24
 /// because the baseline recreates that exact schema, so these describe the
 /// FILE sequence and are what distinguishes a rebased database from one built
 /// by the retired 0001..0024 development chain.
-const CURRENT_MIGRATION_VERSION: i64 = 2;
+const CURRENT_MIGRATION_VERSION: i64 = 3;
 const BASELINE_MIGRATION_DESCRIPTION: &str = "baseline_schema";
 
 #[derive(Debug, Clone, Serialize)]
@@ -2724,6 +2724,7 @@ mod financial_transaction_tests {
         for migration in [
             include_str!("../migrations/0001_baseline.sql"),
             include_str!("../migrations/0002_seed_reference_data.sql"),
+            include_str!("../migrations/0003_assignment_lifecycle.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -3125,6 +3126,7 @@ mod financial_transaction_tests {
         for migration in [
             include_str!("../migrations/0001_baseline.sql"),
             include_str!("../migrations/0002_seed_reference_data.sql"),
+            include_str!("../migrations/0003_assignment_lifecycle.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -3547,6 +3549,12 @@ pub fn run() {
             version: 2,
             description: "seed_reference_data",
             sql: include_str!("../migrations/0002_seed_reference_data.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "assignment_lifecycle",
+            sql: include_str!("../migrations/0003_assignment_lifecycle.sql"),
             kind: MigrationKind::Up,
         },
     ];

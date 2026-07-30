@@ -231,6 +231,8 @@ describe("freelancer/employee assignment accounts", () => {
       {
         id: 1, personId: 1, projectId: 1, agreedMinor: 5_000_000,
         currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null, createdAt: "2026-01-01",
+        lifecycleStatus: "ACTIVE", completedAt: null, cancelledAt: null,
+        cancellationReason: null, earnedMinorAtCancellation: null, archivedAt: null,
       },
       [
         { id: 1, assignmentId: 1, date: "2026-02-01", amountMinor: 1_500_000, note: null, createdAt: "" },

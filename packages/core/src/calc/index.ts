@@ -5,6 +5,7 @@ export * from "./aggregate";
 export * from "./allocation";
 export * from "./valuation";
 export * from "./teamPayout";
+export * from "./assignmentLifecycle";
 export * from "./overhead";
 export * from "./profitability";
 export * from "./labor";

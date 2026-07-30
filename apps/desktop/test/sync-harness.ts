@@ -25,6 +25,7 @@ const migrationsDir = join(here, "..", "src-tauri", "migrations");
 const MIGRATIONS = [
   "0001_baseline.sql",
   "0002_seed_reference_data.sql",
+  "0003_assignment_lifecycle.sql",
 ];
 
 export function buildMigratedDb(through: number = MIGRATIONS.length): DatabaseSync {

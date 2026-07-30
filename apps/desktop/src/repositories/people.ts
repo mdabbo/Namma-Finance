@@ -90,15 +90,24 @@ interface AssignmentRow {
   scope: string | null;
   progress_note: string | null;
   created_at: string;
+  lifecycle_status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  earned_minor_at_cancellation: number | null;
+  archived_at: string | null;
   project_name?: string;
   project_code?: string;
   person_name?: string;
+  person_archived_at?: string | null;
 }
 
 export interface AssignmentListItem extends ProjectAssignment {
   projectName: string;
   projectCode: string;
   personName: string;
+  /** Archiving the person also silences the assignment's alerts. */
+  personArchived: boolean;
 }
 
 function mapAssignment(r: AssignmentRow): AssignmentListItem {
@@ -112,14 +121,22 @@ function mapAssignment(r: AssignmentRow): AssignmentListItem {
     scope: r.scope,
     progressNote: r.progress_note,
     createdAt: r.created_at,
+    lifecycleStatus: r.lifecycle_status,
+    completedAt: r.completed_at,
+    cancelledAt: r.cancelled_at,
+    cancellationReason: r.cancellation_reason,
+    earnedMinorAtCancellation: r.earned_minor_at_cancellation,
+    archivedAt: r.archived_at,
     projectName: r.project_name ?? "",
     projectCode: r.project_code ?? "",
     personName: r.person_name ?? "",
+    personArchived: (r.person_archived_at ?? null) !== null,
   };
 }
 
 const ASSIGNMENT_SQL = `
-  SELECT a.*, p.name AS project_name, p.code AS project_code, pe.name AS person_name
+  SELECT a.*, p.name AS project_name, p.code AS project_code, pe.name AS person_name,
+         pe.archived_at AS person_archived_at
   FROM project_assignments a
   JOIN projects p ON p.id = a.project_id
   JOIN people pe ON pe.id = a.person_id`;
@@ -165,6 +182,58 @@ export async function updateAssignment(id: number, input: AssignmentInput): Prom
      WHERE id=$6`,
     [input.agreedMinor, input.currency, input.fxRateMicro, input.scope ?? null, input.progressNote ?? null, id],
   );
+}
+
+/**
+ * Mark the agreed scope finished. Unpaid earned value stays payable, because
+ * finishing the work does not mean the client has paid for it yet.
+ */
+export async function completeAssignment(id: number): Promise<void> {
+  const result = await execute(
+    `UPDATE project_assignments SET lifecycle_status='COMPLETED', completed_at=datetime('now')
+     WHERE id=$1 AND lifecycle_status='ACTIVE'`,
+    [id],
+  );
+  if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_NOT_ACTIVE");
+}
+
+/**
+ * Call off the remaining scope. Earned value is frozen at this moment so
+ * certificates the client pays later cannot accrue to work that stopped, and
+ * the unearned remainder leaves the project's committed cost. A reason is
+ * required: removing a commitment is an accounting decision.
+ */
+export async function cancelAssignment(id: number, reason: string): Promise<void> {
+  const trimmed = reason.trim();
+  if (!trimmed) throw new Error("CANCELLATION_REASON_REQUIRED");
+  const earnedMinor = await assignmentEarnedMinor(id);
+  const result = await execute(
+    `UPDATE project_assignments SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),
+       cancellation_reason=$1, earned_minor_at_cancellation=$2
+     WHERE id=$3 AND lifecycle_status<>'CANCELLED'`,
+    [trimmed, earnedMinor, id],
+  );
+  if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+}
+
+/** Fee released to this assignment by client certificates paid so far. */
+async function assignmentEarnedMinor(id: number): Promise<number> {
+  const assignment = await selectOne<{ projectId: number; agreedMinor: number }>(
+    "SELECT project_id AS projectId, agreed_minor AS agreedMinor FROM project_assignments WHERE id=$1",
+    [id],
+  );
+  if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+  const paid = await selectOne<{ paid: number }>(
+    "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL",
+    [id],
+  );
+  const { loadWorkspaceFinancials } = await import("./financials");
+  const workspace = await loadWorkspaceFinancials();
+  const states = [...workspace.contractStates.values()].filter(
+    (state) => state.contract.projectId === assignment.projectId,
+  );
+  const { computeTeamPayout } = await import("@mep/core");
+  return computeTeamPayout(assignment.agreedMinor, states, paid?.paid ?? 0).releasedMinor;
 }
 
 export async function deleteAssignment(id: number): Promise<void> {
@@ -324,6 +393,11 @@ export function usePeopleMutations() {
       onSuccess: invalidate,
     }),
     removeAssignment: useMutation({ mutationFn: deleteAssignment, onSuccess: invalidate }),
+    completeAssignment: useMutation({ mutationFn: completeAssignment, onSuccess: invalidate }),
+    cancelAssignment: useMutation({
+      mutationFn: (v: { id: number; reason: string }) => cancelAssignment(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
     createPersonPayment: useMutation({ mutationFn: createPersonPayment, onSuccess: invalidate }),
     removePersonPayment: useMutation({ mutationFn: deletePersonPayment, onSuccess: invalidate }),
   };

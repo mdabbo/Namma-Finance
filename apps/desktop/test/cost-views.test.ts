@@ -79,9 +79,13 @@ describe("Milestone 6 repository cost views", () => {
       assignmentId,
       projectId,
       currency: "EGP",
+      // Still running and visible, so the whole agreed fee stays committed.
+      lifecycleStatus: "ACTIVE",
+      archived: false,
       accruedMinor: 20_000_00,
       paidMinor: 0,
       dueMinor: 20_000_00,
+      committedMinor: 20_000_00,
     });
 
     await createPersonPayment({ assignmentId, date: "2026-03-02", amountMinor: 5_000_00, note: "First fee" });

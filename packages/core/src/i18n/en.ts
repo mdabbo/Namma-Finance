@@ -483,6 +483,18 @@ export const en = {
     readyTitle: "Workspace ready",
     readyDescription: "Setup is complete. Issue the first payment certificate to start the financial cycle.",
   },
+  assignments: {
+    lifecycle: {
+      ACTIVE: "Active",
+      COMPLETED: "Completed",
+      CANCELLED: "Cancelled",
+    },
+    complete: "Complete",
+    cancel: "Cancel assignment",
+    cancelTitle: "Cancel assignment",
+    cancelExplain: "{{person}} keeps everything already earned and paid. The unearned remainder of the agreed fee stops counting as committed project cost. Nothing is deleted and the history stays available.",
+    cancelReason: "Reason for cancelling",
+  },
   certificates: {
     title: "Payment Certificates",
     single: "Certificate",

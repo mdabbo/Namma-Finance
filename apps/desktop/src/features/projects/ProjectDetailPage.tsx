@@ -12,7 +12,7 @@ import {
   ReceiptText,
   Users,
 } from "lucide-react";
-import type { CertificateStatus, Contract } from "@mep/core";
+import type { AssignmentLifecycle, CertificateStatus, Contract } from "@mep/core";
 import {
   assignmentSchema,
   laborCostMinor,
@@ -1292,6 +1292,9 @@ function ProjectTeam({
   const { t } = useTranslation();
   const fmt = useFormat();
   const navigate = useNavigate();
+  const mutations = usePeopleMutations();
+  const [cancelling, setCancelling] = useState<AssignmentListItem | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
   const accountOf = (assignmentId: number) =>
     financials?.teamAccounts.find(
       (account) => account.assignmentId === assignmentId,
@@ -1309,6 +1312,24 @@ function ProjectTeam({
       key: "scope",
       header: t("common.description"),
       value: (assignment) => assignment.scope,
+    },
+    {
+      // Lifecycle answers what happened to the work; archiving is separate, so
+      // an archived row still shows the lifecycle that governs its money.
+      key: "lifecycle",
+      header: t("common.status"),
+      value: (assignment) => assignment.lifecycleStatus,
+      render: (assignment) => (
+        <div className="flex items-center gap-1.5">
+          <Badge
+            value={ASSIGNMENT_LIFECYCLE_TONE[assignment.lifecycleStatus]}
+            label={t(`assignments.lifecycle.${assignment.lifecycleStatus}`)}
+          />
+          {assignment.archivedAt !== null && (
+            <Badge value="CANCELLED" label={t("lifecycle.archived")} />
+          )}
+        </div>
+      ),
     },
     {
       key: "agreed",
@@ -1367,6 +1388,31 @@ function ProjectTeam({
       },
       align: "end",
     },
+    {
+      key: "lifecycleActions",
+      header: "",
+      sortable: false,
+      width: "210px",
+      render: (assignment) =>
+        assignment.lifecycleStatus === "ACTIVE" ? (
+          <div className="flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
+            <Button
+              variant="ghost"
+              disabled={mutations.completeAssignment.isPending}
+              onClick={() => mutations.completeAssignment.mutate(assignment.id)}
+            >
+              {t("assignments.complete")}
+            </Button>
+            <Button
+              variant="ghost"
+              className="!text-red-600"
+              onClick={() => setCancelling(assignment)}
+            >
+              {t("assignments.cancel")}
+            </Button>
+          </div>
+        ) : null,
+    },
   ];
 
   return (
@@ -1406,9 +1452,53 @@ function ProjectTeam({
           }
         />
       )}
+
+      {/* Cancelling drops the unearned commitment, so it records why. */}
+      {cancelling && (
+        <Modal title={t("assignments.cancelTitle")} onClose={() => setCancelling(null)}>
+          <p className="mb-4 text-sm leading-6 text-muted">
+            {t("assignments.cancelExplain", { person: cancelling.personName })}
+          </p>
+          <Field label={t("assignments.cancelReason")}>
+            <Input
+              autoFocus
+              value={cancelReason}
+              onChange={(event) => setCancelReason(event.target.value)}
+            />
+          </Field>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button onClick={() => setCancelling(null)}>{t("common.cancel")}</Button>
+            <Button
+              variant="primary"
+              className="!bg-red-600 hover:!bg-red-700"
+              disabled={!cancelReason.trim() || mutations.cancelAssignment.isPending}
+              onClick={() =>
+                mutations.cancelAssignment.mutate(
+                  { id: cancelling.id, reason: cancelReason },
+                  {
+                    onSuccess: () => {
+                      setCancelling(null);
+                      setCancelReason("");
+                    },
+                  },
+                )
+              }
+            >
+              {t("assignments.cancel")}
+            </Button>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }
+
+/** Badge tone per lifecycle, reusing the shared status palette. */
+const ASSIGNMENT_LIFECYCLE_TONE: Record<AssignmentLifecycle, string> = {
+  ACTIVE: "ACTIVE",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+};
 
 /**
  * Assign a person to this project. Creating a person here also adds that

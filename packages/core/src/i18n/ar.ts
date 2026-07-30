@@ -485,6 +485,18 @@ export const ar: Dictionary = {
     readyTitle: "مساحة العمل جاهزة",
     readyDescription: "اكتمل الإعداد. أصدر أول مستخلص دفع لبدء الدورة المالية.",
   },
+  assignments: {
+    lifecycle: {
+      ACTIVE: "نشط",
+      COMPLETED: "مكتمل",
+      CANCELLED: "ملغى",
+    },
+    complete: "إكمال",
+    cancel: "إلغاء التكليف",
+    cancelTitle: "إلغاء التكليف",
+    cancelExplain: "يحتفظ {{person}} بكل ما استحقه وما تم صرفه بالفعل. أما الجزء غير المستحق من الأتعاب المتفق عليها فيتوقف عن الاحتساب ضمن التكلفة الملتزم بها للمشروع. لا يُحذف أي سجل ويبقى التاريخ متاحًا.",
+    cancelReason: "سبب الإلغاء",
+  },
   certificates: {
     title: "المستخلصات",
     single: "مستخلص",

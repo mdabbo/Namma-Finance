@@ -19,7 +19,11 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, "..", "src-tauri", "migrations");
-const MIGRATIONS = ["0001_baseline.sql", "0002_seed_reference_data.sql"];
+const MIGRATIONS = [
+  "0001_baseline.sql",
+  "0002_seed_reference_data.sql",
+  "0003_assignment_lifecycle.sql",
+];
 
 let db = null;
 

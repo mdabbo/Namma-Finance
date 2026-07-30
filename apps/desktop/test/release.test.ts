@@ -54,13 +54,26 @@ describe("Milestone 16 release integrity", () => {
     const migrationNames = readdirSync(join(root, "apps/desktop/src-tauri/migrations"))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    expect(migrationNames).toEqual(["0001_baseline.sql", "0002_seed_reference_data.sql"]);
+    expect(migrationNames).toEqual([
+      "0001_baseline.sql",
+      "0002_seed_reference_data.sql",
+      "0003_assignment_lifecycle.sql",
+    ]);
     const stamped = migrationNames.flatMap((name) => [
       ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")
         .matchAll(/PRAGMA\s+user_version\s*=\s*(\d+)/gi),
     ].map((match) => Number(match[1])));
     expect(stamped.at(-1)).toBe(release.schemaVersion);
-    expect(readFileSync(join(root, "apps/desktop/src-tauri/migrations", "0002_seed_reference_data.sql"), "utf8"))
+    // Whichever migration stamps last must also record the same version in
+    // app_metadata, so the pragma and the metadata row cannot disagree.
+    const lastStamping = migrationNames
+      .filter((name) =>
+        /PRAGMA\s+user_version/i.test(
+          readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8"),
+        ))
+      .at(-1);
+    expect(lastStamping).toBeTruthy();
+    expect(readFileSync(join(root, "apps/desktop/src-tauri/migrations", lastStamping!), "utf8"))
       .toMatch(new RegExp(`schema_version['"]?\\s*,\\s*['"]${release.schemaVersion}['"]`, "i"));
   });
 

@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  assignmentCostPosition,
+  assignmentRaisesAlerts,
   computeContractState,
   computeProjectFinancials,
   computeReadyToBill,
@@ -16,6 +18,7 @@ import {
   type PaymentKind,
   type ProjectFinancials,
   type ProjectCostProfile,
+  type AssignmentLifecycle,
   type ProjectCashValuationEgp,
 } from "@mep/core";
 import { select } from "../lib/db";
@@ -94,12 +97,21 @@ export interface TeamAccountItem {
   assignmentId: number;
   projectId: number;
   currency: string;
-  /** Assignment fee released by paid client certificates. */
+  /** What happened to the work; drives how the figures below are derived. */
+  lifecycleStatus: AssignmentLifecycle;
+  /** Visibility only — an archived assignment still owes what it earned. */
+  archived: boolean;
+  /**
+   * Fee earned: released by paid client certificates while ACTIVE or
+   * COMPLETED, or the balance frozen at cancellation.
+   */
   accruedMinor: number;
   /** Real person-payment records posted against the assignment. */
   paidMinor: number;
-  /** Accrued less paid, floored at zero by the shared core engine. */
+  /** Earned less paid, floored at zero. */
   dueMinor: number;
+  /** Cost the project has committed: the agreed fee, or earned if cancelled. */
+  committedMinor: number;
 }
 
 export interface WorkspaceFinancials {
@@ -355,8 +367,14 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
   const assignments = await read<{
     id: number; person_id: number; project_id: number; agreed_minor: number;
     currency: string; fx_rate_micro: number; person_name: string;
+    lifecycle_status: AssignmentLifecycle;
+    earned_minor_at_cancellation: number | null;
+    archived_at: string | null;
+    person_archived_at: string | null;
   }>(
-    `SELECT a.id, a.person_id, a.project_id, a.agreed_minor, a.currency, a.fx_rate_micro, pe.name AS person_name
+    `SELECT a.id, a.person_id, a.project_id, a.agreed_minor, a.currency, a.fx_rate_micro,
+            a.lifecycle_status, a.earned_minor_at_cancellation, a.archived_at,
+            pe.name AS person_name, pe.archived_at AS person_archived_at
      FROM project_assignments a
      JOIN people pe ON pe.id=a.person_id
      JOIN projects p ON p.id=a.project_id
@@ -376,6 +394,11 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
   }
   const teamPayables: TeamPayableItem[] = [];
   const teamAccounts: TeamAccountItem[] = [];
+  // Committed and accrued cost are collected for EVERY assignment, archived
+  // included: archiving hides a row, it does not unspend the money. Only the
+  // operational alert list is filtered.
+  const committedTeamByProject = new Map<number, number>();
+  const accruedByProject = new Map<number, number>();
   for (const a of assignments) {
     const project = projectById.get(a.project_id);
     if (!project) continue;
@@ -384,15 +407,38 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       statesByProject.get(a.project_id) ?? [],
       paidByAssignment.get(a.id) ?? 0,
     );
+    const position = assignmentCostPosition({
+      lifecycle: a.lifecycle_status,
+      agreedMinor: a.agreed_minor,
+      releasedMinor: payout.releasedMinor,
+      paidOutMinor: payout.paidOutMinor,
+      earnedAtCancellationMinor: a.earned_minor_at_cancellation,
+    });
+    const toEgp = (minor: number) => toEgpPiasters(minor, a.currency, a.fx_rate_micro);
     teamAccounts.push({
       assignmentId: a.id,
       projectId: project.id,
       currency: a.currency,
-      accruedMinor: payout.releasedMinor,
-      paidMinor: payout.paidOutMinor,
-      dueMinor: payout.dueMinor,
+      lifecycleStatus: a.lifecycle_status,
+      archived: a.archived_at !== null,
+      accruedMinor: position.earnedMinor,
+      paidMinor: position.paidMinor,
+      dueMinor: position.dueMinor,
+      committedMinor: position.committedMinor,
     });
-    if (payout.dueMinor > 0) {
+    committedTeamByProject.set(
+      project.id,
+      (committedTeamByProject.get(project.id) ?? 0) + toEgp(position.committedMinor),
+    );
+    accruedByProject.set(
+      project.id,
+      (accruedByProject.get(project.id) ?? 0) + toEgp(position.dueMinor),
+    );
+    if (assignmentRaisesAlerts({
+      archived: a.archived_at !== null,
+      personArchived: a.person_archived_at !== null,
+      dueMinor: position.dueMinor,
+    })) {
       teamPayables.push({
         assignmentId: a.id,
         personId: a.person_id,
@@ -401,9 +447,10 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
         projectName: project.name,
         projectCode: project.code,
         currency: a.currency,
-        dueMinor: payout.dueMinor,
-        dueEgp: toEgpPiasters(payout.dueMinor, a.currency, a.fx_rate_micro),
-        dueTitles: payout.dueTitles,
+        dueMinor: position.dueMinor,
+        dueEgp: toEgp(position.dueMinor),
+        // A cancelled assignment owes a frozen balance, not further stages.
+        dueTitles: a.lifecycle_status === "CANCELLED" ? [] : payout.dueTitles,
       });
     }
   }
@@ -439,15 +486,6 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
   )) {
     const egp = toEgpPiasters(row.amount_minor, row.currency, row.fx_rate_micro);
     nonTeamExpenseByProject.set(row.project_id, (nonTeamExpenseByProject.get(row.project_id) ?? 0) + egp);
-  }
-  const committedTeamByProject = new Map<number, number>();
-  for (const assignment of assignments) {
-    const egp = toEgpPiasters(assignment.agreed_minor, assignment.currency, assignment.fx_rate_micro);
-    committedTeamByProject.set(assignment.project_id, (committedTeamByProject.get(assignment.project_id) ?? 0) + egp);
-  }
-  const accruedByProject = new Map<number, number>();
-  for (const payable of teamPayables) {
-    accruedByProject.set(payable.projectId, (accruedByProject.get(payable.projectId) ?? 0) + payable.dueEgp);
   }
   const costsByProject = new Map<number, ProjectCostProfile>();
   for (const financial of projectFinancials) {
