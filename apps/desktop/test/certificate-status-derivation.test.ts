@@ -4,7 +4,7 @@ vi.mock("../src/lib/db", async () => await import("./db-harness"));
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { raw, rawOne, resetDb } from "./db-harness";
+import { raw, rawExec, rawOne, resetDb } from "./db-harness";
 import { createClient } from "../src/repositories/clients";
 import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
@@ -284,6 +284,39 @@ describe("reconciliation takes identities, never a status", () => {
     const draft = await certificate(contractId, 10_000, "DRAFT");
     await reconcileCertificateStatuses();
     expect(await statusOf(draft)).toBe("DRAFT");
+  });
+});
+
+/**
+ * The read model counts allocations only from live CERTIFICATE-kind payments,
+ * while reconciliation resolves "collected" from the same rows. Those two
+ * definitions can only agree because the SCHEMA forbids an allocation from ever
+ * being attached to a non-certificate payment — in both directions. If a future
+ * migration relaxed either trigger, status and displayed figures would diverge,
+ * so the invariant is asserted here rather than assumed.
+ */
+describe("the schema binds allocations to certificate payments", () => {
+  it("refuses an allocation against an advance payment", async () => {
+    const { contractId } = await workspace();
+    const id = await certificate(contractId, 10_000);
+    await createPayment(
+      { contractId, kind: "ADVANCE", number: "ADV-1", date: "2026-07-02", amountMinor: 10_000, method: "CASH", bank: null, reference: null, notes: null },
+      [],
+    );
+    const advanceId = rawOne<{ id: number }>("SELECT id FROM payments WHERE number='ADV-1'")!.id;
+    expect(() =>
+      rawExec(`INSERT INTO payment_certificate_allocations(payment_id,certificate_id,amount_minor) VALUES(${advanceId},${id},10000)`),
+    ).toThrow(/ALLOCATION_REQUIRES_ACTIVE_CERTIFICATE_PAYMENT/);
+  });
+
+  it("refuses turning a settled payment into an advance", async () => {
+    const { contractId } = await workspace();
+    const id = await certificate(contractId, 10_000);
+    const paymentId = await createPayment(cash(contractId, "FULL", 10_000), [{ certificateId: id, amountMinor: 10_000 }]);
+    expect(await statusOf(id)).toBe("PAID");
+    expect(() => rawExec(`UPDATE payments SET kind='ADVANCE' WHERE id=${paymentId}`))
+      .toThrow(/ALLOCATIONS_REQUIRE_CERTIFICATE_PAYMENT/);
+    expect(await statusOf(id)).toBe("PAID");
   });
 });
 

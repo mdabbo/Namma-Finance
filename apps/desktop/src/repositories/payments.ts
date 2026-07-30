@@ -256,7 +256,8 @@ async function validAllocatedMinor(certificateId: number): Promise<number> {
   const row = await selectOne<{ allocated: number }>(
     `SELECT COALESCE(SUM(a.amount_minor),0) AS allocated
      FROM payment_certificate_allocations a JOIN payments p ON p.id=a.payment_id
-     WHERE a.certificate_id=$1 AND p.deleted_at IS NULL AND p.voided_at IS NULL`,
+     WHERE a.certificate_id=$1 AND p.kind='CERTIFICATE'
+       AND p.deleted_at IS NULL AND p.voided_at IS NULL`,
     [certificateId],
   );
   return row?.allocated ?? 0;

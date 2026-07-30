@@ -683,7 +683,8 @@ async fn valid_allocated_minor(
     sqlx::query_scalar(
         "SELECT COALESCE(SUM(a.amount_minor),0) FROM payment_certificate_allocations a
          JOIN payments p ON p.id=a.payment_id
-         WHERE a.certificate_id=? AND p.deleted_at IS NULL AND p.voided_at IS NULL",
+         WHERE a.certificate_id=? AND p.kind='CERTIFICATE'
+           AND p.deleted_at IS NULL AND p.voided_at IS NULL",
     )
     .bind(certificate_id)
     .fetch_one(&mut **tx)
@@ -835,7 +836,8 @@ async fn validate_allocation_capacities(
             let allocated: i64 = sqlx::query_scalar(
                 "SELECT COALESCE(SUM(a.amount_minor),0) FROM payment_certificate_allocations a
                  JOIN payments p ON p.id=a.payment_id
-                 WHERE a.certificate_id=? AND p.deleted_at IS NULL AND p.voided_at IS NULL
+                 WHERE a.certificate_id=? AND p.kind='CERTIFICATE'
+                   AND p.deleted_at IS NULL AND p.voided_at IS NULL
                    AND (? IS NULL OR p.id<>?)",
             )
             .bind(payable.id)
@@ -2701,6 +2703,309 @@ mod financial_transaction_tests {
                 "status mismatch: {name}"
             );
         }
+    }
+
+    /// A migrated in-memory database with one certificate, so the PRODUCTION
+    /// reconciliation path runs against the real schema and its triggers rather
+    /// than the stub tables the rollback tests use.
+    async fn reconciliation_fixture(
+        gross_minor: i64,
+        status: &str,
+    ) -> (sqlx::SqlitePool, i64, i64) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_baseline.sql"),
+            include_str!("../migrations/0002_seed_reference_data.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Reconcile Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+               VALUES('REC-1','Reconcile',1,'EGP',1000000);
+             INSERT INTO contracts(project_id,number,value_minor,signed_date)
+               VALUES(1,'C-REC',1000000,'2026-01-01');
+             INSERT INTO contract_revisions(contract_id,revision_number,effective_date,contract_value_minor,
+               vat_bp,retention_bp,withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,
+               currency,fx_rate_micro,reason,approved_at)
+               VALUES(1,1,'2026-01-01',1000000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status,
+               contract_revision_id,contract_value_minor_snapshot,vat_bp_snapshot,retention_bp_snapshot,
+               withholding_bp_snapshot,advance_minor_snapshot,advance_method_snapshot,
+               payment_terms_days_snapshot,currency_snapshot,fx_rate_micro_snapshot)
+             VALUES(1,1,'PC-REC','2026-01-02',?,?,1,1000000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000)",
+        )
+        .bind(gross_minor)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let certificate_id: i64 = sqlx::query_scalar("SELECT id FROM payment_certificates")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        (pool, 1, certificate_id)
+    }
+
+    fn cash_payment(contract_id: i64, number: &str, amount_minor: i64) -> PaymentCommandInput {
+        PaymentCommandInput {
+            contract_id,
+            kind: "CERTIFICATE".into(),
+            number: number.into(),
+            date: "2026-01-03".into(),
+            amount_minor,
+            method: "CASH".into(),
+            bank: None,
+            reference: None,
+            notes: None,
+        }
+    }
+
+    async fn status_of(pool: &sqlx::SqlitePool, certificate_id: i64) -> String {
+        sqlx::query_scalar("SELECT status FROM payment_certificates WHERE id=?")
+            .bind(certificate_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The production path end to end: Rust derives status from the evidence it
+    /// just wrote, for settlement, reduction, reallocation and voiding.
+    #[test]
+    fn rust_settles_reopens_and_reallocates_certificates() {
+        tauri::async_runtime::block_on(async {
+            let (pool, contract, certificate) = reconciliation_fixture(10_000, "APPROVED").await;
+            insert_payment_transaction(
+                &pool,
+                cash_payment(contract, "FULL", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(status_of(&pool, certificate).await, "PAID");
+
+            let payment_id: i64 = sqlx::query_scalar("SELECT id FROM payments")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+            // Editing the payment down reopens the certificate.
+            replace_payment_transaction(
+                &pool,
+                payment_id,
+                cash_payment(contract, "FULL", 6_000),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 6_000,
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(status_of(&pool, certificate).await, "APPROVED");
+
+            // Restoring full cover settles it again.
+            replace_payment_transaction(
+                &pool,
+                payment_id,
+                cash_payment(contract, "FULL", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(status_of(&pool, certificate).await, "PAID");
+
+            // Moving the payment to a second certificate must reopen the first.
+            sqlx::query(
+                "INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status,
+                   contract_revision_id,contract_value_minor_snapshot,vat_bp_snapshot,retention_bp_snapshot,
+                   withholding_bp_snapshot,advance_minor_snapshot,advance_method_snapshot,
+                   payment_terms_days_snapshot,currency_snapshot,fx_rate_micro_snapshot)
+                 VALUES(1,2,'PC-REC-2','2026-01-04',10000,'APPROVED',1,1000000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000)",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let second: i64 = sqlx::query_scalar("SELECT id FROM payment_certificates WHERE seq=2")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            replace_payment_transaction(
+                &pool,
+                payment_id,
+                cash_payment(contract, "FULL", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: second,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(status_of(&pool, certificate).await, "APPROVED");
+            assert_eq!(status_of(&pool, second).await, "PAID");
+
+            // Voiding stops the evidence counting; history is kept.
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            let touched = allocated_certificate_ids(&mut tx, payment_id)
+                .await
+                .unwrap();
+            sqlx::query(
+                "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason='audit' WHERE id=?",
+            )
+            .bind(payment_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            reconcile_certificates(&mut tx, &touched).await.unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(status_of(&pool, second).await, "APPROVED");
+            let kept: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM payment_certificate_allocations")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(kept, 1);
+        });
+    }
+
+    /// Partial cover must not settle, and collection must not bypass approval.
+    #[test]
+    fn rust_requires_full_cover_and_never_bypasses_approval() {
+        tauri::async_runtime::block_on(async {
+            let (pool, contract, certificate) = reconciliation_fixture(10_000, "APPROVED").await;
+            insert_payment_transaction(
+                &pool,
+                cash_payment(contract, "PART", 9_999),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 9_999,
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(status_of(&pool, certificate).await, "APPROVED");
+
+            let (pool, contract, submitted) = reconciliation_fixture(10_000, "SUBMITTED").await;
+            insert_payment_transaction(
+                &pool,
+                cash_payment(contract, "EARLY", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: submitted,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await
+            .unwrap();
+            // Fully collected, but nobody approved the claim.
+            assert_eq!(status_of(&pool, submitted).await, "SUBMITTED");
+        });
+    }
+
+    /// A draft holds no payable, so it can never receive an allocation.
+    #[test]
+    fn rust_refuses_allocations_against_a_draft_certificate() {
+        tauri::async_runtime::block_on(async {
+            let (pool, contract, draft) = reconciliation_fixture(10_000, "DRAFT").await;
+            let result = insert_payment_transaction(
+                &pool,
+                cash_payment(contract, "DRAFT-PAY", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: draft,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await;
+            assert_eq!(
+                result.unwrap_err(),
+                "ALLOCATION_REQUIRES_BILLABLE_CERTIFICATE"
+            );
+            assert_eq!(status_of(&pool, draft).await, "DRAFT");
+            let payments: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payments")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(payments, 0);
+        });
+    }
+
+    /// The schema — not only the command layer — keeps allocations bound to
+    /// certificate payments in BOTH directions. That invariant is what makes
+    /// the Rust reconciliation equivalent to the TypeScript read model, which
+    /// additionally filters allocations on payment kind.
+    #[test]
+    fn schema_binds_allocations_to_certificate_payments() {
+        tauri::async_runtime::block_on(async {
+            let (pool, contract, certificate) = reconciliation_fixture(10_000, "APPROVED").await;
+
+            // An advance payment cannot carry an allocation.
+            sqlx::query(
+                "INSERT INTO payments(contract_id,kind,number,date,amount_minor,method)
+                 VALUES(?,'ADVANCE','ADV-1','2026-01-03',10000,'CASH')",
+            )
+            .bind(contract)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let advance_id: i64 =
+                sqlx::query_scalar("SELECT id FROM payments WHERE kind='ADVANCE'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let inserted = sqlx::query(
+                "INSERT INTO payment_certificate_allocations(payment_id,certificate_id,amount_minor) VALUES(?,?,?)",
+            )
+            .bind(advance_id)
+            .bind(certificate)
+            .bind(10_000_i64)
+            .execute(&pool)
+            .await;
+            assert!(
+                inserted.is_err(),
+                "an advance payment must not be able to carry an allocation"
+            );
+
+            // Nor can a payment that already carries one become an advance.
+            insert_payment_transaction(
+                &pool,
+                cash_payment(contract, "CERT-1", 10_000),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 10_000,
+                }],
+            )
+            .await
+            .unwrap();
+            let settled: i64 = sqlx::query_scalar("SELECT id FROM payments WHERE number='CERT-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let changed = sqlx::query("UPDATE payments SET kind='ADVANCE' WHERE id=?")
+                .bind(settled)
+                .execute(&pool)
+                .await;
+            assert!(
+                changed.is_err(),
+                "a payment carrying allocations must stay a certificate payment"
+            );
+        });
     }
 
     #[test]
