@@ -1,53 +1,42 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { PageHeader, cx } from "../../components/ui";
-import { CashflowView } from "./CashflowView";
+import { Navigate, useParams } from "react-router-dom";
+import { PageHeader } from "../../components/ui";
 import { ProfitabilityView } from "./ProfitabilityView";
 import { CostingView } from "./CostingView";
 import { ReportsCenter } from "./ReportsCenter";
-import { ImportWizard } from "./ImportWizard";
-import { PaymentIntegrityView } from "./PaymentIntegrityView";
 
-type Tab = "cashflow" | "profitability" | "costing" | "center" | "import" | "integrity";
+/**
+ * Reports holds reporting only.
+ *
+ * The Import Wizard and Payment Integrity review were tabs here, which put
+ * one-off technical operations beside the numbers the office reads every week;
+ * they now live under Settings › Data Tools. Cash flow and receivables keep
+ * their single home under Finance and are reached from the section navigation
+ * rather than being rebuilt here, so each report has exactly one
+ * implementation.
+ *
+ * The view is part of the URL so a report can be linked to and returned to.
+ */
+const VIEWS = {
+  profitability: { titleKey: "reports.profitability", element: <ProfitabilityView /> },
+  costing: { titleKey: "reports.costing", element: <CostingView /> },
+  export: { titleKey: "reports.center", element: <ReportsCenter /> },
+} as const;
+
+export type ReportView = keyof typeof VIEWS;
 
 export function ReportsPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>("cashflow");
+  const { view } = useParams<{ view: string }>();
 
-  const TABS: { key: Tab; label: string }[] = [
-    { key: "cashflow", label: t("reports.cashflow") },
-    { key: "profitability", label: t("reports.profitability") },
-    { key: "costing", label: t("reports.costing") },
-    { key: "center", label: t("reports.center") },
-    { key: "import", label: t("importer.title") },
-    { key: "integrity", label: t("reports.paymentIntegrity") },
-  ];
+  if (!view) return <Navigate to="/reports/profitability" replace />;
+  const active = VIEWS[view as ReportView];
+  if (!active) return <Navigate to="/reports/profitability" replace />;
 
   return (
     <div>
-      <PageHeader title={t("reports.title")} />
-      <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={cx(
-              "border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              tab === key
-                ? "border-brand-600 text-brand-700 dark:text-brand-300"
-                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300",
-            )}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === "cashflow" && <CashflowView />}
-      {tab === "profitability" && <ProfitabilityView />}
-      {tab === "costing" && <CostingView />}
-      {tab === "center" && <ReportsCenter />}
-      {tab === "import" && <ImportWizard />}
-      {tab === "integrity" && <PaymentIntegrityView />}
+      <PageHeader title={t(active.titleKey)} />
+      {active.element}
     </div>
   );
 }

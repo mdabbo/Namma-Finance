@@ -11,8 +11,8 @@ const SECTIONS = [
   { name: "Projects", path: "/#/projects" },
   { name: "Finance", path: "/#/finance" },
   { name: "Team", path: "/#/team/people" },
-  { name: "Reports", path: "/#/reports" },
-  { name: "Settings", path: "/#/settings" },
+  { name: "Reports", path: "/#/reports/profitability" },
+  { name: "Settings", path: "/#/settings/general" },
 ];
 
 test("shows exactly six top-level sections and navigates all of them", async ({ page }) => {
@@ -69,4 +69,28 @@ test("switches between light and dark themes", async ({ page }) => {
   await expect(page.locator("html")).toHaveClass(/dark/);
   await page.getByTitle("Theme").click();
   await expect(page.locator("html")).not.toHaveClass(/dark/);
+});
+
+/**
+ * Milestone 7: Settings became one section per route, so a section can be
+ * bookmarked and returned to, and the technical tools that used to be Reports
+ * tabs now live under Data Tools.
+ */
+test("deep-links a settings section and keeps reports free of technical tools", async ({ page }) => {
+  await page.goto("/#/settings/numbering");
+  await expect(page.getByRole("heading", { name: "Numbering" })).toBeVisible();
+
+  // Bare /settings resolves to the first section rather than a dead route.
+  await page.goto("/#/settings");
+  await expect(page).toHaveURL(/#\/settings\/general/);
+
+  await page.goto("/#/settings/data-tools");
+  await expect(page.getByRole("heading", { name: "Data Tools" })).toBeVisible();
+
+  // Reports carries reporting only.
+  await page.goto("/#/reports");
+  await expect(page).toHaveURL(/#\/reports\/profitability/);
+  const reportsNav = page.getByRole("navigation", { name: "Section navigation" });
+  await expect(reportsNav.getByRole("link", { name: /Import/i })).toHaveCount(0);
+  await expect(reportsNav.getByRole("link", { name: /Payment integrity/i })).toHaveCount(0);
 });

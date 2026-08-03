@@ -27,6 +27,49 @@ export const PRIMARY_NAVIGATION: readonly PrimaryNavigationItem[] = [
   { id: "settings", labelKey: "nav.settings", to: "/settings" },
 ] as const;
 
+/**
+ * Settings groups, one visible at a time and each directly linkable.
+ *
+ * `full` marks a section an engineer may not open: engineers get personal
+ * preferences only, and the route guard uses this same list so the sidebar and
+ * the URL can never disagree.
+ */
+export interface SettingsSection {
+  id: string;
+  labelKey: string;
+  /** Requires a non-engineer role. */
+  full: boolean;
+  /** Requires ADMIN. */
+  admin?: boolean;
+}
+
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  { id: "general", labelKey: "settings.general", full: false },
+  { id: "company", labelKey: "settings.companyProfile", full: true },
+  { id: "finance", labelKey: "nav.finance", full: true },
+  { id: "numbering", labelKey: "settings.numberingTitle", full: true },
+  { id: "categories", labelKey: "settings.expenseCategories", full: true },
+  { id: "backup", labelKey: "settings.dataAndBackup", full: true },
+  { id: "sync", labelKey: "settings.syncTitle", full: false },
+  { id: "security", labelKey: "settings.securityTitle", full: false },
+  { id: "data-tools", labelKey: "settings.dataTools", full: true },
+  { id: "advanced", labelKey: "settings.advanced", full: false },
+  { id: "audit", labelKey: "nav.audit", full: true },
+] as const;
+
+/** Sections a role may open. Engineers keep personal preferences only. */
+export function settingsSectionsForRole(role: string): readonly SettingsSection[] {
+  return SETTINGS_SECTIONS.filter((section) => {
+    if (section.admin && role !== "ADMIN") return false;
+    if (section.full && role === "ENGINEER") return false;
+    return true;
+  });
+}
+
+export function canOpenSettingsSection(role: string, sectionId: string): boolean {
+  return settingsSectionsForRole(role).some((section) => section.id === sectionId);
+}
+
 export const SECONDARY_NAVIGATION: Readonly<Record<NavigationSectionId, readonly SecondaryNavigationItem[]>> = {
   overview: [],
   projects: [
@@ -45,11 +88,21 @@ export const SECONDARY_NAVIGATION: Readonly<Record<NavigationSectionId, readonly
     { id: "people", labelKey: "people.title", to: "/team/people" },
     { id: "time", labelKey: "time.title", to: "/team/time" },
   ],
-  reports: [],
-  settings: [
-    { id: "settings", labelKey: "settings.title", to: "/settings", exact: true },
-    { id: "audit", labelKey: "nav.audit", to: "/settings/audit" },
+  // Reports holds reporting only. Cash flow and receivables keep their single
+  // home under Finance and are linked here rather than rebuilt, so there is one
+  // implementation and one place to fix.
+  reports: [
+    { id: "profitability", labelKey: "reports.profitability", to: "/reports/profitability" },
+    { id: "costing", labelKey: "reports.costing", to: "/reports/costing" },
+    { id: "receivables", labelKey: "financeSection.receivables", to: "/finance/receivables" },
+    { id: "cash-flow", labelKey: "reports.cashflow", to: "/finance/cash-flow" },
+    { id: "export", labelKey: "reports.center", to: "/reports/export" },
   ],
+  settings: SETTINGS_SECTIONS.map((section) => ({
+    id: section.id,
+    labelKey: section.labelKey,
+    to: section.id === "audit" ? "/settings/audit" : `/settings/${section.id}`,
+  })),
 };
 
 const LEGACY_SECTION_PREFIXES: ReadonlyArray<readonly [string, NavigationSectionId]> = [
@@ -132,6 +185,16 @@ export function breadcrumbsForPath(pathname: string): BreadcrumbItem[] {
   }
   if (matchesPrefix(pathname, "/settings/audit") || matchesPrefix(pathname, "/audit")) {
     return [root, { labelKey: "nav.audit" }];
+  }
+  const settingsSection = /^\/settings\/([^/]+)$/.exec(pathname)?.[1];
+  if (settingsSection) {
+    const section = SETTINGS_SECTIONS.find((item) => item.id === settingsSection);
+    if (section) return [root, { labelKey: section.labelKey }];
+  }
+  const report = /^\/reports\/([^/]+)$/.exec(pathname)?.[1];
+  if (report) {
+    const item = SECONDARY_NAVIGATION.reports.find((entry) => entry.id === report);
+    if (item) return [root, { labelKey: item.labelKey }];
   }
   return [root];
 }

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSyncClient, getSyncSession } from "./sync/client";
 import { loadSettings } from "./settings";
+import { canOpenSettingsSection } from "../app/navigation";
 
 /**
  * Phase 5 roles (confirmed):
@@ -24,6 +25,12 @@ export const ROLE_REFRESH_INTERVAL_MS = 60_000;
 export function allowedPath(role: Role, pathname: string): boolean {
   if (role !== "ENGINEER") return true;
   if (pathname === "/settings") return true;
+  // Settings is now one section per route, so the engineer's own preferences
+  // live at /settings/general rather than /settings. Each section is checked
+  // against the same list that builds the menu, so a section they may not open
+  // stays closed whether it is clicked or typed into the address bar.
+  const section = /^\/settings\/([^/]+)$/.exec(pathname)?.[1];
+  if (section) return canOpenSettingsSection(role, section);
   if (pathname === "/projects") return true;
   // Project workspaces use a single numeric-id segment. Keep clients, which
   // now live under /projects/clients, outside the engineer role just as they

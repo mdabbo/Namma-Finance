@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, CloudUpload, DatabaseBackup, FlaskConical, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, Trash2, UsersRound } from "lucide-react";
+import { Building2, CloudUpload, DatabaseBackup, FlaskConical, Hash, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, Trash2, UsersRound, Wrench } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
@@ -17,6 +18,13 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
 import { listOpenSyncConflicts, resolveSyncConflict, type SyncConflictResolution } from "../../repositories/syncConflicts";
 import { loadReleaseInfo } from "../../lib/release";
+import {
+  SETTINGS_SECTIONS,
+  canOpenSettingsSection,
+  settingsSectionsForRole,
+} from "../../app/navigation";
+import { ImportWizard } from "../reports/ImportWizard";
+import { PaymentIntegrityView } from "../reports/PaymentIntegrityView";
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -34,15 +42,42 @@ export function SettingsPage() {
   const [newCategory, setNewCategory] = useState({ nameAr: "", nameEn: "" });
   const [confirmRestore, setConfirmRestore] = useState(false);
   const role = useRole();
-  // engineers: personal preferences only
-  const full = role !== "ENGINEER";
+  const params = useParams<{ section: string }>();
+  const allowed = settingsSectionsForRole(role);
+  const section = params.section ?? "general";
+
+  // The URL is authoritative, so it is checked against the same role list that
+  // builds the menu: a hand-typed or bookmarked section an engineer may not
+  // open lands on their own preferences instead of rendering it.
+  if (!params.section) return <Navigate to="/settings/general" replace />;
+  if (!canOpenSettingsSection(role, section)) return <Navigate to="/settings/general" replace />;
+
+  const activeLabel = SETTINGS_SECTIONS.find((item) => item.id === section)?.labelKey;
 
   return (
     <div className="max-w-4xl">
-      <PageHeader title={t("settings.title")} />
+      <PageHeader title={activeLabel ? t(activeLabel) : t("settings.title")} />
+
+      {/* One section at a time, each with its own address. */}
+      <nav aria-label={t("settings.sectionNavigation")} className="mb-4 flex flex-wrap gap-1">
+        {allowed.map((item) => (
+          <NavLink
+            key={item.id}
+            to={item.id === "audit" ? "/settings/audit" : `/settings/${item.id}`}
+            className={({ isActive }) => cx(
+              "rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
+              isActive
+                ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
+                : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
+            )}
+          >
+            {t(item.labelKey)}
+          </NavLink>
+        ))}
+      </nav>
 
       <div className="space-y-4">
-        {full && (
+        {section === "company" && (
           <Card className="p-5">
             <SectionTitle icon={<Building2 size={16} />} title={t("settings.companyProfile")} />
             <div className="grid grid-cols-3 gap-4">
@@ -66,6 +101,7 @@ export function SettingsPage() {
           </Card>
         )}
 
+        {section === "general" && (
         <Card className="p-5">
           <SectionTitle icon={<Languages size={16} />} title={t("settings.general")} />
           <div className="grid grid-cols-3 gap-4">
@@ -87,6 +123,15 @@ export function SettingsPage() {
                 <option value="dark">{t("settings.dark")}</option>
               </Select>
             </Field>
+          </div>
+        </Card>
+        )}
+
+        {section === "numbering" && (
+        <Card className="p-5">
+          <SectionTitle icon={<Hash size={16} />} title={t("settings.numberingTitle")} />
+          <p className="mb-3 text-xs text-slate-400">{t("settings.numberingNote")}</p>
+          <div className="grid grid-cols-3 gap-4">
             <Field label={t("settings.projectCodePrefix")}>
               <Input
                 defaultValue={settings?.projectCodePrefix ?? "PRJ"}
@@ -110,20 +155,28 @@ export function SettingsPage() {
                 />
               </Field>
             ))}
-            <Field label={t("settings.baseCurrency")}>
-              <Select
-                value={settings?.baseCurrency ?? "EGP"}
-                onChange={(e) => updateSetting.mutate({ key: "baseCurrency", value: e.target.value as "EGP" | "SAR" | "USD" })}
-              >
-                <option value="EGP">EGP</option>
-                <option value="SAR">SAR</option>
-                <option value="USD">USD</option>
-              </Select>
-              <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
-            </Field>
           </div>
         </Card>
+        )}
 
+        {section === "finance" && (
+        <Card className="p-5">
+          <SectionTitle icon={<Coins size={16} />} title={t("settings.baseCurrency")} />
+          <Field label={t("settings.baseCurrency")} className="max-w-xs">
+            <Select
+              value={settings?.baseCurrency ?? "EGP"}
+              onChange={(e) => updateSetting.mutate({ key: "baseCurrency", value: e.target.value as "EGP" | "SAR" | "USD" })}
+            >
+              <option value="EGP">EGP</option>
+              <option value="SAR">SAR</option>
+              <option value="USD">USD</option>
+            </Select>
+            <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
+          </Field>
+        </Card>
+        )}
+
+        {section === "advanced" && (
         <Card className="p-5">
           <SectionTitle icon={<Info size={16} />} title={t("settings.releaseInfo")} />
           <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
@@ -137,8 +190,9 @@ export function SettingsPage() {
             </p>
           )}
         </Card>
+        )}
 
-        {full && (
+        {section === "finance" && (
         <Card className="p-5">
           <SectionTitle icon={<Coins size={16} />} title={t("settings.currencies")} />
           <div className="mb-4 flex items-center gap-3">
@@ -182,7 +236,7 @@ export function SettingsPage() {
         </Card>
         )}
 
-        {full && (
+        {section === "categories" && (
         <Card className="p-5">
           <SectionTitle icon={<Tags size={16} />} title={t("settings.expenseCategories")} />
           <div className="space-y-2">
@@ -247,15 +301,15 @@ export function SettingsPage() {
 
         )}
 
-        <SecuritySection />
+        {section === "security" && <SecuritySection />}
 
-        <SyncSection />
+        {section === "sync" && <SyncSection />}
 
-        {full && <DemoDataSection />}
+        {section === "data-tools" && <DataToolsSection />}
 
-        {role === "ADMIN" && <UsersSection />}
+        {section === "security" && role === "ADMIN" && <UsersSection />}
 
-        {full && (
+        {section === "backup" && (
         <Card className="p-5">
           <SectionTitle icon={<DatabaseBackup size={16} />} title={t("settings.backup")} />
           <p className="mb-3 text-xs text-slate-400">{t("settings.dailyBackupNote")}</p>
@@ -319,6 +373,31 @@ export function SettingsPage() {
       )}
       {/* keep i18n import referenced for language-sensitive rerender */}
       <span className="hidden">{i18n.language}</span>
+    </div>
+  );
+}
+
+/**
+ * Data Tools: one-off technical operations.
+ *
+ * These were tabs in Reports, which put a bulk importer and a legacy-payment
+ * review beside the numbers the office reads every week. They are occasional
+ * administration, so they live in Settings and stay out of the reporting
+ * surface. The demo workspace belongs here for the same reason.
+ */
+function DataToolsSection() {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-4">
+      <Card className="p-5">
+        <SectionTitle icon={<Wrench size={16} />} title={t("importer.title")} />
+        <ImportWizard />
+      </Card>
+      <Card className="p-5">
+        <SectionTitle icon={<Wrench size={16} />} title={t("reports.paymentIntegrity")} />
+        <PaymentIntegrityView />
+      </Card>
+      <DemoDataSection />
     </div>
   );
 }

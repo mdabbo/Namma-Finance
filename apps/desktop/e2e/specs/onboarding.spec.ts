@@ -53,8 +53,9 @@ test("loads and removes the demo workspace, leaving no financial records", async
   expect(paid?.n).toBe(1);
 
   // Removal lives in Settings because the dashboard leaves its empty state
-  // once demo data exists — the onboarding panel is gone by then.
-  await page.goto("/#/settings");
+  // once demo data exists — the onboarding panel is gone by then. Milestone 7
+  // grouped it with the other one-off technical operations under Data Tools.
+  await page.goto("/#/settings/data-tools");
   await page.getByRole("button", { name: "Remove demo data" }).click();
 
   // Demo rows are ordinary records the office may have edited, so removal is

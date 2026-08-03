@@ -59,9 +59,11 @@ const router = createHashRouter([
       { path: "team/people/:id", element: <PersonDetailPage /> },
       { path: "team/time", element: <TimePage /> },
 
-      { path: "reports", element: <ReportsPage /> },
-      { path: "settings", element: <SettingsPage /> },
+      { path: "reports", element: <Navigate to="/reports/profitability" replace /> },
+      { path: "reports/:view", element: <ReportsPage /> },
+      { path: "settings", element: <Navigate to="/settings/general" replace /> },
       { path: "settings/audit", element: <AuditPage /> },
+      { path: "settings/:section", element: <SettingsPage /> },
 
       // Milestone 1 compatibility: preserve every pre-redesign route.
       { path: "clients", element: <Navigate to="/projects/clients" replace /> },
