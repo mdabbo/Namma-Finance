@@ -83,6 +83,21 @@ The UI suite needs Microsoft Edge; CI relies on the copy preinstalled on the
 GitHub `windows-latest` image. A green local run is not release evidence on its
 own — see the CI evidence block in the release checklist.
 
+### Visual baselines are machine-sensitive
+
+Screenshot baselines are recorded on a developer machine and replayed on the CI
+runner, which does not have identical fonts. Text baselines can shift a few
+pixels while every box stays put; on a text-dense page that alone exceeded the
+2% global diff budget on the first CI run. Tolerances therefore absorb glyph
+rendering and police layout — a collapsed column or a missing section moves far
+more than any font difference.
+
+When a screenshot check fails, download the `playwright-traces-and-screenshots`
+artifact and compare `-actual` against `-expected` **before** touching a
+threshold. If the boxes moved it is a real regression; if only text shifted it
+is font rendering. Raising a tolerance to silence a genuine layout change is
+never acceptable.
+
 The deterministic financial property suite uses fixed seeds so a failure is reproducible. It covers allocation conservation, signed rounding, basis-point boundaries, 500-certificate contract reconciliation, and 2,000-row EGP/USD/SAR rollups. Increasing iterations or adding seeds is encouraged; changing a seed to hide a failure is not.
 
 Migration tests apply the real forward-only SQL chain to populated legacy databases and verify retained financial records, SQLite integrity, foreign keys, and the final schema version.
