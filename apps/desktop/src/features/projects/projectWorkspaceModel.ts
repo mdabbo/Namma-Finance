@@ -75,6 +75,54 @@ export function readModelAmount<T>(
   return record === undefined ? UNKNOWN_AMOUNT : format(record);
 }
 
+export interface ProjectWorkspaceLocation {
+  tab: ProjectWorkspaceTab;
+  financeView: ProjectFinanceView;
+}
+
+/**
+ * Resolve where the workspace is from the URL.
+ *
+ * The tab used to be React state, so a refresh dropped the user back on
+ * Summary, history ignored tab changes and nothing could link to a project's
+ * payments. It now lives in the query string, which makes the URL untrusted
+ * input: an unknown tab, or one this role may not open, falls back to the first
+ * tab the role is allowed rather than rendering something it should not see.
+ */
+export function parseProjectWorkspaceLocation(
+  params: { get(key: string): string | null },
+  role: Role,
+): ProjectWorkspaceLocation {
+  const allowed = projectTabsForRole(role);
+  const requested = params.get("tab");
+  const tab = allowed.find((candidate) => candidate === requested) ?? allowed[0]!;
+  const requestedView = params.get("view");
+  const financeView =
+    PROJECT_FINANCE_VIEWS.find((candidate) => candidate === requestedView)
+    ?? "certificates";
+  return { tab, financeView };
+}
+
+/** The query string for a workspace location, omitting defaults. */
+export function projectWorkspaceSearch(location: {
+  tab: ProjectWorkspaceTab;
+  financeView?: ProjectFinanceView;
+}): string {
+  const params = new URLSearchParams({ tab: location.tab });
+  if (location.tab === "finance" && location.financeView) {
+    params.set("view", location.financeView);
+  }
+  return `?${params.toString()}`;
+}
+
+/** A link straight to one project view, for activity rows and notifications. */
+export function projectWorkspacePath(
+  projectId: number,
+  location: { tab: ProjectWorkspaceTab; financeView?: ProjectFinanceView },
+): string {
+  return `/projects/${projectId}${projectWorkspaceSearch(location)}`;
+}
+
 export function projectActivityDestination(entityType: string): {
   tab: ProjectWorkspaceTab;
   financeView?: ProjectFinanceView;

@@ -30,8 +30,15 @@ export function DocumentsTab({ projectId }: { projectId: number }) {
     [projectId],
   );
 
-  // Native drag & drop (webview file-drop event carries real OS paths)
+  // Native drag & drop (webview file-drop event carries real OS paths).
+  //
+  // Only available inside the Tauri webview: getCurrentWebview() reads window
+  // metadata that does not exist in a plain browser and throws, which took the
+  // whole route down rather than losing one convenience. The rest of the tab —
+  // listing, opening and uploading documents — works either way, so the
+  // listener is registered only where it exists.
   useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
     const unlisten = getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "over") setDragOver(true);
       else if (event.payload.type === "drop") {
