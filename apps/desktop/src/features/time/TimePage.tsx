@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import { laborCostMinor, minutesToHours, timeEntrySchema, type TimeEntryInput } from "@mep/core";
+import { currencyInfo, laborCostMinor, minutesToHours, timeEntrySchema, type TimeEntryInput } from "@mep/core";
 import { useTimeEntries, useTimeEntryMutations, type TimeEntryListItem } from "../../repositories/timeEntries";
 import { useProjects } from "../../repositories/projects";
 import { usePeople } from "../../repositories/people";
@@ -9,7 +9,7 @@ import { useStagesByProject } from "../../repositories/stages";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
 
 /** Parse a decimal-hours string into whole minutes. "1.5" → 90. */
 function hoursToMinutes(text: string): number | null {
@@ -47,14 +47,21 @@ export function TimePage() {
     {
       key: "hours",
       header: t("time.hours"),
+      // Sorted on exact minutes; exported as hours, the unit the header names.
       value: (e) => e.minutes,
+      exportValue: (e) => minutesToHours(e.minutes),
       render: (e) => <span className="tnum">{minutesToHours(e.minutes)}{t("time.hoursShort")}</span>,
       align: "end",
     },
+    { key: "currency", header: t("common.currency"), value: (e) => e.personCurrency, width: "90px" },
     {
       key: "cost",
       header: t("time.laborCost"),
       value: (e) => laborCostMinor(e.minutes, e.hourlyRateMinor),
+      exportValue: (e) =>
+        e.hourlyRateMinor
+          ? minorToInput(laborCostMinor(e.minutes, e.hourlyRateMinor), currencyInfo(e.personCurrency).exponent)
+          : "",
       render: (e) => (
         <span className="tnum text-slate-500">
           {e.hourlyRateMinor ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency) : "—"}
@@ -108,6 +115,8 @@ export function TimePage() {
         rowKey={(e) => e.id}
         loading={isLoading}
         emptyMessage={t("common.empty")}
+        exportName="time-entries"
+        viewKey="time-entries"
       />
 
       {editing !== null && (

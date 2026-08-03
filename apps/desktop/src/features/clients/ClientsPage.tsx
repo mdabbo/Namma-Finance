@@ -3,13 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { Client } from "@mep/core";
-import { computeClientFinancials } from "@mep/core";
+import { computeClientFinancials, currencyInfo } from "@mep/core";
 import { useClientMutations, useClients, clientCascadeInfo, type ClientListItem } from "../../repositories/clients";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, PageHeader } from "../../components/ui";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import { minorToInput } from "../../lib/format";
+import type { SavedViewFilters } from "../../lib/savedViews";
 import { ClientForm } from "./ClientForm";
 
 export function ClientsPage() {
@@ -27,6 +29,11 @@ export function ClientsPage() {
   const rollup = (clientId: number) =>
     financials ? computeClientFinancials(clientId, financials.projects) : null;
 
+  // Consolidated columns sort on exact EGP piasters and export major units of
+  // the reporting currency, which the header names.
+  const exportBase = (egpMinor: number) =>
+    minorToInput(base.convert(egpMinor), currencyInfo(base.code).exponent);
+
   const columns: Column<ClientListItem>[] = [
     { key: "name", header: t("common.name"), value: (c) => c.name, render: (c) => <span className="font-medium">{c.name}</span> },
     { key: "company", header: t("clients.company"), value: (c) => c.company },
@@ -34,29 +41,33 @@ export function ClientsPage() {
     { key: "projects", header: t("clients.projects"), value: (c) => c.projectCount, align: "end" },
     {
       key: "contracts",
-      header: t("cash.contractValueExcludingVat"),
+      header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
       value: (c) => rollup(c.id)?.contractValueEgp ?? 0,
+      exportValue: (c) => exportBase(rollup(c.id)?.contractValueEgp ?? 0),
       render: (c) => <span className="tnum">{base.format(rollup(c.id)?.contractValueEgp ?? 0)}</span>,
       align: "end",
     },
     {
       key: "certificateCollections",
-      header: t("cash.certificateCollections"),
+      header: `${t("cash.certificateCollections")} (${base.code})`,
       value: (c) => rollup(c.id)?.certificateCollectionsEgp ?? 0,
+      exportValue: (c) => exportBase(rollup(c.id)?.certificateCollectionsEgp ?? 0),
       render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.certificateCollectionsEgp ?? 0)}</span>,
       align: "end",
     },
     {
       key: "totalCashIn",
-      header: t("cash.totalActualCashIn"),
+      header: `${t("cash.totalActualCashIn")} (${base.code})`,
       value: (c) => rollup(c.id)?.totalActualCashInEgp ?? 0,
+      exportValue: (c) => exportBase(rollup(c.id)?.totalActualCashInEgp ?? 0),
       render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.totalActualCashInEgp ?? 0)}</span>,
       align: "end",
     },
     {
       key: "outstanding",
-      header: t("cash.outstandingReceivables"),
+      header: `${t("cash.outstandingReceivables")} (${base.code})`,
       value: (c) => rollup(c.id)?.outstandingEgp ?? 0,
+      exportValue: (c) => exportBase(rollup(c.id)?.outstandingEgp ?? 0),
       render: (c) => {
         const v = rollup(c.id)?.outstandingEgp ?? 0;
         return <span className={`tnum ${v > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>{base.format(v)}</span>;
@@ -118,6 +129,11 @@ export function ClientsPage() {
         loading={isLoading}
         emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
+        exportName="clients"
+        viewKey="clients"
+        filters={{ archived: includeArchived ? "1" : "" }}
+        onApplyFilters={(next: SavedViewFilters) => setIncludeArchived(next.archived === "1")}
+        onResetFilters={() => setIncludeArchived(false)}
       />
 
       {editing !== null && (

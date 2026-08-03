@@ -2,14 +2,17 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import { personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
+import { currencyInfo, personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
 import { usePeople, usePeopleMutations, type PersonListItem } from "../../repositories/people";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, Field, Input, Modal, PageHeader, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
-import { useFormat } from "../../lib/format";
+import { minorToInput, useFormat } from "../../lib/format";
+import type { SavedViewFilters } from "../../lib/savedViews";
+
+const PERSON_TYPES: readonly string[] = ["EMPLOYEE", "FREELANCER"];
 
 export function PeoplePage() {
   const { t } = useTranslation();
@@ -40,10 +43,15 @@ export function PeoplePage() {
     { key: "type", header: t("payments.kind"), value: (p) => p.type, render: (p) => <Badge value={p.type === "EMPLOYEE" ? "APPROVED" : "SUBMITTED"} label={t(`personType.${p.type}`)} /> },
     { key: "specialization", header: t("people.specialization"), value: (p) => p.specialization },
     { key: "phone", header: t("common.phone"), value: (p) => p.phone, render: (p) => <span className="tnum">{p.phone}</span> },
+    // Rates are held in each person's own currency, so the currency travels
+    // with them in the export instead of being implied.
+    { key: "currency", header: t("common.currency"), value: (p) => p.currency, width: "90px" },
     {
       key: "monthly",
       header: t("people.monthlyRate"),
       value: (p) => p.monthlyRateMinor ?? 0,
+      exportValue: (p) =>
+        p.monthlyRateMinor == null ? "" : minorToInput(p.monthlyRateMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum">{p.monthlyRateMinor != null ? fmt.money(p.monthlyRateMinor, p.currency, { compactFraction: true }) : "—"}</span>,
       align: "end",
     },
@@ -51,6 +59,8 @@ export function PeoplePage() {
       key: "hourly",
       header: t("people.hourlyRate"),
       value: (p) => p.hourlyRateMinor ?? 0,
+      exportValue: (p) =>
+        p.hourlyRateMinor == null ? "" : minorToInput(p.hourlyRateMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum">{p.hourlyRateMinor != null ? fmt.money(p.hourlyRateMinor, p.currency) : "—"}</span>,
       align: "end",
     },
@@ -93,6 +103,29 @@ export function PeoplePage() {
         loading={isLoading || (attentionView === "payments-due" && !financials)}
         emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
+        exportName="people"
+        viewKey="people"
+        filters={{
+          type: typeFilter,
+          archived: includeArchived ? "1" : "",
+          view: attentionView ?? "",
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const type = next.type ?? "";
+          setTypeFilter(PERSON_TYPES.includes(type) ? type : "");
+          setIncludeArchived(next.archived === "1");
+          const params = new URLSearchParams(searchParams);
+          if (next.view === "payments-due") params.set("view", next.view);
+          else params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
+        onResetFilters={() => {
+          setTypeFilter("");
+          setIncludeArchived(false);
+          const params = new URLSearchParams(searchParams);
+          params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
         toolbar={<>
           <Select className="!w-40" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
             <option value="">{t("common.all")}</option>

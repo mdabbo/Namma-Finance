@@ -8,9 +8,21 @@ import {
   ChevronLeft,
   ChevronRight,
   FileDown,
+  FilterX,
+  Pencil,
   Search,
   Trash2,
 } from "lucide-react";
+import {
+  readSavedViews,
+  removeSavedView,
+  renameSavedView,
+  upsertSavedView,
+  viewMatchesState,
+  writeSavedViews,
+  type SavedTableView,
+  type SavedViewFilters,
+} from "../lib/savedViews";
 import {
   EmptyState,
   IconButton,
@@ -58,34 +70,18 @@ interface DataTableProps<T> {
   loading?: boolean;
   /** File name (without extension) enabling CSV export of the filtered rows. */
   exportName?: string;
-  /** Storage key enabling named saved views (search + sort presets). */
+  /** Storage key enabling named saved views (search + sort + page filters). */
   viewKey?: string;
-}
-
-export interface SavedTableView {
-  name: string;
-  search: string;
-  sort: { key: string; dir: "asc" | "desc" } | null;
-}
-
-const VIEW_STORAGE_PREFIX = "mep.tableViews.";
-
-function loadTableViews(viewKey: string): SavedTableView[] {
-  if (typeof localStorage === "undefined") return [];
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(`${VIEW_STORAGE_PREFIX}${viewKey}`) ?? "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter((view): view is SavedTableView =>
-          typeof (view as SavedTableView).name === "string" && typeof (view as SavedTableView).search === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistTableViews(viewKey: string, views: SavedTableView[]): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(`${VIEW_STORAGE_PREFIX}${viewKey}`, JSON.stringify(views));
+  /**
+   * The page's own filter state, saved and restored with a view. Without it a
+   * view would silently drop the filters the user set, which looks applied
+   * while showing the wrong rows.
+   */
+  filters?: SavedViewFilters;
+  /** Applies a restored view's filters back onto the page. */
+  onApplyFilters?: (filters: SavedViewFilters) => void;
+  /** Clears the page's filters for "reset filters". */
+  onResetFilters?: () => void;
 }
 
 const NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
@@ -136,15 +132,32 @@ export function DataTable<T>({
   loading = false,
   exportName,
   viewKey,
+  filters,
+  onApplyFilters,
+  onResetFilters,
 }: DataTableProps<T>) {
   const { t, i18n } = useTranslation();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(initialSort ?? null);
   const [page, setPage] = useState(0);
-  const [views, setViews] = useState<SavedTableView[]>(() => (viewKey ? loadTableViews(viewKey) : []));
+  const [views, setViews] = useState<SavedTableView[]>(() => (viewKey ? readSavedViews(viewKey) : []));
   const [activeViewName, setActiveViewName] = useState("");
   const [namingView, setNamingView] = useState(false);
+  const [renamingView, setRenamingView] = useState(false);
   const [viewName, setViewName] = useState("");
+
+  const currentFilters = filters ?? {};
+  const activeView = views.find((view) => view.name === activeViewName) ?? null;
+  // A view stays "active" only while the table still matches it; touching a
+  // filter afterwards must not leave a stale name claiming to describe the rows.
+  const viewIsCurrent = activeView
+    ? viewMatchesState(activeView, { search, sort, filters: currentFilters })
+    : false;
+
+  function commitViews(next: SavedTableView[]) {
+    setViews(next);
+    if (viewKey) writeSavedViews(viewKey, next);
+  }
 
   function applyView(name: string) {
     setActiveViewName(name);
@@ -153,26 +166,39 @@ export function DataTable<T>({
     setSearch(view.search);
     setSort(view.sort);
     setPage(0);
+    onApplyFilters?.(view.filters);
   }
 
   function saveCurrentView() {
     const name = viewName.trim();
     if (!viewKey || !name) return;
-    const next = [...views.filter((view) => view.name !== name), { name, search, sort }]
-      .sort((left, right) => left.name.localeCompare(right.name));
-    setViews(next);
-    persistTableViews(viewKey, next);
+    commitViews(upsertSavedView(views, { name, search, sort, filters: currentFilters }));
     setActiveViewName(name);
     setNamingView(false);
     setViewName("");
   }
 
+  function renameActiveView() {
+    const name = viewName.trim();
+    if (!viewKey || !activeViewName || !name) return;
+    commitViews(renameSavedView(views, activeViewName, name));
+    setActiveViewName(name);
+    setRenamingView(false);
+    setViewName("");
+  }
+
   function deleteActiveView() {
     if (!viewKey || !activeViewName) return;
-    const next = views.filter((view) => view.name !== activeViewName);
-    setViews(next);
-    persistTableViews(viewKey, next);
+    commitViews(removeSavedView(views, activeViewName));
     setActiveViewName("");
+  }
+
+  function resetFilters() {
+    setSearch("");
+    setSort(initialSort ?? null);
+    setPage(0);
+    setActiveViewName("");
+    onResetFilters?.();
   }
 
   const filtered = useMemo(() => {
@@ -277,7 +303,7 @@ export function DataTable<T>({
                       <option key={view.name} value={view.name}>{view.name}</option>
                     ))}
                   </Select>
-                  {namingView ? (
+                  {namingView || renamingView ? (
                     <Input
                       autoFocus
                       className="!w-36"
@@ -286,13 +312,20 @@ export function DataTable<T>({
                       aria-label={t("common.viewName")}
                       onChange={(event) => setViewName(event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key === "Enter") saveCurrentView();
+                        if (event.key === "Enter") {
+                          if (renamingView) renameActiveView();
+                          else saveCurrentView();
+                        }
                         if (event.key === "Escape") {
                           setNamingView(false);
+                          setRenamingView(false);
                           setViewName("");
                         }
                       }}
-                      onBlur={() => setNamingView(false)}
+                      onBlur={() => {
+                        setNamingView(false);
+                        setRenamingView(false);
+                      }}
                     />
                   ) : (
                     <IconButton
@@ -300,6 +333,17 @@ export function DataTable<T>({
                       icon={BookmarkPlus}
                       size="sm"
                       onClick={() => setNamingView(true)}
+                    />
+                  )}
+                  {activeViewName && !namingView && !renamingView && (
+                    <IconButton
+                      label={t("common.renameView")}
+                      icon={Pencil}
+                      size="sm"
+                      onClick={() => {
+                        setViewName(activeViewName);
+                        setRenamingView(true);
+                      }}
                     />
                   )}
                   {activeViewName && (
@@ -310,7 +354,27 @@ export function DataTable<T>({
                       onClick={deleteActiveView}
                     />
                   )}
+                  {/*
+                    Says plainly whether the rows on screen are still the saved
+                    view or have been changed since it was applied.
+                  */}
+                  {activeViewName && (
+                    <span
+                      className="text-xs text-muted"
+                      data-testid="active-view-state"
+                    >
+                      {viewIsCurrent ? t("common.viewActive") : t("common.viewModified")}
+                    </span>
+                  )}
                 </>
+              )}
+              {(viewKey || onResetFilters) && (
+                <IconButton
+                  label={t("common.resetFilters")}
+                  icon={FilterX}
+                  size="sm"
+                  onClick={resetFilters}
+                />
               )}
               {exportName && (
                 <IconButton

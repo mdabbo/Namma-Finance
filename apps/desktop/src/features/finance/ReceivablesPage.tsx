@@ -217,6 +217,25 @@ export function ReceivablesPage() {
         initialSort={{ key: "dueDate", dir: "asc" }}
         exportName="receivables"
         viewKey="finance-receivables"
+        filters={{
+          project: scope.projectId === null ? "" : String(scope.projectId),
+          view: scope.view ?? "",
+        }}
+        onApplyFilters={(next) => {
+          const params = new URLSearchParams(searchParams);
+          const project = Number(next.project);
+          if (Number.isSafeInteger(project) && project > 0) params.set("project", String(project));
+          else params.delete("project");
+          if (next.view === "overdue") params.set("view", next.view);
+          else params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
+        onResetFilters={() => {
+          const params = new URLSearchParams(searchParams);
+          params.delete("project");
+          params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
         toolbar={<FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />}
       />
 

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Building2, CalendarDays, FolderKanban, Paperclip, Plus, Receipt } from "lucide-react";
-import { expenseSchema, type ExpenseInput } from "@mep/core";
+import { currencyInfo, expenseSchema, type ExpenseInput } from "@mep/core";
 import { useCategories, useExpenseMutations, useExpenses, type ExpenseListItem } from "../../repositories/expenses";
 import { useProjects } from "../../repositories/projects";
 import { useCurrencyRates } from "../../repositories/currencies";
@@ -12,8 +12,9 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { KpiCard } from "../../components/KpiCard";
 import { Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
 import { expenseSectionKpis, parseFinanceScope } from "../finance/financeSectionModel";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -78,10 +79,12 @@ export function ExpensesPage() {
         ),
     },
     { key: "supplier", header: t("expenses.supplier"), value: (e) => e.supplier },
+    { key: "currency", header: t("common.currency"), value: (e) => e.currency, width: "90px" },
     {
       key: "amount",
       header: t("common.amount"),
       value: (e) => e.amountMinor,
+      exportValue: (e) => minorToInput(e.amountMinor, currencyInfo(e.currency).exponent),
       render: (e) => <span className="font-medium tnum">{fmt.money(e.amountMinor, e.currency)}</span>,
       align: "end",
     },
@@ -143,6 +146,28 @@ export function ExpensesPage() {
         rowKey={(e) => e.id}
         loading={isLoading}
         emptyMessage={t("common.empty")}
+        exportName="expenses"
+        viewKey="expenses"
+        filters={{
+          category: categoryFilter ? String(categoryFilter) : "",
+          project: projectFilter === "" ? "" : String(projectFilter),
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const category = Number(next.category);
+          setCategoryFilter(
+            Number.isSafeInteger(category) && categories.some((c) => c.id === category) ? category : 0,
+          );
+          const project = next.project ?? "";
+          if (project === "overhead") setProjectFilter("overhead");
+          else {
+            const id = Number(project);
+            setProjectFilter(Number.isSafeInteger(id) && id > 0 ? id : "");
+          }
+        }}
+        onResetFilters={() => {
+          setCategoryFilter(0);
+          setProjectFilter("");
+        }}
         toolbar={
           <>
             <Select className="!w-44" value={categoryFilter} onChange={(e) => setCategoryFilter(Number(e.target.value))}>

@@ -2,17 +2,21 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { CalendarDays, Coins, Plus, Wallet } from "lucide-react";
+import { currencyInfo } from "@mep/core";
 import { usePaymentMutations, usePayments, type PaymentListItem } from "../../repositories/payments";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { KpiCard } from "../../components/KpiCard";
 import { Badge, Button, PageHeader, Select } from "../../components/ui";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
 import { inProjectScope, parseFinanceScope, paymentSectionKpis } from "../finance/financeSectionModel";
 import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { PaymentForm } from "./PaymentForm";
+
+const PAYMENT_KINDS: readonly string[] = ["CERTIFICATE", "ADVANCE", "RETENTION_RELEASE"];
 
 export function PaymentsPage() {
   const { t } = useTranslation();
@@ -86,10 +90,13 @@ export function PaymentsPage() {
     { key: "kind", header: t("payments.kind"), value: (p) => p.kind, render: (p) => <Badge value={p.kind === "ADVANCE" ? "SUBMITTED" : p.kind === "RETENTION_RELEASE" ? "APPROVED" : "PAID"} label={t(`paymentKind.${p.kind}`)} /> },
     { key: "date", header: t("common.date"), value: (p) => p.date, render: (p) => <span className="tnum">{fmt.date(p.date)}</span> },
     { key: "method", header: t("payments.method"), value: (p) => t(`method.${p.method}`) },
+    // Receipts are in the contract's currency, so it travels with the amounts.
+    { key: "currency", header: t("common.currency"), value: (p) => p.currency, width: "90px" },
     {
       key: "amount",
       header: t("common.amount"),
       value: (p) => p.amountMinor,
+      exportValue: (p) => minorToInput(p.amountMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="font-medium tnum text-emerald-600 dark:text-emerald-400">{fmt.money(p.amountMinor, p.currency)}</span>,
       align: "end",
     },
@@ -97,6 +104,7 @@ export function PaymentsPage() {
       key: "unallocated",
       header: t("payments.customerCredit"),
       value: (p) => p.unallocatedMinor,
+      exportValue: (p) => minorToInput(p.unallocatedMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum text-amber-600 dark:text-amber-400">{fmt.money(p.unallocatedMinor, p.currency)}</span>,
       align: "end",
     },
@@ -154,6 +162,34 @@ export function PaymentsPage() {
         rowKey={(p) => p.id}
         loading={isLoading}
         emptyMessage={t("common.empty")}
+        exportName="payments"
+        viewKey="payments"
+        filters={{
+          kind: kindFilter,
+          project: scope.projectId === null ? "" : String(scope.projectId),
+          voided: includeVoided ? "1" : "",
+          view: searchParams.get("view") ?? "",
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const kind = next.kind ?? "";
+          setKindFilter(PAYMENT_KINDS.includes(kind) ? kind : "");
+          setIncludeVoided(next.voided === "1");
+          const params = new URLSearchParams(searchParams);
+          const project = Number(next.project);
+          if (Number.isSafeInteger(project) && project > 0) params.set("project", String(project));
+          else params.delete("project");
+          if (next.view === "unallocated") params.set("view", next.view);
+          else params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
+        onResetFilters={() => {
+          setKindFilter("");
+          setIncludeVoided(false);
+          const params = new URLSearchParams(searchParams);
+          params.delete("project");
+          params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
         toolbar={<>
           <Select className="!w-48" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
             <option value="">{t("payments.kind")}: {t("common.all")}</option>

@@ -2,16 +2,23 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import type { ProjectStatus } from "@mep/core";
+import { currencyInfo, type ProjectStatus } from "@mep/core";
 import { useProjectMutations, useProjects, nextProjectCode, projectCascadeInfo, type ProjectListItem } from "../../repositories/projects";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings } from "../../lib/settings";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, PageHeader, RatioBar, Select } from "../../components/ui";
-import { useFormat } from "../../lib/format";
+import { minorToInput, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
 import { ProjectForm } from "./ProjectForm";
+
+const PROJECT_STATUSES: readonly ProjectStatus[] = ["ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"];
+const DISCIPLINES: readonly string[] = [
+  "HVAC", "PLUMBING", "FIREFIGHTING", "ELECTRICAL", "BIM",
+  "ARCHITECTURE", "STRUCTURAL", "ID", "MULTI",
+];
 
 export function ProjectsPage() {
   const { t } = useTranslation();
@@ -32,6 +39,28 @@ export function ProjectsPage() {
   const [creating, setCreating] = useState<string | null>(null); // next code
   const [deleting, setDeleting] = useState<{ project: ProjectListItem; details: string[] } | null>(null);
 
+  // Filter state travels with a saved view. Values are re-validated on the way
+  // back in: storage is user-writable, so a stored status must be one this page
+  // actually offers before it reaches component state.
+  const viewFilters: SavedViewFilters = {
+    status: statusFilter,
+    discipline: disciplineFilter,
+    archived: includeArchived ? "1" : "",
+    view: attentionView ?? "",
+  };
+
+  function applyViewFilters(next: SavedViewFilters) {
+    const status = next.status ?? "";
+    setStatusFilter(PROJECT_STATUSES.includes(status as ProjectStatus) ? (status as ProjectStatus) : "");
+    const discipline = next.discipline ?? "";
+    setDisciplineFilter(DISCIPLINES.includes(discipline) ? discipline : "");
+    setIncludeArchived(next.archived === "1");
+    const params = new URLSearchParams(searchParams);
+    if (next.view === "ready-to-invoice") params.set("view", next.view);
+    else params.delete("view");
+    setSearchParams(params, { replace: true });
+  }
+
   const finOf = (id: number) => financials?.projects.find((f) => f.project.id === id);
 
   const readyProjectIds = new Set(
@@ -51,8 +80,13 @@ export function ProjectsPage() {
     { key: "discipline", header: t("projects.discipline"), value: (p) => t(`discipline.${p.discipline}`) },
     {
       key: "value",
-      header: t("cash.contractValueExcludingVat"),
+      // The consolidated currency is named in the header so the export cannot
+      // be read as some other currency.
+      header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
       value: (p) => finOf(p.id)?.contractValueEgp ?? 0,
+      // Sorting uses exact EGP piasters; the export carries major units.
+      exportValue: (p) =>
+        minorToInput(base.convert(finOf(p.id)?.contractValueEgp ?? 0), currencyInfo(base.code).exponent),
       render: (p) => <span className="tnum">{base.format(finOf(p.id)?.contractValueEgp ?? 0)}</span>,
       align: "end",
     },
@@ -60,6 +94,8 @@ export function ProjectsPage() {
       key: "certified",
       header: t("cash.certifiedRevenue"),
       value: (p) => finOf(p.id)?.certifiedRatioBp ?? 0,
+      // Basis points sort exactly but read as nonsense in a spreadsheet.
+      exportValue: (p) => ((finOf(p.id)?.certifiedRatioBp ?? 0) / 100).toFixed(2),
       render: (p) => {
         const fin = finOf(p.id);
         return (
@@ -131,6 +167,11 @@ export function ProjectsPage() {
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/projects/${p.id}`); }}
         loading={isLoading || (attentionView === "ready-to-invoice" && !financials)}
         emptyMessage={t("common.empty")}
+        exportName="projects"
+        viewKey="projects"
+        filters={viewFilters}
+        onApplyFilters={applyViewFilters}
+        onResetFilters={() => applyViewFilters({})}
         toolbar={
           <>
             <Select className="!w-40" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as ProjectStatus | "")}>
