@@ -10,11 +10,28 @@ own headings are numbered 0–9; where a reader counts the UX audit as milestone
 - [x] Application, mobile, core, Cargo, Tauri, and release-manifest versions are
       synchronized at 0.7.0 (`version:check` verified).
 - [x] Type checking, TypeScript tests, Rust tests, and the Playwright UI suite
-      pass on the final source tree — figures in `TEST-SUMMARY.md`.
+      pass locally on the final source tree — figures in `TEST-SUMMARY.md`.
+      A local run is not release evidence; the CI block below is.
 - [x] Every redesign milestone was followed by an independent audit pass, and
       each confirmed defect was fixed with regression coverage before the next
       milestone began.
-- [ ] GitHub Windows quality workflow passes on the pushed commit.
+
+### CI evidence (required before release)
+
+A local pass proves nothing to anyone who was not sitting at that machine, so
+the release may not claim green gates until this block is filled in from a real
+GitHub Actions run on the released commit.
+
+- [ ] `Quality gates` workflow green on the released commit — all four jobs
+      (`TypeScript and unit tests`, `Rust quality`, `Playwright E2E`,
+      `Desktop production build`).
+- [ ] Commit SHA: `__________________________________________`
+- [ ] Workflow run URL: `__________________________________________`
+- [ ] `desktop-build-evidence` artifact downloaded; `release-evidence.txt`
+      inside it names the same commit SHA as above.
+- [ ] `playwright-report` artifact downloaded and reviewed.
+- [ ] The four checks are configured as required status checks on `main`
+      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge.
 
 ## Redesign acceptance
 

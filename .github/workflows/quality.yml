@@ -1,18 +1,49 @@
 name: Quality gates
 
+# Redesign and hardening branches carry the release work, so they must run the
+# same gates as main. Pull requests always run, which is what makes a failing
+# UI suite able to block a merge.
 on:
   pull_request:
   push:
-    branches: [main, "hardening/**"]
+    branches: [main, "redesign/**", "hardening/**"]
 
 concurrency:
   group: quality-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
+  unit:
+    name: TypeScript and unit tests
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm version:check
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-financial-coverage
+          path: packages/core/coverage
+          if-no-files-found: error
+          retention-days: 30
+
+  rust:
+    name: Rust quality
+    runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,17 +61,98 @@ jobs:
           workspaces: apps/desktop/src-tauri
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm version:check
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm test:coverage
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: core-financial-coverage
-          path: packages/core/coverage
-          if-no-files-found: error
       - run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
       - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-      - run: pnpm --filter @mep/desktop build
+
+  e2e:
+    name: Playwright E2E
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The suite drives Microsoft Edge (`channel: msedge`) because the app
+      # ships in a Tauri WebView2 window. windows-latest already carries Edge
+      # stable, so no browser binary is downloaded and there is nothing to
+      # cache — this step only reconciles Playwright's channel registration.
+      # It is allowed to fail: if Edge were genuinely unavailable the test run
+      # below fails loudly rather than being masked here.
+      - name: Register Edge channel
+        continue-on-error: true
+        working-directory: apps/desktop
+        run: pnpm exec playwright install msedge
+
+      - name: Run Playwright suite
+        working-directory: apps/desktop
+        run: pnpm exec playwright test
+
+      # Uploaded on every run, pass or fail: the HTML report is the readable
+      # evidence, test-results carries traces and failure screenshots.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/desktop/playwright-report
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-traces-and-screenshots
+          path: apps/desktop/test-results
+          # Empty when every spec passes, which is not a failure.
+          if-no-files-found: ignore
+          retention-days: 30
+
+  build:
+    name: Desktop production build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # The shippable artifact is only built once the gates that judge it pass.
+    needs: [unit, rust, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: Build desktop frontend
+        shell: bash
+        run: pnpm --filter @mep/desktop build 2>&1 | tee build.log
+
+      # Release evidence is worthless unless it names the exact commit it was
+      # measured on, so the SHA and the run URL are recorded beside the log.
+      - name: Record release evidence
+        shell: bash
+        run: |
+          {
+            echo "commit_sha: ${{ github.sha }}"
+            echo "ref: ${{ github.ref }}"
+            echo "run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "run_attempt: ${{ github.run_attempt }}"
+          } > release-evidence.txt
+          cat release-evidence.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-build-evidence
+          path: |
+            build.log
+            release-evidence.txt
+          if-no-files-found: warn
+          retention-days: 30
