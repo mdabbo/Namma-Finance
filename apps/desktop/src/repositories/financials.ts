@@ -244,14 +244,6 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
           .filter((item) => item.certificate.status !== "DRAFT")
           .map((item) => item.certificate.id),
       );
-      for (const certificate of state.certificates) {
-        if (!billableCertificateIds.has(certificate.certificate.id)) continue;
-        valuation.certificateCollectionsEgp += toEgpPiasters(
-          certificate.paidMinor,
-          certificate.certificate.currencySnapshot ?? project.currency,
-          certificate.certificate.fxRateMicroSnapshot ?? project.fxRateMicro,
-        );
-      }
       const allocatedByPayment = new Map<number, number>();
       for (const allocation of allocations) {
         if (!billableCertificateIds.has(allocation.certificateId)) continue;
@@ -260,26 +252,34 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
           (allocatedByPayment.get(allocation.paymentId) ?? 0) + allocation.amountMinor,
         );
       }
+      // Every cash figure is valued at the FX effective when the cash arrived —
+      // the PAYMENT's rate. Certificate collections are cash too: they are the
+      // part of a receipt that settled a certificate, so they must not be
+      // valued at the certificate's own snapshot rate. Doing that mixed a
+      // receivable-measurement rate into a cash measurement, and the reported
+      // components then failed to add up to the reported total whenever a
+      // certificate was paid under a later contract revision.
       for (const payment of payments.filter((item) => item.contractId === contract.id)) {
         const fx = paymentFx.get(payment.id) ?? {
           currency: project.currency,
           fxRateMicro: project.fxRateMicro,
         };
-        valuation.totalActualCashInEgp += toEgpPiasters(
-          payment.amountMinor,
-          fx.currency,
-          fx.fxRateMicro,
-        );
+        const paymentEgp = toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
+        valuation.totalActualCashInEgp += paymentEgp;
         if (payment.kind === "ADVANCE") {
-          valuation.advanceReceivedEgp += toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
+          valuation.advanceReceivedEgp += paymentEgp;
         } else if (payment.kind === "RETENTION_RELEASE") {
-          valuation.retentionReleasedEgp += toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
+          valuation.retentionReleasedEgp += paymentEgp;
         } else {
-          valuation.unallocatedCustomerCreditEgp += toEgpPiasters(
-            Math.max(0, payment.amountMinor - (allocatedByPayment.get(payment.id) ?? 0)),
-            fx.currency,
-            fx.fxRateMicro,
+          const allocatedMinor = Math.min(
+            payment.amountMinor,
+            Math.max(0, allocatedByPayment.get(payment.id) ?? 0),
           );
+          const collectedEgp = toEgpPiasters(allocatedMinor, fx.currency, fx.fxRateMicro);
+          valuation.certificateCollectionsEgp += collectedEgp;
+          // The balancing remainder, never rounded independently, so the parts
+          // of a receipt always add back to the receipt exactly.
+          valuation.unallocatedCustomerCreditEgp += paymentEgp - collectedEgp;
         }
       }
     }

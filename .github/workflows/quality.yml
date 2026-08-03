@@ -137,14 +137,27 @@ jobs:
 
       # Release evidence is worthless unless it names the exact commit it was
       # measured on, so the SHA and the run URL are recorded beside the log.
+      #
+      # Context values reach the shell through `env:`, never by `${{ }}`
+      # interpolation into the script. A ref is attacker-chosen on a fork pull
+      # request — a branch name may legally contain a double quote — and
+      # interpolation would splice it into the command before bash ever parses
+      # it. As environment variables they are only ever data.
       - name: Record release evidence
         shell: bash
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           {
-            echo "commit_sha: ${{ github.sha }}"
-            echo "ref: ${{ github.ref }}"
-            echo "run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            echo "run_attempt: ${{ github.run_attempt }}"
+            echo "commit_sha: ${COMMIT_SHA}"
+            echo "ref: ${SOURCE_REF}"
+            echo "run_url: ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+            echo "run_attempt: ${RUN_ATTEMPT}"
           } > release-evidence.txt
           cat release-evidence.txt
       - uses: actions/upload-artifact@v4

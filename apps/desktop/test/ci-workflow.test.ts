@@ -49,8 +49,41 @@ describe("quality workflow", () => {
 
   it("ties recorded evidence to the exact commit", () => {
     expect(workflow).toContain("release-evidence.txt");
-    expect(workflow).toContain("${{ github.sha }}");
-    expect(workflow).toContain("actions/runs/${{ github.run_id }}");
+    expect(workflow).toContain("COMMIT_SHA: ${{ github.sha }}");
+    expect(workflow).toContain("RUN_ID: ${{ github.run_id }}");
+  });
+
+  /**
+   * Audit regression: `${{ ... }}` inside a `run:` script is spliced in before
+   * bash parses the command. A ref is attacker-chosen on a fork pull request
+   * and a branch name may legally contain a double quote, so interpolating one
+   * into a script is a command-injection vector. Context must arrive through
+   * `env:`, where it is only ever data.
+   */
+  it("never interpolates workflow context into a shell script", () => {
+    const lines = workflow.split("\n");
+    const offenders: string[] = [];
+    let insideRun = false;
+    let runIndent = 0;
+    for (const line of lines) {
+      const runStart = line.match(/^(\s*)(?:- )?run: /);
+      if (runStart) {
+        insideRun = true;
+        runIndent = runStart[1]!.length;
+        if (/\$\{\{/.test(line)) offenders.push(line.trim());
+        continue;
+      }
+      if (insideRun) {
+        const indent = line.search(/\S/);
+        if (line.trim() !== "" && indent <= runIndent) {
+          insideRun = false;
+        } else if (/\$\{\{/.test(line)) {
+          offenders.push(line.trim());
+        }
+      }
+    }
+    expect(offenders, `interpolated context inside run script: ${offenders.join(" | ")}`)
+      .toEqual([]);
   });
 
   it("builds the desktop app only after the gates that judge it pass", () => {

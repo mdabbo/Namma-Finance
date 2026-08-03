@@ -113,7 +113,31 @@ exactly one, so they sum to Total Cash In with nothing double counted.
 `dashboardCashInComponentsReconcile()` asserts the identity and is checked both
 as a core unit test and against a real database holding one of every inflow.
 
-No calculation changed. `DashboardOverview.cashCollectedEgp` was renamed to
-`totalCashInEgp` so the field name, the UI label and the arithmetic agree, and
-the components — already computed per project by the core aggregate — are now
-surfaced instead of being discarded.
+`DashboardOverview.cashCollectedEgp` was renamed to `totalCashInEgp` so the
+field name, the UI label and the arithmetic agree, and the components — already
+computed per project by the core aggregate — are now surfaced instead of being
+discarded.
+
+### FX basis correction (milestone 4/5 audit)
+
+Surfacing the components exposed a defect that the old single headline had
+hidden. Every cash figure must be valued at the rate effective **when the cash
+arrived** — the payment's rate. Certificate collections were instead valued at
+the **certificate's** snapshot rate, which is the basis for measuring a
+receivable, not cash received.
+
+The two bases agree while a contract has one FX revision, so the identity held
+in EGP-only and single-revision workspaces. As soon as a certificate was paid
+under a later revision they diverged, and the components stopped adding up to
+the headline: a **40,000.00 EGP gap on a 2,400,000.00 EGP headline** in the
+regression fixture — visible on screen as money appearing from nowhere between
+the breakdown and the total it is supposed to explain.
+
+Collections are now derived from the **allocated portion of each live payment**,
+valued at that payment's rate, and unallocated credit is taken as the balancing
+remainder of the same receipt rather than being rounded independently. The
+identity is therefore structural: for every receipt,
+`allocated + unallocated == receipt`, so no rounding split can drift.
+
+Certificate snapshot FX is unchanged and still governs invoiced amount,
+outstanding receivables, and every other receivable-side measure.
