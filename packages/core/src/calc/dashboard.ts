@@ -4,13 +4,33 @@ import { toEgpPiasters } from "../money/money";
 import type { ProjectFinancials } from "./aggregate";
 import type { ContractState } from "./contract";
 
+/**
+ * Headline cash is reported as TOTAL CASH IN, never as "collected".
+ *
+ * Every incoming payment record counts toward the headline, but only some of it
+ * is money collected against certificates: advances, retention releases and
+ * customer money not yet allocated are cash in hand without being a collection.
+ * Labelling the total "Cash Collected" overstated certificate collection, so the
+ * total is named for what it measures and the components are reported beside it.
+ *
+ * The four components partition the total exactly — each live inflow lands in
+ * exactly one of them — so they sum to totalCashInEgp with nothing double
+ * counted. `dashboardCashInComponentsReconcile` asserts that.
+ */
 export interface DashboardOverview {
   contractValueEgp: number;
-  cashCollectedEgp: number;
+  /** All live incoming payments: collections, advances, retention, credit. */
+  totalCashInEgp: number;
+  /** Payment money actually allocated to certificates. */
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  /** Certificate-payment cash received but not yet allocated to a certificate. */
+  unallocatedCustomerCreditEgp: number;
   outstandingReceivablesEgp: number;
   cashOutEgp: number;
+  /** Total actual cash in less actual cash out. */
   netCashPositionEgp: number;
-  unallocatedCustomerCreditEgp: number;
 }
 
 export interface DashboardAttentionSummary {
@@ -65,25 +85,42 @@ export function computeDashboardAttention(input: DashboardAttentionInput): Dashb
   };
 }
 
-/** Derive the four overview facts from EGP-valued core aggregates only. */
+/** Derive the overview facts from EGP-valued core aggregates only. */
 export function computeDashboardOverview(
   projects: ProjectFinancials[],
   expenses: Expense[],
 ): DashboardOverview {
   const contractValueEgp = sum(projects.map((project) => project.contractValueEgp));
-  const cashCollectedEgp = sum(projects.map((project) => project.totalActualCashInEgp));
+  const totalCashInEgp = sum(projects.map((project) => project.totalActualCashInEgp));
   const outstandingReceivablesEgp = sum(projects.map((project) => project.outstandingEgp));
-  const unallocatedCustomerCreditEgp = sum(projects.map((project) => project.unallocatedCustomerCreditEgp));
   const cashOutEgp = sum(expenses.map((expense) =>
     toEgpPiasters(expense.amountMinor, expense.currency, expense.fxRateMicro)));
   return {
     contractValueEgp,
-    cashCollectedEgp,
+    totalCashInEgp,
+    certificateCollectionsEgp: sum(projects.map((project) => project.certificateCollectionsEgp)),
+    advanceReceivedEgp: sum(projects.map((project) => project.advanceReceivedEgp)),
+    retentionReleasedEgp: sum(projects.map((project) => project.retentionReleasedEgp)),
+    unallocatedCustomerCreditEgp: sum(projects.map((project) => project.unallocatedCustomerCreditEgp)),
     outstandingReceivablesEgp,
     cashOutEgp,
-    netCashPositionEgp: cashCollectedEgp - cashOutEgp,
-    unallocatedCustomerCreditEgp,
+    netCashPositionEgp: totalCashInEgp - cashOutEgp,
   };
+}
+
+/**
+ * Whether the reported components account for the headline total exactly.
+ *
+ * The dashboard shows the total and its parts side by side, so a shortfall or an
+ * overlap would be visible as money that appeared or vanished between them.
+ */
+export function dashboardCashInComponentsReconcile(overview: DashboardOverview): boolean {
+  return (
+    overview.certificateCollectionsEgp
+    + overview.advanceReceivedEgp
+    + overview.retentionReleasedEgp
+    + overview.unallocatedCustomerCreditEgp
+  ) === overview.totalCashInEgp;
 }
 
 export interface DashboardCashIn {

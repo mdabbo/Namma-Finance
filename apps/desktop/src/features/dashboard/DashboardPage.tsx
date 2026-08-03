@@ -126,7 +126,7 @@ export function DashboardPage() {
     );
     return {
       contractValue: base.convert(overview.contractValueEgp),
-      cashCollected: base.convert(overview.cashCollectedEgp),
+      totalCashIn: base.convert(overview.totalCashInEgp),
       outstanding: base.convert(overview.outstandingReceivablesEgp),
       netCash: base.convert(overview.netCashPositionEgp),
     };
@@ -321,9 +321,9 @@ export function DashboardPage() {
           icon={BriefcaseBusiness}
         />
         <KpiCard
-          label={t("dashboard.cashCollected")}
-          hint={t("dashboard.cashCollectedHint")}
-          value={fmt.money(money.cashCollected, base.code, {
+          label={t("dashboard.totalCashIn")}
+          hint={t("dashboard.totalCashInHint")}
+          value={fmt.money(money.totalCashIn, base.code, {
             compactFraction: true,
           })}
           icon={Banknote}

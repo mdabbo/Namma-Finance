@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/lib/db", async () => await import("./db-harness"));
 
+import { computeDashboardOverview, dashboardCashInComponentsReconcile } from "@mep/core";
 import { resetDb, rawExec } from "./db-harness";
 import { createClient } from "../src/repositories/clients";
 import { createProject } from "../src/repositories/projects";
@@ -61,5 +62,54 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     const activeScope = await loadWorkspaceFinancials();
     expect(activeScope.cashIn).toHaveLength(0);
     expect(activeScope.projects.find((row) => row.project.id === projectId)!.totalActualCashInMinor).toBe(0);
+  });
+
+  /**
+   * Milestone 4: the dashboard headline is TOTAL CASH IN, and the four
+   * components are reported beside it. A workspace holding one of every inflow
+   * proves the headline is not certificate collections and that the parts
+   * account for it exactly.
+   */
+  it("reports total cash in with components that reconcile and never double-count", async () => {
+    const clientId = await createClient({ name: "KPI Client", company: null, address: null, phone: null,
+      email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-2026-KPI", { name: "KPI Project", clientId,
+      country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE",
+      currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: "KPI-1", title: null, valueMinor: 100_000_00,
+      vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 10_000_00,
+      advanceRecoveryMethod: "MANUAL", performanceBondBp: 0, performanceBondBank: null,
+      performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null,
+      valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null,
+      signedDate: "2026-01-01", notes: null });
+    const certificateId = await createCertificate(1, { contractId, number: "PC-1", date: "2026-02-01",
+      submissionDate: "2026-02-01", dueDateOverride: null, description: "Certified work",
+      grossMinor: 40_000_00, discountMinor: 0, manualAdvanceRecoveryMinor: 0, status: "APPROVED" });
+
+    // One of every inflow: a collection, an advance, a retention release, and
+    // customer money received without an allocation.
+    await createPayment({ contractId, kind: "CERTIFICATE", number: "COLL-1", date: "2026-03-01",
+      amountMinor: 25_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null },
+    [{ certificateId, amountMinor: 15_000_00 }]);
+    await createPayment({ contractId, kind: "ADVANCE", number: "ADV-1", date: "2026-01-05",
+      amountMinor: 10_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null }, []);
+    await createPayment({ contractId, kind: "RETENTION_RELEASE", number: "RET-1", date: "2026-04-01",
+      amountMinor: 3_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null }, []);
+
+    const workspace = await loadWorkspaceFinancials();
+    const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses);
+
+    expect(overview.certificateCollectionsEgp).toBe(15_000_00);
+    expect(overview.advanceReceivedEgp).toBe(10_000_00);
+    expect(overview.retentionReleasedEgp).toBe(3_000_00);
+    expect(overview.unallocatedCustomerCreditEgp).toBe(10_000_00);
+    expect(overview.totalCashInEgp).toBe(38_000_00);
+
+    // The headline is emphatically not the collection figure.
+    expect(overview.totalCashInEgp).not.toBe(overview.certificateCollectionsEgp);
+    expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
+
+    // Net cash position remains total actual cash in less actual cash out.
+    expect(overview.netCashPositionEgp).toBe(overview.totalCashInEgp - overview.cashOutEgp);
   });
 });

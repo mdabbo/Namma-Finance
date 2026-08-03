@@ -125,8 +125,8 @@ export function FinanceOverviewPage() {
           tone={model.overdueEgp > 0 ? "negative" : "positive"}
         />
         <KpiCard
-          label={t("dashboard.cashIn")}
-          value={base.format(model.overview.cashCollectedEgp)}
+          label={t("dashboard.totalCashIn")}
+          value={base.format(model.overview.totalCashInEgp)}
           icon={Banknote}
           tone="positive"
         />
@@ -142,6 +142,38 @@ export function FinanceOverviewPage() {
           tone={model.overview.unallocatedCustomerCreditEgp > 0 ? "warning" : "default"}
         />
       </section>
+
+      {/*
+        Total cash in is every incoming payment, so the parts are shown beside
+        it: only certificate collections are money collected against
+        certificates. The four rows add up to the headline exactly.
+      */}
+      <Card className="mb-5 p-4">
+        <SectionHeader
+          title={t("dashboard.cashInBreakdown")}
+          description={t("dashboard.cashInBreakdownHint")}
+        />
+        <dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[
+            { key: "certificateCollections", value: model.overview.certificateCollectionsEgp },
+            { key: "advanceReceived", value: model.overview.advanceReceivedEgp },
+            { key: "retentionReleased", value: model.overview.retentionReleasedEgp },
+            { key: "customerCredit", value: model.overview.unallocatedCustomerCreditEgp },
+          ].map((part) => (
+            <div
+              key={part.key}
+              className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800"
+            >
+              <dt className="text-xs text-muted">{t(`cash.${part.key}`)}</dt>
+              <dd className="tnum mt-0.5 font-medium">{base.format(part.value)}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-3 text-xs text-muted">
+          {t("dashboard.totalCashIn")}:{" "}
+          <span className="tnum font-medium">{base.format(model.overview.totalCashInEgp)}</span>
+        </p>
+      </Card>
 
       <Card className="p-4">
         <SectionHeader

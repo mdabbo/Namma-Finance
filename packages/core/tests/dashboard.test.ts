@@ -4,6 +4,7 @@ import {
   buildMonthlyCashSeries,
   computeDashboardAttention,
   computeDashboardOverview,
+  dashboardCashInComponentsReconcile,
   resolveEffectiveFxSnapshot,
   selectOpenReceivables,
   selectUpcomingCollections,
@@ -29,17 +30,23 @@ const expense = (
 });
 
 describe("dashboard financial model", () => {
-  it("derives the four headline facts from EGP core aggregates", () => {
+  it("derives the headline facts from EGP core aggregates", () => {
     const projects = [
       {
         contractValueEgp: 10_000_00,
         totalActualCashInEgp: 6_000_00,
+        certificateCollectionsEgp: 3_500_00,
+        advanceReceivedEgp: 1_500_00,
+        retentionReleasedEgp: 500_00,
         outstandingEgp: 3_000_00,
         unallocatedCustomerCreditEgp: 500_00,
       },
       {
         contractValueEgp: 20_000_00,
         totalActualCashInEgp: 4_000_00,
+        certificateCollectionsEgp: 4_000_00,
+        advanceReceivedEgp: 0,
+        retentionReleasedEgp: 0,
         outstandingEgp: 8_000_00,
         unallocatedCustomerCreditEgp: 0,
       },
@@ -49,12 +56,43 @@ describe("dashboard financial model", () => {
       expense(100_00, "USD", 50_000_000),
     ])).toEqual({
       contractValueEgp: 30_000_00,
-      cashCollectedEgp: 10_000_00,
+      totalCashInEgp: 10_000_00,
+      certificateCollectionsEgp: 7_500_00,
+      advanceReceivedEgp: 1_500_00,
+      retentionReleasedEgp: 500_00,
+      unallocatedCustomerCreditEgp: 500_00,
       outstandingReceivablesEgp: 11_000_00,
       cashOutEgp: 6_000_00,
       netCashPositionEgp: 4_000_00,
-      unallocatedCustomerCreditEgp: 500_00,
     });
+  });
+
+  /**
+   * The headline is total cash in, not collections. Certificate collections are
+   * only one part of it, so the label must never be read as "collected".
+   */
+  it("keeps the headline total apart from certificate collections", () => {
+    const projects = [
+      {
+        contractValueEgp: 10_000_00,
+        totalActualCashInEgp: 6_000_00,
+        certificateCollectionsEgp: 1_000_00,
+        advanceReceivedEgp: 4_000_00,
+        retentionReleasedEgp: 600_00,
+        outstandingEgp: 0,
+        unallocatedCustomerCreditEgp: 400_00,
+      },
+    ] as ProjectFinancials[];
+    const overview = computeDashboardOverview(projects, []);
+
+    expect(overview.totalCashInEgp).toBe(6_000_00);
+    expect(overview.certificateCollectionsEgp).toBe(1_000_00);
+    expect(overview.certificateCollectionsEgp).not.toBe(overview.totalCashInEgp);
+    // Components account for the total exactly — nothing lost, nothing counted twice.
+    expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
+    // Net cash position stays total actual cash in less actual cash out.
+    expect(computeDashboardOverview(projects, [expense(2_500_00)]).netCashPositionEgp)
+      .toBe(6_000_00 - 2_500_00);
   });
 
   it("uses stored row FX in monthly cash without floating-point money", () => {

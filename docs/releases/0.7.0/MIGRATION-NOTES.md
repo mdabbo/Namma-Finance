@@ -85,3 +85,35 @@ them and no audit gap remains.
 
 No data is rewritten and no column is dropped, so 0004 cannot lose data. It only
 adds triggers and stamps the new schema identity.
+
+## Cash KPI definitions (milestone 4)
+
+The dashboard headline was labelled **Cash Collected** but calculated
+`Σ project.totalActualCashInEgp` — every incoming payment, including advances,
+retention releases and customer money not yet allocated to a certificate. That
+overstated certificate collection. Finance Overview ("Cash in") and Payments
+("Cash collected") repeated the same label over the same total.
+
+**Model adopted — headline total with its components** (the brief's preferred
+model). The alternative, redefining "Cash Collected" as certificate collections
+only, was rejected: it would silently change both the headline figure and Net
+Cash Position in a beta that already ships reports, for the same clarity gain.
+
+| Reported | Definition |
+| --- | --- |
+| **Total Cash In** (headline) | All live incoming payments. |
+| Certificate Collections | Payment money actually allocated to certificates. |
+| Advances Received | `ADVANCE` payments. |
+| Retention Released | `RETENTION_RELEASE` payments. |
+| Unallocated Customer Credit | Certificate-payment cash not yet allocated. |
+| **Net Cash Position** | Total actual cash in − actual cash out. Unchanged. |
+
+The four components **partition** the total: every live inflow falls into
+exactly one, so they sum to Total Cash In with nothing double counted.
+`dashboardCashInComponentsReconcile()` asserts the identity and is checked both
+as a core unit test and against a real database holding one of every inflow.
+
+No calculation changed. `DashboardOverview.cashCollectedEgp` was renamed to
+`totalCashInEgp` so the field name, the UI label and the arithmetic agree, and
+the components — already computed per project by the core aggregate — are now
+surfaced instead of being discarded.
