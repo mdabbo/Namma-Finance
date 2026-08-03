@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { buildCsv, type Column } from "../src/components/DataTable";
+import { minorToInput } from "../src/lib/format";
+import { UNKNOWN_AMOUNT, readModelDisplay, readModelExport } from "../src/lib/readModel";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,5 +99,50 @@ describe("money columns never export minor units", () => {
     "features/clients/ClientsPage.tsx",
   ])("%s names the reporting currency in consolidated headers", (file) => {
     expect(read(file)).toMatch(/\(\$\{base\.code\}\)/);
+  });
+});
+
+/**
+ * Audit regression. List rows and the financial read model are separate
+ * queries, so a table renders while its money is still loading. Coalescing that
+ * gap to zero exported "0.00" — a definite claim that a contract is worth
+ * nothing — into a file someone keeps and sends on. A missing row must export
+ * blank; a measured zero must still export zero.
+ */
+describe("money that is not known yet is never exported as zero", () => {
+  interface Row { id: number }
+  const readModel = new Map<number, { totalEgp: number }>([[1, { totalEgp: 250_00 }], [3, { totalEgp: 0 }]]);
+  const columns: Column<Row>[] = [
+    { key: "id", header: "Id", value: (row) => row.id },
+    {
+      key: "total",
+      header: "Total (EGP)",
+      value: (row) => readModel.get(row.id)?.totalEgp ?? 0,
+      exportValue: (row) => readModelExport(readModel.get(row.id), (fin) => minorToInput(fin.totalEgp, 2)),
+    },
+  ];
+
+  it("exports blank for a row the read model has no figure for", () => {
+    const lines = buildCsv(columns, [{ id: 1 }, { id: 2 }, { id: 3 }]).split("\r\n");
+    expect(lines[1]).toBe("1,250");        // known figure
+    expect(lines[2]).toBe("2,");           // not known yet — blank, not 0
+    expect(lines[3]).toBe("3,0");          // a measured zero is a fact
+  });
+
+  it("shows a placeholder on screen rather than a formatted zero", () => {
+    expect(readModelDisplay(undefined, () => "EGP 0")).toBe(UNKNOWN_AMOUNT);
+    expect(readModelDisplay(null, () => "EGP 0")).toBe(UNKNOWN_AMOUNT);
+    expect(readModelDisplay({ totalEgp: 0 }, () => "EGP 0")).toBe("EGP 0");
+  });
+
+  /** The pages that read money from the workspace read model must use it. */
+  it.each([
+    "features/projects/ProjectsPage.tsx",
+    "features/clients/ClientsPage.tsx",
+    "features/certificates/CertificatesPage.tsx",
+  ])("%s guards its read-model money columns", (file) => {
+    const source = read(file);
+    expect(source, `${file} must guard exports`).toContain("readModelExport(");
+    expect(source, `${file} must guard rendering`).toContain("readModelDisplay(");
   });
 });

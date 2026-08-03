@@ -12,6 +12,7 @@ import { PrintPortal } from "../../components/PrintPortal";
 import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import type { SavedViewFilters } from "../../lib/savedViews";
+import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { certificateSectionKpis, inProjectScope, parseFinanceScope } from "../finance/financeSectionModel";
 import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
@@ -112,19 +113,34 @@ export function CertificatesPage() {
       key: "net",
       header: t("certificates.netPayable"),
       value: (c) => stateOf(c)?.breakdown.netPayableMinor ?? 0,
+      // Net payable and unpaid come from the financial read model, which loads
+      // separately from this list. Until it arrives the figure is unknown, not
+      // zero — exporting a zero would put an unmeasured amount in a spreadsheet.
       exportValue: (c) =>
-        minorToInput(stateOf(c)?.breakdown.netPayableMinor ?? 0, currencyInfo(c.currency).exponent),
-      render: (c) => <span className="font-medium tnum">{fmt.money(stateOf(c)?.breakdown.netPayableMinor ?? 0, c.currency)}</span>,
+        readModelExport(stateOf(c), (state) =>
+          minorToInput(state.breakdown.netPayableMinor, currencyInfo(c.currency).exponent)),
+      render: (c) => (
+        <span className="font-medium tnum">
+          {readModelDisplay(stateOf(c), (state) => fmt.money(state.breakdown.netPayableMinor, c.currency))}
+        </span>
+      ),
       align: "end",
     },
     {
       key: "unpaid",
       header: t("certificates.unpaid"),
       value: (c) => stateOf(c)?.unpaidMinor ?? 0,
-      exportValue: (c) => minorToInput(stateOf(c)?.unpaidMinor ?? 0, currencyInfo(c.currency).exponent),
+      exportValue: (c) =>
+        readModelExport(stateOf(c), (state) =>
+          minorToInput(state.unpaidMinor, currencyInfo(c.currency).exponent)),
       render: (c) => {
-        const unpaid = stateOf(c)?.unpaidMinor ?? 0;
-        return <span className={`tnum ${unpaid > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>{fmt.money(unpaid, c.currency)}</span>;
+        const state = stateOf(c);
+        const owed = (state?.unpaidMinor ?? 0) > 0;
+        return (
+          <span className={`tnum ${owed ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {readModelDisplay(state, (row) => fmt.money(row.unpaidMinor, c.currency))}
+          </span>
+        );
       },
       align: "end",
     },

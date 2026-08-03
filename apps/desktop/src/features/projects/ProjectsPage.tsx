@@ -12,6 +12,7 @@ import { Badge, Button, PageHeader, RatioBar, Select } from "../../components/ui
 import { minorToInput, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import type { SavedViewFilters } from "../../lib/savedViews";
+import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { ProjectForm } from "./ProjectForm";
 
 const PROJECT_STATUSES: readonly ProjectStatus[] = ["ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"];
@@ -84,10 +85,17 @@ export function ProjectsPage() {
       // be read as some other currency.
       header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
       value: (p) => finOf(p.id)?.contractValueEgp ?? 0,
-      // Sorting uses exact EGP piasters; the export carries major units.
+      // Sorting uses exact EGP piasters; the export carries major units. A row
+      // the read model has not produced yet exports blank, never a zero a
+      // spreadsheet would sum as a real contract value.
       exportValue: (p) =>
-        minorToInput(base.convert(finOf(p.id)?.contractValueEgp ?? 0), currencyInfo(base.code).exponent),
-      render: (p) => <span className="tnum">{base.format(finOf(p.id)?.contractValueEgp ?? 0)}</span>,
+        readModelExport(finOf(p.id), (fin) =>
+          minorToInput(base.convert(fin.contractValueEgp), currencyInfo(base.code).exponent)),
+      render: (p) => (
+        <span className="tnum">
+          {readModelDisplay(finOf(p.id), (fin) => base.format(fin.contractValueEgp))}
+        </span>
+      ),
       align: "end",
     },
     {
@@ -95,7 +103,8 @@ export function ProjectsPage() {
       header: t("cash.certifiedRevenue"),
       value: (p) => finOf(p.id)?.certifiedRatioBp ?? 0,
       // Basis points sort exactly but read as nonsense in a spreadsheet.
-      exportValue: (p) => ((finOf(p.id)?.certifiedRatioBp ?? 0) / 100).toFixed(2),
+      exportValue: (p) =>
+        readModelExport(finOf(p.id), (fin) => (fin.certifiedRatioBp / 100).toFixed(2)),
       render: (p) => {
         const fin = finOf(p.id);
         return (

@@ -60,20 +60,9 @@ export function projectAttentionSummary(input: {
   };
 }
 
-/** Shown when the audited read model has no figure for a row yet. */
-export const UNKNOWN_AMOUNT = "—";
-
-/**
- * Render a monetary figure that the financial read model owns. A missing row
- * means "not known yet" — printing a formatted zero would state, on a live
- * financial screen, that a real payment or payout balance is nil.
- */
-export function readModelAmount<T>(
-  record: T | undefined,
-  format: (record: T) => string,
-): string {
-  return record === undefined ? UNKNOWN_AMOUNT : format(record);
-}
+// The "not known yet" rule applies to every list that shows read-model money,
+// not only the project workspace, so it lives in one place.
+export { UNKNOWN_AMOUNT, readModelAmount } from "../../lib/readModel";
 
 export interface ProjectWorkspaceLocation {
   tab: ProjectWorkspaceTab;
