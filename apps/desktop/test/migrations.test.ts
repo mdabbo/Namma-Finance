@@ -59,15 +59,35 @@ describe("baseline database creation", () => {
     const database = freshDb();
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    // Schema identity is 26: the baseline recreates schema 24, the
-    // assignment-lifecycle migration carries it to 25 and the cancellation
-    // evidence integrity migration to 26, so no database can claim a version
-    // whose shape differs.
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 26 });
+    // Schema identity is 27: the baseline recreates schema 24, then the
+    // forward migrations carry it to 25 (assignment lifecycle), 26 (cancellation
+    // evidence integrity) and 27 (truthful audit version), so no database can
+    // claim a version whose shape differs.
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "26" });
+      .toEqual({ value: "27" });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='application_id'").get())
       .toEqual({ value: "com.mepfinance.app" });
+  });
+
+  /**
+   * Release regression: a fresh 0.7.0 database stamped every audit row with
+   * application_version '0.6.3' — a version that never shipped this schema.
+   * audit_logs is immutable by trigger, so a wrong stamp can never be corrected
+   * after the fact.
+   */
+  it("stamps new audit records with the shipping application version", () => {
+    const database = freshDb();
+    database.exec("INSERT INTO clients (name) VALUES ('Version Probe')");
+    expect(database.prepare(
+      "SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1",
+    ).get()).toEqual({ application_version: "0.7.0" });
+
+    // No retired 0.6.x literal may remain on the live audit path.
+    const finalize = (database.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='finalize_audit_insert'",
+    ).get() as { sql: string }).sql;
+    expect(finalize).not.toMatch(/0.6.d+/);
   });
 
   it("carries the assignment lifecycle columns", () => {
@@ -126,7 +146,7 @@ describe("baseline database creation", () => {
       .toEqual({ fx_rate_micro: 1_000_000 });
     expect(database.prepare("SELECT COUNT(*) AS n FROM currencies").get()).toEqual({ n: 11 });
     expect(database.prepare("SELECT source,application_version FROM audit_context WHERE id=1").get())
-      .toEqual({ source: "DESKTOP", application_version: "0.6.3" });
+      .toEqual({ source: "DESKTOP", application_version: "0.7.0" });
 
     // A brand-new workspace has no financial records and no audit history:
     // seeding reference data must not manufacture activity.
@@ -230,7 +250,7 @@ describe("baseline financial integrity constraints", () => {
       action: "CREATE",
       entity_type: "contract",
       source: "DESKTOP",
-      application_version: "0.6.3",
+      application_version: "0.7.0",
       finalized: 1,
     });
     expect(() => database.exec("UPDATE audit_logs SET action='TAMPER'")).toThrow(/AUDIT_LOG_IMMUTABLE/);

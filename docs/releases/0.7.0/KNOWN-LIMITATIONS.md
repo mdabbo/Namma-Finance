@@ -20,8 +20,6 @@ This build is **Beta**. It is not represented as production-ready.
 - Wide create/edit forms (payment, certificate, contract, project) remain modal
   dialogs rather than side drawers. No flow stacks dialogs, and the four-column
   financial layouts need the overlay width.
-- "Customize KPIs" on the dashboard is present but disabled; it is reserved for
-  a future release.
 - The redesign targets desktop widths. Layouts are verified at 1366×768,
   1440×900, and 1920×1080; narrower windows are not a supported target.
 
@@ -35,6 +33,23 @@ This build is **Beta**. It is not represented as production-ready.
   Application-lock password verification (Argon2, attempt throttling) is
   therefore covered by the Rust suite and unit tests, not by the UI suite.
 - No automated test drives the packaged Tauri binary itself.
+- The project-activity Playwright check skips when the demo workspace produces
+  no activity rows, so it is weaker evidence than the other UI tests.
+- Arabic CSV output carries a UTF-8 BOM and is asserted by unit test; it has not
+  been opened in a real Excel installation.
+
+## Financial model
+
+- A cancelled assignment's earned figure is derived in TypeScript and frozen
+  under the application-wide financial lock, not inside a Rust transaction. The
+  lock serialises it against every other financial mutation and migration 0005's
+  predecessor makes the stored result immutable, but a concurrent writer outside
+  this process (a sync pull) is not serialised by it.
+- The application-wide lock is process-local. Backend row-level security remains
+  the authority for anything reaching the cloud.
+- Consolidated columns convert at the reporting currency's current rate, so a
+  consolidated total is a today-value view, not a historical restatement.
+  Per-record columns keep their own historical rate.
 
 ## Operations
 

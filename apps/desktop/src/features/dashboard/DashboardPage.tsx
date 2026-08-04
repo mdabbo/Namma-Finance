@@ -10,7 +10,6 @@ import {
   CircleDollarSign,
   FileCheck2,
   HandCoins,
-  SlidersHorizontal,
   WalletCards,
 } from "lucide-react";
 import {
@@ -581,17 +580,6 @@ function DashboardHeader({ currency }: { currency: string }) {
           tone="info"
           label={t("dashboard.reportingCurrency", { currency })}
         />
-      }
-      actions={
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled
-          title={t("dashboard.customizeComingSoon")}
-        >
-          <SlidersHorizontal size={15} aria-hidden="true" />
-          {t("dashboard.customizeKpis")}
-        </Button>
       }
     />
   );

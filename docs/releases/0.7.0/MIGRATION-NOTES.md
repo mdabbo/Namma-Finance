@@ -1,7 +1,8 @@
 # Database migration notes — 0.7.0
 
-The desktop SQLite schema remains version **24**. Its shape is unchanged; what
-changed is how it is built.
+The baseline pair recreates schema **24** — its shape is unchanged; what changed
+is how it is built. Forward-only migrations then carry the schema to **27**; see
+"Forward migrations after the baseline" below.
 
 The development migration chain `0001_initial` … `0024_dashboard_snapshot_audit`
 is replaced by two files: `0001_baseline.sql` (complete schema, settings
@@ -56,6 +57,7 @@ file has been edited, so recorded checksums stay valid.
 | --- | --- | --- |
 | `0003_assignment_lifecycle.sql` | 25 | Explicit assignment lifecycle (`lifecycle_status`, completion/cancellation evidence) separated from `archived_at` visibility. |
 | `0004_cancellation_evidence_integrity.sql` | 26 | Makes cancellation evidence tamper-evident (audit remediation). |
+| `0005_audit_version_baseline.sql` | 27 | Records the shipping application version on new audit rows (release remediation). |
 
 ### 0004 — why it exists
 
@@ -141,3 +143,27 @@ identity is therefore structural: for every receipt,
 
 Certificate snapshot FX is unchanged and still governs invoiced amount,
 outstanding receivables, and every other receivable-side measure.
+
+### 0005 — truthful audit application version
+
+A freshly created 0.7.0 database stamped every audit row with
+`application_version` **0.6.3** — a version that never shipped this schema.
+Three retired 0.6.x literals fed it (`audit_logs` default `0.6.0`,
+`audit_context` default and seed `0.6.3`, and the `finalize_audit_insert`
+COALESCE fallback `0.6.3`).
+
+The runtime already self-heals: `stamp_runtime_release()` writes
+`CURRENT_APP_VERSION` into `audit_context` at startup. But the window before
+that call — and every context that never reaches the Rust layer, namely the unit
+harness and the Playwright database bridge — recorded the false version
+permanently, because `audit_logs` is immutable by trigger and a wrong stamp can
+never be corrected afterwards.
+
+`0005` updates the stored `audit_context` row, rewrites any row still carrying a
+retired default, and recreates `finalize_audit_insert` with a truthful fallback.
+The baseline files are again untouched, so recorded checksums stay valid. The
+`audit_logs.application_version` column default remains `0.6.0` and is
+unreachable: the trigger overwrites it on every insert, and rebuilding that
+table to change a dead default would risk the audit history for no gain.
+
+Schema identity moves 26 → **27**. No data is lost.

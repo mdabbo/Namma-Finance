@@ -16,13 +16,13 @@ Measured on `b36f571` (milestone 4, cash KPI semantics):
 | Gate | Result |
 | --- | --- |
 | Type checking | 3/3 workspaces pass (`core`, `desktop`, `mobile`) |
-| Release metadata | `version:check` verifies 0.7.0 (Beta), schema 26 |
+| Release metadata | `version:check` verifies 0.7.0 (Beta), schema 27 |
 | `@mep/core` unit tests | **187 passed**, 0 failed (16 files) |
-| `@mep/desktop` tests | **256 passed**, 0 failed (29 files) |
+| `@mep/desktop` tests | **336 passed**, 0 failed (34 files) |
 | Release script tests | **2 passed**, 0 failed |
 | Core financial coverage | **96.75%** statements / 88.86% branches |
 | Rust tests | **20 passed**, 0 failed |
-| Playwright UI tests | **66 passed**, 0 failed (3 viewports) |
+| Playwright UI tests | **99 passed**, 0 failed (3 viewports), also run in CI |
 
 These counts move with every milestone; treat a mismatch against the current
 tree as a stale document, not as a regression.
