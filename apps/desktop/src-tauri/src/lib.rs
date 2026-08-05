@@ -636,6 +636,13 @@ fn certificate_net_payable(
 /// is walked in sequence. Drafts are carried in the result (callers need to
 /// reject allocations against them) but never consume advance, matching
 /// `isBillable` on the TypeScript side.
+///
+/// The selection matches the TypeScript read model exactly, including the
+/// archived contract and project joins. It used to filter only the
+/// certificate's own flags, so the two engines could disagree about which
+/// certificates belong to a contract — the read model dropped an archived
+/// project's certificates while reconciliation still walked them, and any
+/// figure derived from both would have been computed over different rows.
 async fn load_contract_payables(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     contract_id: i64,
@@ -649,7 +656,9 @@ async fn load_contract_payables(
                 COALESCE(pc.advance_minor_snapshot,c.advance_minor) advance_minor,
                 COALESCE(pc.advance_method_snapshot,c.advance_recovery_method) advance_method
          FROM payment_certificates pc JOIN contracts c ON c.id=pc.contract_id
+                                      JOIN projects p ON p.id=c.project_id
          WHERE pc.contract_id=? AND pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+           AND c.archived_at IS NULL AND p.archived_at IS NULL
          ORDER BY pc.seq,pc.id",
     )
     .bind(contract_id)
@@ -779,8 +788,11 @@ async fn reconcile_certificates(
 ) -> Result<usize, String> {
     let contract_rows = if certificate_ids.is_empty() {
         sqlx::query(
-            "SELECT DISTINCT contract_id FROM payment_certificates
-             WHERE deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL",
+            "SELECT DISTINCT pc.contract_id FROM payment_certificates pc
+             JOIN contracts c ON c.id=pc.contract_id
+             JOIN projects p ON p.id=c.project_id
+             WHERE pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+               AND c.archived_at IS NULL AND p.archived_at IS NULL",
         )
         .fetch_all(&mut **tx)
         .await
@@ -788,8 +800,11 @@ async fn reconcile_certificates(
     } else {
         let placeholders = vec!["?"; certificate_ids.len()].join(",");
         let sql = format!(
-            "SELECT DISTINCT contract_id FROM payment_certificates
-             WHERE id IN ({placeholders}) AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL"
+            "SELECT DISTINCT pc.contract_id FROM payment_certificates pc
+             JOIN contracts c ON c.id=pc.contract_id
+             JOIN projects p ON p.id=c.project_id
+             WHERE pc.id IN ({placeholders}) AND pc.deleted_at IS NULL AND pc.voided_at IS NULL
+               AND pc.archived_at IS NULL AND c.archived_at IS NULL AND p.archived_at IS NULL"
         );
         let mut query = sqlx::query(&sql);
         for id in certificate_ids {

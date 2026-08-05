@@ -225,7 +225,9 @@ async function loadContractPayables(contractId: number): Promise<{ id: number; s
             COALESCE(pc.advance_minor_snapshot,c.advance_minor) AS advanceMinor,
             COALESCE(pc.advance_method_snapshot,c.advance_recovery_method) AS advanceMethod
      FROM payment_certificates pc JOIN contracts c ON c.id=pc.contract_id
+                                  JOIN projects p ON p.id=c.project_id
      WHERE pc.contract_id=$1 AND pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+       AND c.archived_at IS NULL AND p.archived_at IS NULL
      ORDER BY pc.seq, pc.id`,
     [contractId],
   );
@@ -309,8 +311,11 @@ export async function reconcileCertificateStatuses(certificateIds?: number[]): P
     { certificateIds: certificateIds ?? [] },
     async () => {
       const targets = certificateIds ?? (await select<{ id: number }>(
-        `SELECT id FROM payment_certificates
-         WHERE deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL`,
+        `SELECT pc.id FROM payment_certificates pc
+         JOIN contracts c ON c.id=pc.contract_id
+         JOIN projects p ON p.id=c.project_id
+         WHERE pc.deleted_at IS NULL AND pc.voided_at IS NULL AND pc.archived_at IS NULL
+           AND c.archived_at IS NULL AND p.archived_at IS NULL`,
       )).map((row) => row.id);
       if (targets.length === 0) return 0;
       return reconcileWithinTransaction(targets);

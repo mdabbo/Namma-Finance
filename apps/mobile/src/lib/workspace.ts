@@ -89,10 +89,26 @@ export interface MobileWorkspace {
   overdueCount: number;
 }
 
+/**
+ * The archived boundary, mirroring the desktop read model's SQL.
+ *
+ * `fetchAll` filters only the sync tombstone (`deleted_at`), so archived
+ * projects and contracts arrived here as live rows and their certificates and
+ * payments were counted as current money. Desktop excludes them in the query
+ * that feeds the read model — "archived projects leave every finance surface
+ * together" — and this screen has to agree, or the same workspace reports two
+ * different sets of figures depending on which app you open.
+ *
+ * The raw Supabase rows still carry `archived_at` and `voided_at` even though
+ * the mapped domain objects drop them, so the boundary is applied before
+ * mapping rather than after.
+ */
+const isLive = (row: Row) => row.archived_at == null && row.voided_at == null;
+
 export async function loadMobileWorkspace(client: SupabaseClient): Promise<MobileWorkspace> {
   const [
-    clientRows, projectRows, contractRows, certRows, paymentRows, allocRows,
-    _categoryRows, expenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
+    clientRows, allProjectRows, allContractRows, allCertRows, allPaymentRows, allocRows,
+    _categoryRows, allExpenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
   ] = await Promise.all([
     fetchAll(client, "clients"),
     fetchAll(client, "projects"),
@@ -107,6 +123,23 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
     fetchAll(client, "person_payments"),
     fetchAll(client, "project_stages"),
   ]);
+
+  const projectRows = allProjectRows.filter(isLive);
+  const liveProjectUuids = new Set(projectRows.map((row) => row.uuid));
+  const contractRows = allContractRows.filter(
+    (row) => isLive(row) && liveProjectUuids.has(row.project_id),
+  );
+  const liveContractUuids = new Set(contractRows.map((row) => row.uuid));
+  const certRows = allCertRows.filter(
+    (row) => isLive(row) && liveContractUuids.has(row.contract_id),
+  );
+  const paymentRows = allPaymentRows.filter(
+    (row) => isLive(row) && liveContractUuids.has(row.contract_id),
+  );
+  // A project expense follows its project; office overhead has no project.
+  const expenseRows = allExpenseRows.filter(
+    (row) => isLive(row) && (row.project_id == null || liveProjectUuids.has(row.project_id)),
+  );
 
   const ids = {
     clients: new Ids(), projects: new Ids(), contracts: new Ids(), certs: new Ids(),

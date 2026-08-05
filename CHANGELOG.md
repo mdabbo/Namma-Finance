@@ -185,6 +185,18 @@ deleted and recreated** — see below.
   whose payable is already fully consumed by advance recovery, retention and
   withholding, which would otherwise arrive as an open claim while every
   identical certificate elsewhere reads as settled.
+- **One archived boundary, applied by every engine.** The read model dropped an
+  archived project's certificates while the reconciliation and allocation engine
+  still walked them, so the two computed over different rows for the same
+  contract. Nothing compared them directly yet, which is why it went unnoticed.
+  Rust and the reconciliation double now join through contracts and projects
+  like the read model does. The mobile workspace was the visible half of this:
+  its fetch filtered only the sync tombstone, so archived projects and contracts
+  arrived as live rows and their certificates, payments and expenses were
+  reported as current money — the same workspace showed different figures
+  depending on which app you opened. Queries that legitimately ignore the
+  boundary, such as the next-sequence lookup which must count archived rows to
+  avoid reissuing a number, are deliberately left alone.
 - **Rust owns payment-driven certificate status.** The payment commands no
   longer accept a status derived by the frontend; create, update and void
   recalculate the affected certificates from stored evidence inside the same
