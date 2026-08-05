@@ -111,7 +111,3 @@ export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Test counterpart of the KNOWN-UNSAFE production remnant (syncConflicts). */
-export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
-  await transaction(step === "BEGIN IMMEDIATE" ? "begin" : step === "COMMIT" ? "commit" : "rollback");
-}

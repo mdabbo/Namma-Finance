@@ -1901,6 +1901,23 @@ async fn reserve_next_number_transaction(
     prefix: &str,
     year: i64,
 ) -> Result<String, String> {
+    let mut tx = begin_immediate(pool).await?;
+    let reserved = reserve_next_number_in_tx(&mut tx, sequence_type, prefix, year).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(reserved)
+}
+
+/// The reservation itself, inside a transaction the caller already owns.
+///
+/// Sync conflict resolution renumbers a colliding record as part of a larger
+/// resolution, so it cannot afford its own transaction — the renumber, its audit
+/// row and the conflict's status have to land together or not at all.
+async fn reserve_next_number_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    sequence_type: &str,
+    prefix: &str,
+    year: i64,
+) -> Result<String, String> {
     let clean = prefix.trim().to_uppercase();
     if clean.is_empty()
         || clean.len() > 12
@@ -1918,14 +1935,13 @@ async fn reserve_next_number_transaction(
         .find(|(name, _, _, _)| *name == sequence_type)
         .ok_or_else(|| "INVALID_SEQUENCE_TYPE".to_string())?;
 
-    let mut tx = begin_immediate(pool).await?;
     sqlx::query(
         "INSERT OR IGNORE INTO numbering_sequences(sequence_type,year,prefix,last_number) VALUES(?,?,?,0)",
     )
     .bind(sequence_type)
     .bind(year)
     .bind(&clean)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -1947,7 +1963,7 @@ async fn reserve_next_number_transaction(
         .bind(sequence_type)
         .bind(year)
         .bind(&clean)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1957,13 +1973,366 @@ async fn reserve_next_number_transaction(
     .bind(sequence_type)
     .bind(year)
     .bind(&clean)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "NUMBER_RESERVATION_FAILED".to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
 
     Ok(format!("{clean}-{year}-{reserved:0width$}", width = *width))
+}
+
+/// Tables a sync conflict may be resolved against.
+///
+/// Every dynamic table name below is looked up here first, so the `format!`d
+/// statements can only ever produce one of eight fixed shapes — a conflict row
+/// naming anything else is refused before a statement is built.
+const CONFLICT_TABLES: &[&str] = &[
+    "contracts",
+    "contract_revisions",
+    "payment_certificates",
+    "payments",
+    "payment_certificate_allocations",
+    "expenses",
+    "person_payments",
+    "projects",
+];
+
+/// Number-collision renumbering: sequence, settings key for the prefix, the
+/// human-number column, and the expression giving the record's business date.
+/// Mirrors the same table in `syncConflicts.ts`.
+const COLLISION_CONFIG: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "projects",
+        "PROJECT",
+        "project_code_prefix",
+        "code",
+        "created_at",
+    ),
+    (
+        "contracts",
+        "CONTRACT",
+        "contract_number_prefix",
+        "number",
+        "COALESCE(signed_date,created_at)",
+    ),
+    (
+        "payment_certificates",
+        "CERTIFICATE",
+        "certificate_number_prefix",
+        "number",
+        "date",
+    ),
+    (
+        "payments",
+        "PAYMENT",
+        "payment_number_prefix",
+        "number",
+        "date",
+    ),
+    (
+        "expenses",
+        "EXPENSE",
+        "expense_number_prefix",
+        "number",
+        "date",
+    ),
+];
+
+fn conflict_table(name: &str) -> Result<&'static str, String> {
+    CONFLICT_TABLES
+        .iter()
+        .find(|candidate| **candidate == name)
+        .copied()
+        .ok_or_else(|| "SYNC_CONFLICT_NOT_FOUND".to_string())
+}
+
+/// Resolve one sync conflict as a single all-or-nothing operation.
+///
+/// This was the last write still opening its transaction from the WebView,
+/// which does not work: `tauri-plugin-sql` releases the pooled connection
+/// between statements, so the boundary was stranded on a shared connection
+/// where any other statement could join it. It is the worst place for that to
+/// be true — resolution renumbers records, deletes allocations, writes audit
+/// rows and rewinds pull cursors, and a partial application leaves the local
+/// database disagreeing with the cloud about which row won.
+///
+/// The choice is still the user's: nothing here decides an outcome, it applies
+/// the one that was chosen and records why.
+#[tauri::command]
+async fn resolve_sync_conflict_atomic(
+    db_instances: State<'_, DbInstances>,
+    conflict_id: i64,
+    resolution: String,
+    note: String,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    resolve_sync_conflict_transaction(&pool, conflict_id, &resolution, &note).await
+}
+
+async fn resolve_sync_conflict_transaction(
+    pool: &sqlx::SqlitePool,
+    conflict_id: i64,
+    resolution: &str,
+    note: &str,
+) -> Result<(), String> {
+    if !matches!(resolution, "KEEP_LOCAL" | "KEEP_REMOTE") {
+        return Err("SYNC_CONFLICT_RESOLUTION_INVALID".into());
+    }
+    let trimmed_note = note.trim().to_string();
+    if trimmed_note.is_empty() {
+        return Err("SYNC_CONFLICT_REASON_REQUIRED".into());
+    }
+    let keep_local = resolution == "KEEP_LOCAL";
+
+    let mut tx = begin_immediate(pool).await?;
+    let conflict = sqlx::query(
+        "SELECT table_name,row_uuid,conflict_kind,local_json,remote_json,remote_updated_at
+         FROM sync_conflicts WHERE id=? AND status='OPEN'",
+    )
+    .bind(conflict_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "SYNC_CONFLICT_NOT_FOUND".to_string())?;
+
+    let table: String = conflict.try_get("table_name").map_err(|e| e.to_string())?;
+    let table = conflict_table(&table)?;
+    let row_uuid: String = conflict.try_get("row_uuid").map_err(|e| e.to_string())?;
+    let kind: String = conflict
+        .try_get("conflict_kind")
+        .map_err(|e| e.to_string())?;
+    let local_json: String = conflict.try_get("local_json").map_err(|e| e.to_string())?;
+    let remote_json: String = conflict.try_get("remote_json").map_err(|e| e.to_string())?;
+    let remote_updated_at: Option<String> = conflict
+        .try_get("remote_updated_at")
+        .map_err(|e| e.to_string())?;
+
+    // The baseline the next pull compares against is the snapshot that LOST:
+    // keeping local means the remote snapshot is now the known-seen state.
+    let chosen_baseline = if keep_local {
+        &remote_json
+    } else {
+        &local_json
+    };
+    sqlx::query(
+        "INSERT INTO sync_record_state(table_name,row_uuid,payload_json,remote_updated_at)
+         VALUES(?,?,?,?)
+         ON CONFLICT(table_name,row_uuid) DO UPDATE SET payload_json=excluded.payload_json,
+                                                        remote_updated_at=excluded.remote_updated_at",
+    )
+    .bind(table)
+    .bind(&row_uuid)
+    .bind(chosen_baseline)
+    .bind(&remote_updated_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let target: Option<i64> =
+        sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE sync_uuid=?"))
+            .bind(&row_uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let duplicate_record = kind == "DUPLICATE_RECORD";
+    let allocation_duplicate = duplicate_record && table == "payment_certificate_allocations";
+
+    if allocation_duplicate {
+        let local: JsonValue = serde_json::from_str(&local_json)
+            .map_err(|e| format!("SYNC_CONFLICT_PAYLOAD_INVALID: {e}"))?;
+        let duplicate_id: Option<i64> = sqlx::query_scalar(
+            "SELECT a.id FROM payment_certificate_allocations a
+             JOIN payments p ON p.id=a.payment_id
+             JOIN payment_certificates c ON c.id=a.certificate_id
+             WHERE p.sync_uuid=? AND c.sync_uuid=? AND a.sync_uuid<>?",
+        )
+        .bind(json_text(&local, "payment_id"))
+        .bind(json_text(&local, "certificate_id"))
+        .bind(&row_uuid)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        let duplicate_id =
+            duplicate_id.ok_or_else(|| "SYNC_DUPLICATE_SOURCE_NOT_FOUND".to_string())?;
+
+        if keep_local {
+            sqlx::query(
+                "INSERT INTO sync_tombstones(tbl,row_uuid,deleted_at)
+                 VALUES('payment_certificate_allocations',?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            )
+            .bind(&row_uuid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            // An explicit, audited replacement. The allocation delete trigger
+            // records the removed financial relationship and its tombstone.
+            sqlx::query("DELETE FROM payment_certificate_allocations WHERE id=?")
+                .bind(duplicate_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    } else if duplicate_record {
+        let local: JsonValue = serde_json::from_str(&local_json)
+            .map_err(|e| format!("SYNC_CONFLICT_PAYLOAD_INVALID: {e}"))?;
+        let remote: JsonValue = serde_json::from_str(&remote_json)
+            .map_err(|e| format!("SYNC_CONFLICT_PAYLOAD_INVALID: {e}"))?;
+        let local_uuid = json_text(&local, "_localSyncUuid")
+            .ok_or_else(|| "SYNC_DUPLICATE_SOURCE_NOT_FOUND".to_string())?;
+        let (_, sequence, prefix_key, number_column, date_column) = COLLISION_CONFIG
+            .iter()
+            .find(|(name, _, _, _, _)| *name == table)
+            .ok_or_else(|| "SYNC_CONFLICT_NOT_FOUND".to_string())?;
+        let remote_number = json_text(
+            &remote,
+            if table == "projects" {
+                "code"
+            } else {
+                "number"
+            },
+        );
+
+        if keep_local {
+            // A number collision never deletes either business record. The local
+            // one is renumbered and the pull replayed, so both uuids and every
+            // descendant row survive.
+            let business_date: Option<String> = sqlx::query_scalar(&format!(
+                "SELECT {date_column} FROM {table} WHERE sync_uuid=?"
+            ))
+            .bind(&local_uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "SYNC_DUPLICATE_SOURCE_NOT_FOUND".to_string())?;
+
+            let stored_prefix: Option<String> =
+                sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
+                    .bind(prefix_key)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            let prefix = stored_prefix
+                .unwrap_or_else(|| sequence.chars().take(3).collect())
+                .trim()
+                .to_uppercase();
+
+            let year = business_date
+                .as_deref()
+                .and_then(|value| value.get(0..4))
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|year| (2000..=9999).contains(year))
+                .unwrap_or_else(|| i64::from(chrono_year_utc()));
+
+            let new_number = reserve_next_number_in_tx(&mut tx, sequence, &prefix, year).await?;
+
+            sqlx::query(&format!(
+                "UPDATE {table} SET {number_column}=? WHERE sync_uuid=?"
+            ))
+            .bind(&new_number)
+            .bind(&local_uuid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            sqlx::query(
+                "INSERT INTO audit_logs(user_id,device_id,action,entity_type,entity_uuid,
+                    before_json,after_json,reason,source,application_version)
+                 VALUES((SELECT value FROM settings WHERE key='sync_email'),
+                        (SELECT value FROM settings WHERE key='device_id'),
+                        'NUMBER_COLLISION_RENUMBER',?,?,
+                        json_object('number',?),json_object('number',?),?,'SYNC',?)",
+            )
+            .bind(table)
+            .bind(&local_uuid)
+            .bind(&remote_number)
+            .bind(&new_number)
+            .bind(&trimmed_note)
+            .bind(CURRENT_APP_VERSION)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            // Accepting the remote number requires the local record to have been
+            // renumbered first; otherwise the pull would collide all over again.
+            // Double option: the row may be absent, and expenses.number is
+            // nullable, so a present row can still carry NULL here.
+            let current: Option<Option<String>> = sqlx::query_scalar(&format!(
+                "SELECT {number_column} FROM {table} WHERE sync_uuid=?"
+            ))
+            .bind(&local_uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            let current = current.flatten();
+            if current.is_some() && current == remote_number {
+                return Err("RENUMBER_LOCAL_BEFORE_KEEP_REMOTE".into());
+            }
+        }
+    } else if target.is_some() && keep_local {
+        // Win the next pull by timestamp: later than now AND later than the
+        // remote row, so the local edit is the one that propagates.
+        sqlx::query(&format!(
+            "UPDATE {table}
+             SET updated_at = MAX(
+                   strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                   COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+0.001 seconds'), '0')
+                 )
+             WHERE sync_uuid=?"
+        ))
+        .bind(&remote_updated_at)
+        .bind(&row_uuid)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else if target.is_some() {
+        // Force the next pull to apply the preserved remote snapshot even when
+        // the rejected local edit carried a later wall-clock timestamp.
+        sqlx::query(&format!(
+            "UPDATE {table} SET updated_at='1970-01-01T00:00:00.000Z' WHERE sync_uuid=?"
+        ))
+        .bind(&row_uuid)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else if !keep_local {
+        // KEEP_REMOTE for a locally deleted row must cancel its tombstone, or
+        // the chosen cloud row would simply be deleted again after the pull.
+        sqlx::query("DELETE FROM sync_tombstones WHERE tbl=? AND row_uuid=?")
+            .bind(table)
+            .bind(&row_uuid)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let resolved = sqlx::query(
+        "UPDATE sync_conflicts
+         SET status='RESOLVED', resolution=?, resolution_note=?,
+             resolved_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+             resolved_by=(SELECT value FROM settings WHERE key='sync_email')
+         WHERE id=? AND status='OPEN'",
+    )
+    .bind(resolution)
+    .bind(&trimmed_note)
+    .bind(conflict_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if resolved.rows_affected() != 1 {
+        return Err("SYNC_CONFLICT_NOT_FOUND".into());
+    }
+
+    // Replay the pull so the resolution's consequences are fetched again.
+    if !keep_local || (duplicate_record && !allocation_duplicate) {
+        sqlx::query("DELETE FROM sync_state WHERE key LIKE 'pull:%'")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 /// Convert the compatibility marker left when a pre-audit backup was restored.
@@ -4141,6 +4510,377 @@ mod financial_transaction_tests {
         });
     }
 
+    /// A project, contract and open conflict row, for the resolver.
+    async fn conflict_fixture(
+        pool: &sqlx::SqlitePool,
+        table: &str,
+        kind: &str,
+        row_uuid: &str,
+        local_json: &str,
+        remote_json: &str,
+    ) -> i64 {
+        sqlx::query(
+            "INSERT INTO sync_conflicts(table_name,row_uuid,conflict_kind,local_json,remote_json,
+                remote_updated_at,detected_at,status)
+             VALUES(?,?,?,?,?,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z','OPEN')",
+        )
+        .bind(table)
+        .bind(row_uuid)
+        .bind(kind)
+        .bind(local_json)
+        .bind(remote_json)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    async fn seed_project(pool: &sqlx::SqlitePool, code: &str, uuid: &str) {
+        sqlx::query(
+            "INSERT INTO clients(name) VALUES('Sync Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro,sync_uuid)
+             VALUES(?,'Synced',1,'EGP',1000000,?)",
+        )
+        .bind(code)
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .ok();
+        // The two-statement form above only runs the first on some drivers;
+        // insert explicitly so the fixture is deterministic.
+        sqlx::query("INSERT OR IGNORE INTO clients(id,name) VALUES(1,'Sync Co')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT OR IGNORE INTO projects(code,name,client_id,currency,fx_rate_micro,sync_uuid)
+             VALUES(?,'Synced',1,'EGP',1000000,?)",
+        )
+        .bind(code)
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn conflict_status(pool: &sqlx::SqlitePool, id: i64) -> (String, Option<String>) {
+        sqlx::query_as("SELECT status, resolution FROM sync_conflicts WHERE id=?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Every dynamic table name is looked up in a fixed allowlist first, so a
+    /// conflict row naming something else cannot reach a built statement.
+    #[test]
+    fn conflict_resolution_refuses_an_unlisted_table_and_a_bad_resolution() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let id = conflict_fixture(&pool, "settings", "CONCURRENT_EDIT", "u1", "{}", "{}").await;
+            assert_eq!(
+                resolve_sync_conflict_transaction(&pool, id, "KEEP_LOCAL", "note")
+                    .await
+                    .unwrap_err(),
+                "SYNC_CONFLICT_NOT_FOUND"
+            );
+
+            let ok = conflict_fixture(&pool, "payments", "CONCURRENT_EDIT", "u2", "{}", "{}").await;
+            assert_eq!(
+                resolve_sync_conflict_transaction(&pool, ok, "KEEP_EVERYTHING", "note")
+                    .await
+                    .unwrap_err(),
+                "SYNC_CONFLICT_RESOLUTION_INVALID"
+            );
+            assert_eq!(
+                resolve_sync_conflict_transaction(&pool, ok, "KEEP_LOCAL", "   ")
+                    .await
+                    .unwrap_err(),
+                "SYNC_CONFLICT_REASON_REQUIRED"
+            );
+            // None of the refusals resolved anything.
+            assert_eq!(conflict_status(&pool, ok).await.0, "OPEN");
+        });
+    }
+
+    /// KEEP_LOCAL on an edit conflict must make the local row win the next pull,
+    /// which means an updated_at strictly later than the remote one.
+    #[test]
+    fn keep_local_pushes_the_local_row_past_the_remote_timestamp() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-001", "uuid-local").await;
+            sqlx::query("UPDATE projects SET updated_at='2020-01-01T00:00:00.000Z' WHERE sync_uuid='uuid-local'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let id = conflict_fixture(
+                &pool,
+                "projects",
+                "CONCURRENT_EDIT",
+                "uuid-local",
+                r#"{"code":"PRJ-2026-001"}"#,
+                r#"{"code":"PRJ-2026-001"}"#,
+            )
+            .await;
+
+            resolve_sync_conflict_transaction(&pool, id, "KEEP_LOCAL", "  reviewed locally  ")
+                .await
+                .unwrap();
+
+            let updated: String =
+                sqlx::query_scalar("SELECT updated_at FROM projects WHERE sync_uuid='uuid-local'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert!(
+                updated.as_str() > "2026-01-01T00:00:00.000Z",
+                "local row must outrank the remote timestamp, got {updated}"
+            );
+
+            let (status, resolution) = conflict_status(&pool, id).await;
+            assert_eq!(status, "RESOLVED");
+            assert_eq!(resolution.as_deref(), Some("KEEP_LOCAL"));
+            let note: String =
+                sqlx::query_scalar("SELECT resolution_note FROM sync_conflicts WHERE id=?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                note, "reviewed locally",
+                "the note is trimmed before storing"
+            );
+
+            // The baseline recorded for the next pull is the snapshot that LOST.
+            let baseline: String = sqlx::query_scalar(
+                "SELECT payload_json FROM sync_record_state WHERE table_name='projects' AND row_uuid='uuid-local'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(baseline.contains("PRJ-2026-001"));
+
+            // KEEP_LOCAL on an edit conflict does not need the pull replayed.
+            sqlx::query("INSERT INTO sync_state(key,value) VALUES('pull:projects','x')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let cursors: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM sync_state WHERE key LIKE 'pull:%'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(cursors, 1);
+        });
+    }
+
+    /// KEEP_REMOTE rewinds the local row so the preserved remote snapshot is
+    /// applied even though the rejected local edit is newer by wall clock, and
+    /// replays the pull that will deliver it.
+    #[test]
+    fn keep_remote_rewinds_the_local_row_and_replays_the_pull() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-002", "uuid-remote").await;
+            sqlx::query("INSERT INTO sync_state(key,value) VALUES('pull:projects','cursor')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let id = conflict_fixture(
+                &pool,
+                "projects",
+                "CONCURRENT_EDIT",
+                "uuid-remote",
+                r#"{"code":"PRJ-2026-002"}"#,
+                r#"{"code":"PRJ-2026-002"}"#,
+            )
+            .await;
+
+            resolve_sync_conflict_transaction(&pool, id, "KEEP_REMOTE", "server version chosen")
+                .await
+                .unwrap();
+
+            let updated: String =
+                sqlx::query_scalar("SELECT updated_at FROM projects WHERE sync_uuid='uuid-remote'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(updated, "1970-01-01T00:00:00.000Z");
+            let cursors: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM sync_state WHERE key LIKE 'pull:%'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(cursors, 0, "pull must be replayed");
+        });
+    }
+
+    /// KEEP_REMOTE for a row deleted locally has to cancel the tombstone, or the
+    /// chosen cloud row is simply deleted again on the next pull.
+    #[test]
+    fn keep_remote_cancels_a_local_tombstone() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::query(
+                "INSERT INTO sync_tombstones(tbl,row_uuid,deleted_at)
+                 VALUES('payments','gone-uuid','2026-01-01T00:00:00.000Z')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let id = conflict_fixture(&pool, "payments", "DELETE_VS_EDIT", "gone-uuid", "{}", "{}")
+                .await;
+
+            resolve_sync_conflict_transaction(&pool, id, "KEEP_REMOTE", "restore from cloud")
+                .await
+                .unwrap();
+
+            let tombstones: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sync_tombstones WHERE tbl='payments' AND row_uuid='gone-uuid'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(tombstones, 0);
+        });
+    }
+
+    /// A number collision never deletes a business record. KEEP_LOCAL renumbers
+    /// the local one past everything already issued and audits the change.
+    #[test]
+    fn number_collision_renumbers_locally_and_records_why() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-004", "uuid-dup").await;
+            sqlx::query(
+                "UPDATE projects SET created_at='2026-05-05T00:00:00Z' WHERE sync_uuid='uuid-dup'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let id = conflict_fixture(
+                &pool,
+                "projects",
+                "DUPLICATE_RECORD",
+                "uuid-remote-dup",
+                r#"{"_localSyncUuid":"uuid-dup"}"#,
+                r#"{"code":"PRJ-2026-004"}"#,
+            )
+            .await;
+
+            resolve_sync_conflict_transaction(&pool, id, "KEEP_LOCAL", "kept our numbering")
+                .await
+                .unwrap();
+
+            let code: String =
+                sqlx::query_scalar("SELECT code FROM projects WHERE sync_uuid='uuid-dup'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_ne!(code, "PRJ-2026-004", "the collision must be resolved");
+            assert!(
+                code.starts_with("PRJ-2026-"),
+                "year comes from the record, got {code}"
+            );
+            // Past the number already present, and three digits wide for projects.
+            assert_eq!(code, "PRJ-2026-005");
+
+            // Scoped to the renumber: creating the fixture row already wrote a
+            // CREATE entry against the same uuid.
+            let (reason, before, after): (String, String, String) = sqlx::query_as(
+                "SELECT reason, before_json, after_json FROM audit_logs
+                 WHERE entity_uuid='uuid-dup' AND action='NUMBER_COLLISION_RENUMBER'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(reason, "kept our numbering");
+            // Both sides of the rename are recorded, so the collision is legible
+            // after the fact.
+            assert!(before.contains("PRJ-2026-004"), "before: {before}");
+            assert!(after.contains("PRJ-2026-005"), "after: {after}");
+        });
+    }
+
+    /// Accepting a remote number before renumbering locally would collide again
+    /// on the very next pull, so it is refused — and refused without leaving the
+    /// conflict half-resolved.
+    #[test]
+    fn keep_remote_number_is_refused_until_the_local_record_is_renumbered() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-007", "uuid-same").await;
+            let id = conflict_fixture(
+                &pool,
+                "projects",
+                "DUPLICATE_RECORD",
+                "uuid-remote-same",
+                r#"{"_localSyncUuid":"uuid-same"}"#,
+                r#"{"code":"PRJ-2026-007"}"#,
+            )
+            .await;
+
+            assert_eq!(
+                resolve_sync_conflict_transaction(&pool, id, "KEEP_REMOTE", "take the server code")
+                    .await
+                    .unwrap_err(),
+                "RENUMBER_LOCAL_BEFORE_KEEP_REMOTE"
+            );
+            assert_eq!(conflict_status(&pool, id).await.0, "OPEN");
+            // The rolled-back attempt left no baseline behind either.
+            let baselines: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sync_record_state WHERE row_uuid='uuid-remote-same'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(baselines, 0, "a refused resolution writes nothing");
+        });
+    }
+
+    /// The whole resolution is one transaction: a failure anywhere leaves the
+    /// conflict open and every earlier write undone.
+    #[test]
+    fn a_failed_resolution_rolls_back_everything_it_had_written() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-009", "uuid-fail").await;
+            let id = conflict_fixture(
+                &pool,
+                "projects",
+                "CONCURRENT_EDIT",
+                "uuid-fail",
+                "{}",
+                "{}",
+            )
+            .await;
+            // Fail at the last step, after the baseline and the row update.
+            sqlx::raw_sql(
+                "CREATE TRIGGER fail_resolution BEFORE UPDATE ON sync_conflicts
+                 BEGIN SELECT RAISE(ABORT,'injected'); END",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            assert!(
+                resolve_sync_conflict_transaction(&pool, id, "KEEP_LOCAL", "note")
+                    .await
+                    .is_err()
+            );
+
+            assert_eq!(conflict_status(&pool, id).await.0, "OPEN");
+            let baselines: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sync_record_state WHERE row_uuid='uuid-fail'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(baselines, 0, "the baseline write must roll back too");
+        });
+    }
+
     #[test]
     fn number_reservation_never_hands_out_the_same_number_twice() {
         tauri::async_runtime::block_on(async {
@@ -4464,6 +5204,7 @@ pub fn run() {
             update_contract_atomic,
             import_rows_atomic,
             reserve_next_number_atomic,
+            resolve_sync_conflict_atomic,
             finalize_pending_restore_audit_atomic,
             finalize_pending_backup_metadata_atomic,
             create_document_atomic,

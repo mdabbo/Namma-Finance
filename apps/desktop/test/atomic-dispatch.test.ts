@@ -151,6 +151,37 @@ describe("every multi-statement write dispatches to its Rust command", () => {
     expect(typeof cancelAssignment).toBe("function");
   });
 
+  it("sync conflict resolution goes to Rust, never to a WebView transaction", async () => {
+    const { resolveSyncConflict } = await import("../src/repositories/syncConflicts");
+    invoke.mockResolvedValue(undefined);
+
+    // A conflict row has to exist for the pre-checks to pass before dispatch.
+    const { execute: run } = await import("../src/lib/db");
+    await run(
+      `INSERT INTO sync_conflicts(table_name,row_uuid,conflict_kind,local_json,remote_json,
+         remote_updated_at,detected_at,status)
+       VALUES('payments','u1','CONCURRENT_EDIT','{}','{}','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z','OPEN')`,
+      [],
+    );
+    const [{ id }] = await (await import("../src/lib/db")).select<{ id: number }>(
+      "SELECT id FROM sync_conflicts WHERE row_uuid='u1'",
+    );
+
+    await resolveSyncConflict(id, "KEEP_LOCAL", "  reviewed  ");
+
+    expect(invoke).toHaveBeenCalledWith("resolve_sync_conflict_atomic", {
+      conflictId: id,
+      resolution: "KEEP_LOCAL",
+      note: "  reviewed  ",
+    });
+    // Rust trims the note, so the untrimmed value crossing the boundary is fine
+    // — but the conflict must NOT have been resolved on this side.
+    const [row] = await (await import("../src/lib/db")).select<{ status: string }>(
+      "SELECT status FROM sync_conflicts WHERE row_uuid='u1'",
+    );
+    expect(row!.status).toBe("OPEN");
+  });
+
   it("legacy document creation carries the on-disk path Rust stores", async () => {
     const { createDocument } = await import("../src/repositories/documents");
     invoke.mockResolvedValue(3);

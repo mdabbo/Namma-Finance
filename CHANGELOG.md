@@ -73,9 +73,18 @@ deleted and recreated** — see below.
   (`reserve_next_number_atomic`, `finalize_pending_restore_audit_atomic`,
   `finalize_pending_backup_metadata_atomic`, `create_document_atomic`), and
   `assertRestrictedSql` rejects transaction control outright, in the end-to-end
-  bridge exactly as in production. One caller remains and is named in
-  `test/security.test.ts`: sync conflict resolution reads inside its own
-  boundary to decide later writes and needs a Rust port of its own.
+  bridge exactly as in production.
+- **Sync conflict resolution moved to Rust with the rest.** It was the last
+  holdout and the worst place for a stranded boundary: resolving a conflict
+  renumbers records, deletes allocations, writes audit rows and rewinds pull
+  cursors, so a partial application leaves the local database disagreeing with
+  the cloud about which row won. `resolve_sync_conflict_atomic` applies the whole
+  resolution under one transaction. Every dynamic table name is looked up in a
+  fixed allowlist before a statement is built, and the renumbering path shares
+  the same reservation used everywhere else rather than open-coding a second
+  copy. The escape hatch the old path used is gone from every module, so
+  `test/security.test.ts` now asserts that no source file can open a WebView
+  transaction at all — the list it used to carry is empty.
 - **One dispatch seam for multi-statement writes.** Every such write used to
   carry its own `if (Tauri) invoke(x_atomic) else <transaction>` branch, and
   nothing in the suite ever took the first branch — neither vitest nor the

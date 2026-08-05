@@ -61,17 +61,15 @@ describe("Milestone 10 security boundaries",()=>{
   });
 
   /**
-   * `resolveSyncConflict` is the one path still opening its own transaction.
-   * It is NOT fixed: its reads feed later writes and it renumbers records
-   * through dynamic table names, so it needs a Rust port of its own rather
-   * than a mechanical conversion. It is listed here so the fence stays green
-   * on the paths that ARE fixed while naming the one that is not — a new
-   * offender fails this test, and removing the last entry is the definition of
-   * done.
+   * No source path opens its own transaction any more.
+   *
+   * This list was not empty when the fence was written: `resolveSyncConflict`
+   * held out longest because its reads feed later writes and it renumbers
+   * records through dynamic table names, so it needed a Rust port rather than a
+   * mechanical conversion. The escape hatch it used is gone from every module,
+   * production and bridge alike, so an empty result is the whole assertion.
    */
-  const KNOWN_WEBVIEW_TRANSACTIONS=["src\\repositories\\syncConflicts.ts"];
-
-  it("leaves no source path able to open a WebView transaction beyond the one known offender",()=>{
+  it("leaves no source path able to open a WebView transaction",()=>{
     const sources=globSync("src/**/*.{ts,tsx}",{cwd:root})
       // The database modules DEFINE the boundary helpers; everything else is a
       // caller, and callers are what this fence counts.
@@ -80,9 +78,9 @@ describe("Milestone 10 security boundaries",()=>{
     const offenders=sources
       .filter(({text})=>
         /execute\(\s*["'`]\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|END)\b/i.test(text)
-        || /unsafeWebViewTransaction\s*\(/.test(text))
+        || /unsafeWebViewTransaction/.test(text))
       .map(({file})=>file);
-    expect(offenders).toEqual(KNOWN_WEBVIEW_TRANSACTIONS);
+    expect(offenders).toEqual([]);
   });
 
   it("keeps the production database layer unable to hand out a transaction",()=>{

@@ -318,7 +318,3 @@ export function makeFakeClient() {
   };
 }
 
-/** Test counterpart of the KNOWN-UNSAFE production remnant (syncConflicts). */
-export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
-  requireDb().exec(step);
-}
