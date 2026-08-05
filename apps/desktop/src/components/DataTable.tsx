@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { isFormulaInjectionRisk } from "../lib/export";
 import { useTranslation } from "react-i18next";
 import {
   ArrowDown,
@@ -84,8 +85,6 @@ interface DataTableProps<T> {
   onResetFilters?: () => void;
 }
 
-const NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
-
 /**
  * Build a spreadsheet-safe CSV of every column with a plain value. Cells that
  * a spreadsheet would evaluate as a formula are prefixed with an apostrophe
@@ -97,9 +96,9 @@ export function buildCsv<T>(columns: Column<T>[], rows: T[]): string {
     .map((column) => ({ header: column.header, cell: (column.exportValue ?? column.value)! }));
   const escape = (value: string | number | null | undefined) => {
     const raw = value === null || value === undefined ? "" : String(value);
-    const guarded = /^[=+@\t\r]/.test(raw) || (raw.startsWith("-") && !NUMERIC_CELL.test(raw))
-      ? `'${raw}`
-      : raw;
+    // One shared rule with lib/export.ts, so a table export and a report export
+    // cannot disagree about whether a given cell is safe.
+    const guarded = isFormulaInjectionRisk(raw) ? `'${raw}` : raw;
     return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
   };
   const lines = [

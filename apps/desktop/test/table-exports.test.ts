@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCsv, type Column } from "../src/components/DataTable";
 import { minorToInput } from "../src/lib/format";
+import { isFormulaInjectionRisk, sanitizeExportCell } from "../src/lib/export";
 import { UNKNOWN_AMOUNT, readModelDisplay, readModelExport } from "../src/lib/readModel";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -144,5 +145,58 @@ describe("money that is not known yet is never exported as zero", () => {
     const source = read(file);
     expect(source, `${file} must guard exports`).toContain("readModelExport(");
     expect(source, `${file} must guard rendering`).toContain("readModelDisplay(");
+  });
+});
+
+/**
+ * M2: exported money must be a number a spreadsheet can add.
+ *
+ * Two rules had drifted apart. `buildCsv` deliberately let plain negatives
+ * through; `sanitizeExportCell` — the one used by the XLSX/CSV report exports —
+ * quoted anything starting with `-`, so every loss, negative margin and credit
+ * note left the app as text. A workbook of financial results that will not sum
+ * in exactly those rows is worse than no export.
+ */
+describe("exported money stays numeric and summable", () => {
+  it("treats a negative number as a number, not a formula", () => {
+    for (const amount of ["-1234.50", "-0.01", "-1", "1234.50", "0"]) {
+      expect(isFormulaInjectionRisk(amount), amount).toBe(false);
+      expect(sanitizeExportCell(amount), amount).toBe(amount);
+    }
+  });
+
+  it("still neutralizes every cell a spreadsheet would evaluate", () => {
+    for (const attack of ["=1+1", "+1", "@SUM(A1)", "-1+1", "-A1", "=cmd|'/c calc'!A0", "\t=1+1", "  =1+1"]) {
+      expect(isFormulaInjectionRisk(attack), attack).toBe(true);
+      expect(sanitizeExportCell(attack), attack).toBe(`'${attack}`);
+    }
+  });
+
+  it("applies one shared verdict to table exports and report exports", () => {
+    const columns: Column<{ amount: string }>[] = [
+      { key: "amount", header: "Amount", value: (row) => row.amount },
+    ];
+    for (const amount of ["-1234.50", "=1+1", "-A1", "0"]) {
+      const csvCell = buildCsv(columns, [{ amount }]).split("\r\n")[1]!;
+      const sanitized = String(sanitizeExportCell(amount));
+      expect(csvCell.startsWith("'"), amount).toBe(sanitized.startsWith("'"));
+    }
+  });
+
+  /**
+   * The report centre builds one row set for printing and for workbooks. Print
+   * wants a localized string; a workbook needs a number. Pin that the split
+   * exists and that exports take the numeric branch.
+   */
+  it("builds report rows numerically for workbooks and formatted for print", () => {
+    const source = read("features/reports/ReportsCenter.tsx");
+    expect(source).toContain("type RowMode");
+    expect(source).toMatch(/buildRows\(key, format === "pdf" \? "print" : "export"\)/);
+    // Money helpers must branch on the mode rather than always formatting.
+    expect(source).toMatch(/mode === "print"\s*\?\s*base\.format/);
+    expect(source).toMatch(/mode === "print"\s*$[\s\S]{0,80}fmt\.money/m);
+    // No row builder may format money unconditionally any more.
+    expect(source).not.toMatch(/\]:\s*fmt\.money\(/);
+    expect(source).not.toMatch(/const money = \(egp: number\) => base\.format\(egp\);/);
   });
 });

@@ -59,11 +59,18 @@ export interface ProjectCashValuationEgp {
   unallocatedCustomerCreditEgp: number;
 }
 
+/**
+ * Cash valuation is REQUIRED. It used to be optional, and the fallback valued
+ * certificate collections at each certificate's FX snapshot while the other
+ * cash components used the project rate — so the four components stopped
+ * summing to the headline total, which is the one thing the dashboard promises
+ * about them. Callers build it with `computeProjectCashValuation`.
+ */
 export function computeProjectFinancials(
   project: Project,
   contractStates: ContractState[],
   projectExpenses: Expense[],
-  cashValuation?: ProjectCashValuationEgp,
+  cashValuation: ProjectCashValuationEgp,
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
   const certifiedBase = sum(contractStates.map((c) => c.certifiedBaseMinor));
@@ -93,7 +100,6 @@ export function computeProjectFinancials(
   ));
   const expensesEgp = sum(projectExpenses.map((e) => toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro)));
   const revenueEgp = certificateEgp((state) => state.breakdown.baseMinor, true);
-  const certificateCollectionsEgp = certificateEgp((state) => state.paidMinor, true);
   const invoicedAmountEgp = certificateEgp((state) => state.breakdown.netPayableMinor, true);
   const outstandingEgp = certificateEgp((state) => state.unpaidMinor, true);
   const profitEgp = revenueEgp - expensesEgp;
@@ -122,12 +128,12 @@ export function computeProjectFinancials(
     revenueEgp,
     billableRevenueEgp: certificateEgp((state) => state.breakdown.baseMinor, false),
     invoicedAmountEgp,
-    collectedEgp: cashValuation?.certificateCollectionsEgp ?? certificateCollectionsEgp,
-    certificateCollectionsEgp: cashValuation?.certificateCollectionsEgp ?? certificateCollectionsEgp,
-    advanceReceivedEgp: cashValuation?.advanceReceivedEgp ?? toEgp(advanceReceived),
-    retentionReleasedEgp: cashValuation?.retentionReleasedEgp ?? toEgp(retentionReleased),
-    totalActualCashInEgp: cashValuation?.totalActualCashInEgp ?? toEgp(totalActualCashIn),
-    unallocatedCustomerCreditEgp: cashValuation?.unallocatedCustomerCreditEgp ?? toEgp(unallocatedCustomerCredit),
+    collectedEgp: cashValuation.certificateCollectionsEgp,
+    certificateCollectionsEgp: cashValuation.certificateCollectionsEgp,
+    advanceReceivedEgp: cashValuation.advanceReceivedEgp,
+    retentionReleasedEgp: cashValuation.retentionReleasedEgp,
+    totalActualCashInEgp: cashValuation.totalActualCashInEgp,
+    unallocatedCustomerCreditEgp: cashValuation.unallocatedCustomerCreditEgp,
     outstandingEgp,
     expensesEgp,
     profitEgp,

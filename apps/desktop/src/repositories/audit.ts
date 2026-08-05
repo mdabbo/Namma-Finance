@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { execute, select } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 
 export interface AuditRecord {
   id: number;
@@ -158,17 +159,24 @@ export function useEntityHistory(record: AuditRecord | null) {
   });
 }
 
-/** Convert the compatibility marker left when restoring a pre-audit backup. */
+/**
+ * Convert the compatibility marker left when restoring a pre-audit backup.
+ *
+ * The audit row and the marker's removal are the same fact: a marker cleared
+ * without its audit row loses the evidence that a restore happened, and an
+ * audit row written without clearing the marker re-records the restore on every
+ * launch. Rust owns the boundary — see `finalize_pending_restore_audit_atomic`.
+ */
 export async function finalizePendingRestoreAudit(): Promise<void> {
-  const pending = await select<{ value: string }>("SELECT value FROM settings WHERE key='pending_restore_audit'");
-  if (!pending.length) return;
-  await execute("BEGIN IMMEDIATE");
-  try {
-    await execute("INSERT INTO audit_logs(user_id,device_id,action,entity_type,after_json,reason,source) VALUES((SELECT value FROM settings WHERE key='sync_email'),(SELECT value FROM settings WHERE key='device_id'),'RESTORE','backup',json_object('path','[REDACTED]'),'Pre-audit database restored by user','RESTORE')");
-    await execute("DELETE FROM settings WHERE key='pending_restore_audit'");
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  await atomicCommand<boolean>(
+    "finalize_pending_restore_audit_atomic",
+    {},
+    async () => {
+      const pending = await select<{ value: string }>("SELECT value FROM settings WHERE key='pending_restore_audit'");
+      if (!pending.length) return false;
+      await execute("INSERT INTO audit_logs(user_id,device_id,action,entity_type,after_json,reason,source) VALUES((SELECT value FROM settings WHERE key='sync_email'),(SELECT value FROM settings WHERE key='device_id'),'RESTORE','backup',json_object('path','[REDACTED]'),'Pre-audit database restored by user','RESTORE')");
+      await execute("DELETE FROM settings WHERE key='pending_restore_audit'");
+      return true;
+    },
+  );
 }

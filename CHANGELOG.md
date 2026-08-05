@@ -42,7 +42,11 @@ deleted and recreated** — see below.
   covering the full client-to-payment cycle, expenses, team, time, navigation,
   language and theme switching, onboarding, saved views and CSV export,
   project-workspace routing, and eight visual regression states. The suite runs
-  in GitHub Actions on every push and pull request.
+  in GitHub Actions on every push and pull request. It drives the real UI
+  against the real schema and migrations, but not the Rust transaction layer:
+  no Tauri runtime exists in a browser, so multi-statement writes take a test
+  double there. The shipped commands are covered by `cargo test`, and
+  `test/atomic-dispatch.test.ts` pins that production dispatches to them.
 
 ### Changed
 
@@ -57,6 +61,109 @@ deleted and recreated** — see below.
 
 #### Post-redesign audit remediation
 
+- **Rust owns every transaction boundary.** The WebView can no longer open one.
+  `tauri-plugin-sql` releases the pooled connection between statements, so a
+  `BEGIN IMMEDIATE` issued from JavaScript did not open a transaction the caller
+  owned — it stranded one on a shared connection, where the next statement from
+  any source (a list refetch, the auto-sync tick, a Rust command's own
+  transaction) joined it and committed or rolled back with it. Serializing the
+  runtime pool to a single connection made that certain rather than merely
+  likely. Number reservation, restore-audit finalisation, safety-backup
+  registration and document creation are now Rust commands
+  (`reserve_next_number_atomic`, `finalize_pending_restore_audit_atomic`,
+  `finalize_pending_backup_metadata_atomic`, `create_document_atomic`), and
+  `assertRestrictedSql` rejects transaction control outright, in the end-to-end
+  bridge exactly as in production. One caller remains and is named in
+  `test/security.test.ts`: sync conflict resolution reads inside its own
+  boundary to decide later writes and needs a Rust port of its own.
+- **One dispatch seam for multi-statement writes.** Every such write used to
+  carry its own `if (Tauri) invoke(x_atomic) else <transaction>` branch, and
+  nothing in the suite ever took the first branch — neither vitest nor the
+  Playwright bridge defines a Tauri runtime, so the green suite was measuring
+  the fallback while the shipped Rust path went unexercised and the two halves
+  were free to drift. They now route through `lib/atomic.ts`, the second half is
+  labelled a test double rather than a fallback, and `atomic-dispatch.test.ts`
+  asserts that with a runtime present every caller reaches its Rust command with
+  the arguments that command expects.
+- **The project workspace no longer reports money it has not measured.** The
+  list query and the financial read model resolve independently, so on every
+  open of a project there was a window in which contract value, certified
+  revenue, collections, outstanding, cost and profit all printed 0.00 — a
+  definite financial claim standing in for "not known yet", on the screen a
+  project manager looks at first. They now render the not-known placeholder, as
+  do the certified and collection ratios and the client-detail KPIs; a measured
+  zero still prints as zero. Tone and percentage hints follow the same rule,
+  because a colour asserted over an absent figure is the same claim in another
+  form.
+- **Exported money is a number again.** Report exports wrote localized strings
+  into every money cell, so a workbook would not sum, chart or sort them — and
+  `sanitizeExportCell` additionally quoted anything beginning with `-`, forcing
+  every loss, negative margin and credit note to text in precisely the rows a
+  reader most wants to total. Report rows are now built numerically for
+  workbooks and formatted only for printing, in the reporting currency named by
+  the header and in each amount's own source currency. The formula-injection
+  rule is one shared implementation between table exports and report exports
+  rather than two that had already diverged, and it exempts plain numbers while
+  still neutralizing `=`, `+`, `@` and a leading `-` followed by anything else.
+- **A certificate with nothing left to collect now settles.** Settlement
+  required a positive net payable, so any certificate whose payable was fully
+  consumed by advance recovery, retention and withholding stayed APPROVED
+  permanently — reported as an open claim for money nobody would ever pay, and
+  re-examined by every reconciliation pass. On a contract billed fully in
+  advance that is every certificate on the job. The rule now uses the certified
+  base to separate the two things a zero payable can mean: a certificate that
+  claims nothing is still left alone, while certified work that has been fully
+  offset is closed. Drafts and submitted certificates are still never promoted.
+  The shared fixture asserted by both engines carries the certified base and
+  five new cases covering it.
+- **Voiding a payment twice is refused.** The guard checked only `voided_at`, so
+  a payment already retired from the ledger could be voided again, stamping a
+  fresh void date and reason over a record that left the books earlier.
+- **CI builds the desktop application, not just the web bundle.** The job named
+  "Desktop production build" ran `vite build` only: it never invoked cargo, so
+  it could stay green through a Rust compile error while the release evidence
+  beside it recorded a commit SHA for an artifact that had never been built. It
+  now runs `tauri build`, which compiles the Rust binary and produces the NSIS
+  installer, and uploads the installers themselves rather than only the log
+  saying a build happened.
+- **Assignment cancellation is written under one guard.** The frozen earned
+  figure decides an assignment's committed cost and what is still owed, and
+  migration 0004 makes it final once written — so a wrong figure is permanent.
+  `cancel_assignment_atomic` now owns the write's transaction, re-reads the
+  assignment inside it, and refuses a figure outside `0..=agreed fee`: released
+  value is a subset of an allocation of the agreed fee, so anything outside that
+  range is provably not a real figure. The derivation itself deliberately stays
+  in `computeTeamPayout`; moving it into Rust means porting largest-remainder
+  allocation, milestone parsing and the exact certificate selection, and the two
+  layers currently disagree about voided and archived certificates — a naive
+  port would freeze a figure that contradicts every other screen and then make
+  it immutable. That port belongs with its own shared fixture.
+- **The RTL gate is geometry, not pixels.** Whether the Arabic layout actually
+  mirrors was left to a full-page screenshot whose tolerance had to be raised to
+  8% to absorb font metrics differing between machines — a budget large enough
+  to hide a mirrored-wrong panel. A new assertion checks portable geometry
+  instead: the sidebar moves to the right half and still reaches the edge at the
+  same width, and the main region fills exactly what it vacated. The screenshot
+  stays as a colour and gross-layout supplement.
+- **The two financial engines round negatives the same way.** Rust rounded the
+  signed value with truncating integer division while TypeScript strips the sign
+  first, so a −1400 VAT line came out −1399 in Rust — the two were not the same
+  function. Nothing reaches it with a negative amount today (SQLite CHECKs keep a
+  certificate's base at or above zero), which is why it went unnoticed; the
+  shared fixture now carries ten rounding cases asserted by both engines.
+- **Dashboard cash components always sum to the total.** The cash valuation was
+  an optional argument, and without it certificate collections were valued at
+  each certificate's FX snapshot while every other component used the project
+  rate — so the four parts stopped adding up to the headline they are shown
+  beside. The mobile workspace took that path in production. The valuation is
+  now required and built by one shared `computeProjectCashValuation` in core:
+  every receipt is valued once, and the unallocated remainder is derived from
+  the receipt rather than converted separately, so rounding cannot split them.
+- **Linting runs in CI.** `pnpm lint` gates the unit job. The ruleset is narrow
+  on purpose — unused symbols, fallthrough, constant conditions, hook rules —
+  because a wide one on audited financial code trains everyone to ignore
+  warnings. It immediately found dead imports and, in this branch's own test
+  suite, a regex whose escaping made a negative assertion vacuous.
 - **Rust owns payment-driven certificate status.** The payment commands no
   longer accept a status derived by the frontend; create, update and void
   recalculate the affected certificates from stored evidence inside the same

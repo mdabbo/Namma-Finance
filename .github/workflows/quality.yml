@@ -29,6 +29,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm version:check
+      - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:coverage
@@ -117,7 +118,7 @@ jobs:
   build:
     name: Desktop production build
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     # The shippable artifact is only built once the gates that judge it pass.
     needs: [unit, rust, e2e]
     steps:
@@ -129,11 +130,38 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
 
       - run: pnpm install --frozen-lockfile
-      - name: Build desktop frontend
+
+      # `vite build` alone produced a web bundle, not the thing users install.
+      # A job named "Desktop production build" that never invoked cargo could
+      # stay green through a Rust compile error, and the release evidence
+      # recorded below would then attest to an artifact that was never built.
+      # `tauri build` compiles the Rust binary and produces the installers.
+      - name: Build desktop application
         shell: bash
-        run: pnpm --filter @mep/desktop build 2>&1 | tee build.log
+        run: pnpm --filter @mep/desktop exec tauri build 2>&1 | tee build.log
+
+      # The installers are the actual shippable output, so they are what gets
+      # kept — not just the log that says a build happened.
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist-installers
+          find apps/desktop/src-tauri/target/release/bundle -type f \
+            \( -name '*.msi' -o -name '*.exe' \) -exec cp {} dist-installers/ \;
+          ls -l dist-installers
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-installers
+          path: dist-installers
+          if-no-files-found: error
+          retention-days: 30
 
       # Release evidence is worthless unless it names the exact commit it was
       # measured on, so the SHA and the run URL are recorded beside the log.

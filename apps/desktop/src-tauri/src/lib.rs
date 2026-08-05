@@ -526,6 +526,18 @@ fn validate_payment_input(
     Ok(())
 }
 
+/// Rounded `amount x numerator / denominator`, half away from zero.
+///
+/// The sign is stripped before rounding and reapplied afterwards, which is what
+/// `mulDivRound` in @mep/core does. Rounding the SIGNED value instead is not the
+/// same operation: Rust's integer division truncates toward zero, so
+/// `(p*2 + d) / (d*2)` rounds negatives the wrong way and lands one minor unit
+/// high — −1400 became −1399 for a 14% VAT line. Nothing reaches this with a
+/// negative amount today (a certificate's base cannot go below zero: SQLite
+/// CHECKs keep `discount_minor <= gross_minor` and every rate in `0..=10000`),
+/// so the divergence was latent — but the two engines are meant to be the same
+/// function, and a future credit note or reversal would have split them
+/// silently.
 fn mul_div_round_i64(amount: i64, numerator: i64, denominator: i64) -> Result<i64, String> {
     if denominator <= 0 {
         return Err("invalid financial calculation denominator".into());
@@ -533,7 +545,11 @@ fn mul_div_round_i64(amount: i64, numerator: i64, denominator: i64) -> Result<i6
     let product = i128::from(amount)
         .checked_mul(i128::from(numerator))
         .ok_or_else(|| "financial calculation overflow".to_string())?;
-    let doubled = product
+    let negative = product < 0;
+    let magnitude = product
+        .checked_abs()
+        .ok_or("financial calculation overflow")?;
+    let doubled = magnitude
         .checked_mul(2)
         .and_then(|value| value.checked_add(i128::from(denominator)))
         .ok_or_else(|| "financial calculation overflow".to_string())?;
@@ -541,7 +557,8 @@ fn mul_div_round_i64(amount: i64, numerator: i64, denominator: i64) -> Result<i6
         .checked_mul(2)
         .ok_or_else(|| "financial calculation overflow".to_string())?;
     let rounded = doubled / divisor;
-    i64::try_from(rounded).map_err(|_| "financial calculation overflow".to_string())
+    let signed = if negative { -rounded } else { rounded };
+    i64::try_from(signed).map_err(|_| "financial calculation overflow".to_string())
 }
 
 /// One certificate's derived payable position, computed from source records
@@ -552,6 +569,9 @@ struct CertificatePayable {
     id: i64,
     status: String,
     net_payable_minor: i64,
+    /// Gross less discount: what this certificate actually claims. Decides
+    /// whether a zero net payable means "nothing certified" or "fully offset".
+    certified_base_minor: i64,
 }
 
 /// Net payable for one certificate, and the advance it recovers.
@@ -564,6 +584,10 @@ struct CertificatePayable {
 ///   advance     = PROPORTIONAL: base x advance / contractValue, else the
 ///                 manual figure, both capped at the un-recovered remainder
 ///   net payable = base + VAT - retention - advance - withholding
+///
+/// Returns (net payable, advance recovered, certified base). The base is
+/// returned rather than recomputed by callers so the settlement rule and the
+/// payable cannot disagree about what was certified.
 ///
 /// Kept free of I/O so `fixtures/certificate-financials.json` can assert it
 /// against the TypeScript engine.
@@ -579,7 +603,7 @@ fn certificate_net_payable(
     manual_recovery_minor: Option<i64>,
     contract_value_minor: i64,
     recovered_before_minor: i64,
-) -> Result<(i64, i64), String> {
+) -> Result<(i64, i64, i64), String> {
     let base = gross_minor
         .checked_sub(discount_minor)
         .ok_or_else(|| "invalid certificate base".to_string())?;
@@ -601,7 +625,7 @@ fn certificate_net_payable(
         .and_then(|v| v.checked_sub(recovery))
         .and_then(|v| v.checked_sub(withholding))
         .ok_or_else(|| "certificate payable overflow".to_string())?;
-    Ok((net_payable, recovery))
+    Ok((net_payable, recovery, base))
 }
 
 /// Load every live certificate of a contract with its net payable, in the
@@ -643,11 +667,12 @@ async fn load_contract_payables(
                 id,
                 status,
                 net_payable_minor: 0,
+                certified_base_minor: 0,
             });
             continue;
         }
         let method: String = row.try_get("advance_method").map_err(|e| e.to_string())?;
-        let (net_payable_minor, recovery) = certificate_net_payable(
+        let (net_payable_minor, recovery, certified_base_minor) = certificate_net_payable(
             row.try_get("gross_minor").map_err(|e| e.to_string())?,
             row.try_get("discount_minor").map_err(|e| e.to_string())?,
             row.try_get("vat_bp").map_err(|e| e.to_string())?,
@@ -668,6 +693,7 @@ async fn load_contract_payables(
             id,
             status,
             net_payable_minor,
+            certified_base_minor,
         });
     }
     Ok(payables)
@@ -700,18 +726,43 @@ fn derive_certificate_status(
     current: &str,
     net_payable_minor: i64,
     allocated_minor: i64,
+    certified_base_minor: i64,
 ) -> String {
     if current == "DRAFT" || current == "SUBMITTED" {
         return current.to_string();
     }
-    let fully_collected = net_payable_minor > 0 && allocated_minor >= net_payable_minor;
-    if fully_collected {
+    if is_fully_collected(net_payable_minor, allocated_minor, certified_base_minor) {
         return "PAID".to_string();
     }
     if current == "PAID" {
         return "APPROVED".to_string();
     }
     current.to_string()
+}
+
+/// Whether there is nothing left for the client to pay on this certificate.
+///
+/// The obvious half is `allocated >= net_payable`. The subtle half is what a
+/// net payable of zero means, and it depends on whether anything was certified:
+///
+///  - Base zero. Nothing has been claimed — an empty or placeholder
+///    certificate. There is nothing to settle, so it is left where it is.
+///  - Base positive, net payable zero. Real certified work whose payable has
+///    been fully consumed by advance recovery, retention and withholding. The
+///    client owes nothing and never will, so the claim is closed. Ordinary on a
+///    contract with a large or full advance, where every certificate can net to
+///    zero; requiring `net_payable > 0` left those permanently APPROVED.
+///
+/// A negative net payable is treated the same as zero: nothing is collectible.
+fn is_fully_collected(
+    net_payable_minor: i64,
+    allocated_minor: i64,
+    certified_base_minor: i64,
+) -> bool {
+    if net_payable_minor > 0 {
+        return allocated_minor >= net_payable_minor;
+    }
+    certified_base_minor > 0
 }
 
 /// Recalculate collection status for the given certificates from payment
@@ -773,8 +824,12 @@ async fn reconcile_certificates(
                 }
             }
             let allocated = valid_allocated_minor(tx, payable.id).await?;
-            let desired =
-                derive_certificate_status(&payable.status, payable.net_payable_minor, allocated);
+            let desired = derive_certificate_status(
+                &payable.status,
+                payable.net_payable_minor,
+                allocated,
+                payable.certified_base_minor,
+            );
             if desired == payable.status {
                 continue;
             }
@@ -1020,7 +1075,11 @@ async fn void_payment_atomic(
     // longer count as evidence, and the certificates it settled must reopen.
     let touched = allocated_certificate_ids(&mut tx, payment_id).await?;
     let result = sqlx::query(
-        "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=? WHERE id=? AND voided_at IS NULL",
+        // `deleted_at IS NULL` as well as `voided_at IS NULL`: a payment that
+        // is already out of the ledger is not evidence, so voiding it would
+        // stamp a void reason and a fresh void date onto a record that was
+        // retired earlier — rewriting when the money left the books.
+        "UPDATE payments SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=? WHERE id=? AND voided_at IS NULL AND deleted_at IS NULL",
     )
     .bind(&void_reason)
     .bind(payment_id)
@@ -1118,6 +1177,84 @@ async fn create_person_payment_atomic(
         .execute(&mut *tx).await.map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(payment_id)
+}
+
+/// Cancel an assignment and freeze its earned value as one operation.
+///
+/// The frozen figure decides the assignment's committed cost AND what is still
+/// owed to the person, and migration 0004 makes it final once written — so the
+/// write must not be separable from the check that it is allowed.
+///
+/// KNOWN LIMIT, deliberate: unlike payment-driven certificate status, the
+/// figure itself is still DERIVED BY THE CALLER (`computeTeamPayout` in
+/// @mep/core) rather than recomputed here. Moving that derivation into Rust
+/// means porting largest-remainder allocation, milestone parsing and the
+/// contract/certificate selection exactly; `load_contract_payables` here
+/// excludes voided and archived certificates while `computeContractState` in
+/// TypeScript excludes only soft-deleted ones, so a naive port would freeze a
+/// figure that disagrees with every other screen — and then make it immutable.
+/// That port belongs with its own shared fixture, like
+/// `fixtures/certificate-financials.json` does for certificate status.
+///
+/// What Rust does enforce meanwhile: the transaction boundary, that the
+/// assignment is still cancellable when the write lands, and that the figure is
+/// within the only bound derivable without the full payout schedule — released
+/// value is a subset of an allocation of the agreed fee, so it can never be
+/// negative or exceed it. A caller cannot freeze arbitrary nonsense.
+#[tauri::command]
+async fn cancel_assignment_atomic(
+    db_instances: State<'_, DbInstances>,
+    assignment_id: i64,
+    reason: String,
+    earned_minor: i64,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    cancel_assignment_transaction(&pool, assignment_id, &reason, earned_minor).await
+}
+
+async fn cancel_assignment_transaction(
+    pool: &sqlx::SqlitePool,
+    assignment_id: i64,
+    reason: &str,
+    earned_minor: i64,
+) -> Result<(), String> {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() {
+        return Err("CANCELLATION_REASON_REQUIRED".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    let row =
+        sqlx::query("SELECT agreed_minor, lifecycle_status FROM project_assignments WHERE id=?")
+            .bind(assignment_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
+    let agreed_minor: i64 = row.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let lifecycle: String = row.try_get("lifecycle_status").map_err(|e| e.to_string())?;
+    if lifecycle == "CANCELLED" {
+        return Err("ASSIGNMENT_ALREADY_CANCELLED".into());
+    }
+    if earned_minor < 0 || earned_minor > agreed_minor {
+        return Err("FROZEN_EARNED_OUT_OF_RANGE".into());
+    }
+
+    let result = sqlx::query(
+        "UPDATE project_assignments
+         SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),
+             cancellation_reason=?, earned_minor_at_cancellation=?
+         WHERE id=? AND lifecycle_status<>'CANCELLED'",
+    )
+    .bind(trimmed)
+    .bind(earned_minor)
+    .bind(assignment_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if result.rows_affected() != 1 {
+        return Err("ASSIGNMENT_ALREADY_CANCELLED".into());
+    }
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1694,6 +1831,303 @@ async fn import_rows_atomic(
     }
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(rows.len() as i64)
+}
+
+/// The four write batches that used to open their transaction from the
+/// WebView.
+///
+/// `tauri-plugin-sql` executes each statement against the pool and releases the
+/// connection between calls, so a WebView `BEGIN IMMEDIATE` left an open
+/// transaction sitting on a pooled connection. With the runtime pool serialized
+/// to one connection that is worse, not better: the next statement from ANY
+/// caller — a list refetch, the auto-sync tick, a Rust command's own
+/// `begin_immediate` — lands inside that stranded transaction and commits or
+/// rolls back with it. Owning the boundary in Rust is the only way the
+/// connection cannot be shared mid-transaction.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentCommandInput {
+    project_id: i64,
+    category: String,
+    title: String,
+    document_uuid: String,
+    original_filename: String,
+    extension: Option<String>,
+    mime_type: String,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+    storage_provider: String,
+    cloud_storage_key: Option<String>,
+    version_number: i64,
+    uploaded_at: Option<String>,
+    uploaded_by: Option<String>,
+    local_cache_path: Option<String>,
+    is_available_offline: bool,
+    /// Legacy local references carry the original on-disk path; managed
+    /// imports leave it null and are addressed by their cache row.
+    path: Option<String>,
+}
+
+const NUMBERING_SEQUENCE_TYPES: &[(&str, &str, &str, usize)] = &[
+    ("PROJECT", "projects", "code", 3),
+    ("CONTRACT", "contracts", "number", 4),
+    ("CERTIFICATE", "payment_certificates", "number", 4),
+    ("PAYMENT", "payments", "number", 4),
+    ("EXPENSE", "expenses", "number", 4),
+];
+
+/// Reserve the next number in a sequence as one all-or-nothing operation.
+///
+/// The reservation reads the highest number already issued and bumps the
+/// counter past it, so the read and the write must not be separable: two
+/// concurrent reservations that both read the same maximum would hand out the
+/// same number. The scan is folded into the UPDATE rather than round-tripped
+/// through the caller, so the whole reservation is a single statement pair
+/// inside one transaction.
+#[tauri::command]
+async fn reserve_next_number_atomic(
+    db_instances: State<'_, DbInstances>,
+    sequence_type: String,
+    prefix: String,
+    year: i64,
+) -> Result<String, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    reserve_next_number_transaction(&pool, &sequence_type, &prefix, year).await
+}
+
+async fn reserve_next_number_transaction(
+    pool: &sqlx::SqlitePool,
+    sequence_type: &str,
+    prefix: &str,
+    year: i64,
+) -> Result<String, String> {
+    let clean = prefix.trim().to_uppercase();
+    if clean.is_empty()
+        || clean.len() > 12
+        || !clean
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    {
+        return Err("INVALID_NUMBER_PREFIX".into());
+    }
+    if !(2000..=9999).contains(&year) {
+        return Err("INVALID_NUMBER_YEAR".into());
+    }
+    let (_, table, column, width) = NUMBERING_SEQUENCE_TYPES
+        .iter()
+        .find(|(name, _, _, _)| *name == sequence_type)
+        .ok_or_else(|| "INVALID_SEQUENCE_TYPE".to_string())?;
+
+    let mut tx = begin_immediate(pool).await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO numbering_sequences(sequence_type,year,prefix,last_number) VALUES(?,?,?,0)",
+    )
+    .bind(sequence_type)
+    .bind(year)
+    .bind(&clean)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let stem = format!("{clean}-{year}-");
+    // Table and column are chosen from the constant table above, never from the
+    // caller, so this format! can only ever produce one of five fixed queries.
+    let bump = format!(
+        "UPDATE numbering_sequences
+         SET last_number = MAX(
+               last_number,
+               COALESCE((SELECT MAX(CAST(substr({column},length(?)+1) AS INTEGER))
+                         FROM {table} WHERE {column} LIKE ?), 0)
+             ) + 1
+         WHERE sequence_type=? AND year=? AND prefix=?"
+    );
+    sqlx::query(&bump)
+        .bind(&stem)
+        .bind(format!("{stem}%"))
+        .bind(sequence_type)
+        .bind(year)
+        .bind(&clean)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let reserved: i64 = sqlx::query_scalar(
+        "SELECT last_number FROM numbering_sequences WHERE sequence_type=? AND year=? AND prefix=?",
+    )
+    .bind(sequence_type)
+    .bind(year)
+    .bind(&clean)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "NUMBER_RESERVATION_FAILED".to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    Ok(format!("{clean}-{year}-{reserved:0width$}", width = *width))
+}
+
+/// Convert the compatibility marker left when a pre-audit backup was restored.
+///
+/// The audit row and the marker's removal are the same fact: a marker cleared
+/// without its audit row loses the evidence that a restore happened, and an
+/// audit row written without clearing the marker re-records the restore on
+/// every launch.
+#[tauri::command]
+async fn finalize_pending_restore_audit_atomic(
+    db_instances: State<'_, DbInstances>,
+) -> Result<bool, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    finalize_pending_restore_audit_transaction(&pool).await
+}
+
+async fn finalize_pending_restore_audit_transaction(
+    pool: &sqlx::SqlitePool,
+) -> Result<bool, String> {
+    let mut tx = begin_immediate(pool).await?;
+    let pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM settings WHERE key='pending_restore_audit'")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    if pending == 0 {
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT INTO audit_logs(user_id,device_id,action,entity_type,after_json,reason,source)
+         VALUES((SELECT value FROM settings WHERE key='sync_email'),
+                (SELECT value FROM settings WHERE key='device_id'),
+                'RESTORE','backup',json_object('path','[REDACTED]'),
+                'Pre-audit database restored by user','RESTORE')",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM settings WHERE key='pending_restore_audit'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Register the safety copy taken before a restore, and clear its marker.
+///
+/// Same pairing as the restore audit: the backups_log row is the record that
+/// the safety copy exists, so leaving the marker behind would duplicate it and
+/// clearing the marker alone would lose it.
+#[tauri::command]
+async fn finalize_pending_backup_metadata_atomic(
+    db_instances: State<'_, DbInstances>,
+) -> Result<bool, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    finalize_pending_backup_metadata_transaction(&pool).await
+}
+
+async fn finalize_pending_backup_metadata_transaction(
+    pool: &sqlx::SqlitePool,
+) -> Result<bool, String> {
+    let mut tx = begin_immediate(pool).await?;
+    let raw: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key='pending_restore_safety'")
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    let Some(raw) = raw else {
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return Ok(false);
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("PENDING_BACKUP_METADATA_INVALID: {e}"))?;
+    sqlx::query(
+        "INSERT INTO backups_log(path,kind,filename,database_version,application_version,sha256_checksum,backup_type,source_device)
+         VALUES(?,'AUTO',?,?,?,?,'SAFETY',?)",
+    )
+    .bind(json_text(&value, "path").ok_or_else(|| "PENDING_BACKUP_METADATA_INVALID".to_string())?)
+    .bind(json_text(&value, "filename"))
+    .bind(json_i64(&value, "databaseVersion"))
+    .bind(json_text(&value, "applicationVersion"))
+    .bind(json_text(&value, "sha256Checksum"))
+    .bind(json_text(&value, "sourceDevice"))
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM settings WHERE key='pending_restore_safety'")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Insert a document and its device-cache row as one all-or-nothing operation.
+///
+/// A documents row without its cache row points at a file the app cannot find;
+/// a cache row without its document is an orphaned file on disk. The duplicate
+/// check runs inside the same transaction so two imports of identical content
+/// cannot both pass it.
+#[tauri::command]
+async fn create_document_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: DocumentCommandInput,
+) -> Result<i64, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    create_document_transaction(&pool, input).await
+}
+
+async fn create_document_transaction(
+    pool: &sqlx::SqlitePool,
+    input: DocumentCommandInput,
+) -> Result<i64, String> {
+    if input.title.trim().is_empty() || input.document_uuid.trim().is_empty() {
+        return Err("invalid document metadata".into());
+    }
+    if input.version_number <= 0 {
+        return Err("invalid document version".into());
+    }
+    if input.size_bytes.is_some_and(|size| size < 0) {
+        return Err("invalid document size".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    if let Some(sha256) = input.sha256.as_deref() {
+        let duplicate: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM documents WHERE project_id=? AND sha256=? AND archived_at IS NULL",
+        )
+        .bind(input.project_id)
+        .bind(sha256)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if duplicate > 0 {
+            return Err("DUPLICATE_DOCUMENT_CONTENT".into());
+        }
+    }
+    let result = sqlx::query(
+        "INSERT INTO documents(project_id,category,title,document_uuid,original_filename,extension,mime_type,size_bytes,sha256,
+           storage_provider,cloud_storage_key,version_number,uploaded_at,uploaded_by,path)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(input.project_id).bind(&input.category).bind(&input.title).bind(&input.document_uuid)
+    .bind(&input.original_filename).bind(&input.extension).bind(&input.mime_type)
+    .bind(input.size_bytes).bind(&input.sha256).bind(&input.storage_provider)
+    .bind(&input.cloud_storage_key).bind(input.version_number)
+    .bind(&input.uploaded_at).bind(&input.uploaded_by).bind(&input.path)
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    let document_id = result.last_insert_rowid();
+    if let Some(path) = input.local_cache_path.as_deref() {
+        sqlx::query(
+            "INSERT INTO document_cache(document_id,local_cache_path,is_available_offline,verified_at)
+             VALUES(?,?,?,datetime('now'))",
+        )
+        .bind(document_id)
+        .bind(path)
+        .bind(i64::from(input.is_available_offline))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(document_id)
 }
 
 fn chrono_year_utc() -> i32 {
@@ -2669,7 +3103,7 @@ mod financial_transaction_tests {
             } else {
                 Some(case["manualRecoveryMinor"].as_i64().unwrap())
             };
-            let (net, recovery) = certificate_net_payable(
+            let (net, recovery, _base) = certificate_net_payable(
                 case["grossMinor"].as_i64().unwrap(),
                 case["discountMinor"].as_i64().unwrap(),
                 case["vatBp"].as_i64().unwrap(),
@@ -2694,14 +3128,38 @@ mod financial_transaction_tests {
             );
         }
 
+        // The rounding rule underneath every figure above. Rust rounded the
+        // signed value and truncated toward zero, so negatives landed one minor
+        // unit away from what TypeScript produced; these cases pin the two
+        // engines to the same function.
+        let rounding_cases = fixtures["rounding"]["cases"]
+            .as_array()
+            .expect("rounding array");
+        assert!(rounding_cases.len() >= 10, "rounding fixtures too thin");
+        for case in rounding_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let actual = mul_div_round_i64(
+                case["amount"].as_i64().unwrap(),
+                case["numerator"].as_i64().unwrap(),
+                case["denominator"].as_i64().unwrap(),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                actual,
+                case["expected"].as_i64().unwrap(),
+                "rounding mismatch: {name}"
+            );
+        }
+
         let status_cases = fixtures["status"].as_array().expect("status array");
-        assert!(status_cases.len() >= 14, "status fixtures too thin");
+        assert!(status_cases.len() >= 19, "status fixtures too thin");
         for case in status_cases {
             let name = case["name"].as_str().unwrap_or("unnamed");
             let derived = derive_certificate_status(
                 case["current"].as_str().unwrap(),
                 case["netPayableMinor"].as_i64().unwrap(),
                 case["allocatedMinor"].as_i64().unwrap(),
+                case["baseMinor"].as_i64().unwrap(),
             );
             assert_eq!(
                 derived,
@@ -3539,6 +3997,394 @@ mod financial_transaction_tests {
         assert_eq!(result.unwrap_err(), "DOCUMENT_CHECKSUM_MISMATCH");
         assert!(!destination.exists());
     }
+
+    /// The four write batches moved out of the WebView.
+    ///
+    /// These used to open their transaction from JavaScript, which does not
+    /// work: `tauri-plugin-sql` releases the pooled connection between
+    /// statements, so the boundary was stranded on a shared connection instead
+    /// of belonging to the caller. They live here now, and so does their
+    /// coverage — the browser suite cannot execute any of this.
+    async fn migrated_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0001_baseline.sql"),
+            include_str!("../migrations/0002_seed_reference_data.sql"),
+            include_str!("../migrations/0003_assignment_lifecycle.sql"),
+            include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
+            include_str!("../migrations/0005_audit_version_baseline.sql"),
+        ] {
+            sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    /// A project with one assignment, for the cancellation guard.
+    async fn assignment_fixture(pool: &sqlx::SqlitePool, agreed_minor: i64) -> i64 {
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Cancel Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+             VALUES('PRJ-2026-900','Cancel',1,'EGP',1000000);
+             INSERT INTO people(type,name,currency) VALUES('FREELANCER','Someone','EGP');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO project_assignments(person_id,project_id,agreed_minor,currency,fx_rate_micro)
+             VALUES(1,1,?,'EGP',1000000)",
+        )
+        .bind(agreed_minor)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    async fn assignment_row(pool: &sqlx::SqlitePool, id: i64) -> (String, Option<i64>) {
+        sqlx::query_as(
+            "SELECT lifecycle_status, earned_minor_at_cancellation FROM project_assignments WHERE id=?",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The frozen figure decides committed cost and what is owed, and migration
+    /// 0004 makes it final. Rust cannot re-derive it without porting the whole
+    /// payout schedule, but released value is a subset of an allocation of the
+    /// agreed fee — so anything outside `0..=agreed` is provably not a real
+    /// figure and must never be frozen.
+    #[test]
+    fn cancellation_refuses_a_frozen_figure_outside_the_agreed_fee() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let id = assignment_fixture(&pool, 40_000).await;
+
+            for bad in [-1_i64, 40_001, i64::MAX] {
+                let error = cancel_assignment_transaction(&pool, id, "Called off", bad)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error, "FROZEN_EARNED_OUT_OF_RANGE", "accepted {bad}");
+            }
+
+            // Every refusal left the assignment live and unfrozen.
+            let (lifecycle, frozen) = assignment_row(&pool, id).await;
+            assert_eq!(lifecycle, "ACTIVE");
+            assert_eq!(frozen, None);
+        });
+    }
+
+    #[test]
+    fn cancellation_accepts_the_bounds_and_is_refused_a_second_time() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let id = assignment_fixture(&pool, 40_000).await;
+
+            // Zero and the full fee are both legitimate: nothing released yet,
+            // or everything released.
+            cancel_assignment_transaction(&pool, id, "  Client withdrew  ", 40_000)
+                .await
+                .unwrap();
+            let (lifecycle, frozen) = assignment_row(&pool, id).await;
+            assert_eq!(lifecycle, "CANCELLED");
+            assert_eq!(frozen, Some(40_000));
+            let reason: String = sqlx::query_scalar(
+                "SELECT cancellation_reason FROM project_assignments WHERE id=?",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                reason, "Client withdrew",
+                "reason is trimmed before storing"
+            );
+
+            let again = cancel_assignment_transaction(&pool, id, "again", 0)
+                .await
+                .unwrap_err();
+            assert_eq!(again, "ASSIGNMENT_ALREADY_CANCELLED");
+            // The second attempt did not rewrite the evidence.
+            assert_eq!(assignment_row(&pool, id).await.1, Some(40_000));
+        });
+    }
+
+    #[test]
+    fn cancellation_requires_a_reason_and_an_existing_assignment() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let id = assignment_fixture(&pool, 40_000).await;
+
+            assert_eq!(
+                cancel_assignment_transaction(&pool, id, "   ", 0)
+                    .await
+                    .unwrap_err(),
+                "CANCELLATION_REASON_REQUIRED"
+            );
+            assert_eq!(
+                cancel_assignment_transaction(&pool, 9_999, "Called off", 0)
+                    .await
+                    .unwrap_err(),
+                "ASSIGNMENT_NOT_FOUND"
+            );
+            assert_eq!(assignment_row(&pool, id).await.0, "ACTIVE");
+        });
+    }
+
+    #[test]
+    fn number_reservation_never_hands_out_the_same_number_twice() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+
+            let first = reserve_next_number_transaction(&pool, "PAYMENT", "pay", 2026)
+                .await
+                .unwrap();
+            let second = reserve_next_number_transaction(&pool, "PAYMENT", "PAY", 2026)
+                .await
+                .unwrap();
+            assert_eq!(first, "PAY-2026-0001");
+            assert_eq!(second, "PAY-2026-0002");
+
+            // Projects use a three-digit width and their own counter.
+            let project = reserve_next_number_transaction(&pool, "PROJECT", "PRJ", 2026)
+                .await
+                .unwrap();
+            assert_eq!(project, "PRJ-2026-001");
+
+            // The scan must clear numbers already present in the business
+            // table, not just the counter — an imported record would otherwise
+            // collide with the next reservation.
+            sqlx::query("INSERT INTO clients(name) VALUES('N')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-2026-044','Imported',1,'EGP',1000000)",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let after_import = reserve_next_number_transaction(&pool, "PROJECT", "PRJ", 2026)
+                .await
+                .unwrap();
+            assert_eq!(after_import, "PRJ-2026-045");
+        });
+    }
+
+    #[test]
+    fn number_reservation_refuses_untrusted_sequence_and_prefix() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            for (sequence, prefix, year, expected) in [
+                (
+                    "PAYMENT",
+                    "pay; DROP TABLE payments",
+                    2026,
+                    "INVALID_NUMBER_PREFIX",
+                ),
+                ("PAYMENT", "", 2026, "INVALID_NUMBER_PREFIX"),
+                ("PAYMENT", "THIRTEENCHARS", 2026, "INVALID_NUMBER_PREFIX"),
+                ("payments", "PAY", 2026, "INVALID_SEQUENCE_TYPE"),
+                ("PAYMENT", "PAY", 1999, "INVALID_NUMBER_YEAR"),
+            ] {
+                let error = reserve_next_number_transaction(&pool, sequence, prefix, year)
+                    .await
+                    .unwrap_err();
+                assert_eq!(error, expected, "{sequence}/{prefix}/{year}");
+            }
+        });
+    }
+
+    #[test]
+    fn restore_audit_writes_its_evidence_and_clears_its_marker_together() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            assert!(
+                !finalize_pending_restore_audit_transaction(&pool)
+                    .await
+                    .unwrap(),
+                "no marker means nothing to finalize"
+            );
+
+            sqlx::query("INSERT INTO settings(key,value) VALUES('pending_restore_audit','1')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(finalize_pending_restore_audit_transaction(&pool)
+                .await
+                .unwrap());
+
+            let logged: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='RESTORE' AND entity_type='backup'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(logged, 1);
+
+            // Re-running must not record the restore a second time.
+            assert!(!finalize_pending_restore_audit_transaction(&pool)
+                .await
+                .unwrap());
+            let logged_again: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE action='RESTORE'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(logged_again, 1);
+        });
+    }
+
+    #[test]
+    fn safety_backup_metadata_is_registered_once_and_survives_a_bad_marker() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::query("INSERT INTO settings(key,value) VALUES('pending_restore_safety',?)")
+                .bind(
+                    r#"{"path":"C:/safety.db","filename":"safety.db","databaseVersion":27,
+                        "applicationVersion":"0.7.0","sha256Checksum":"abc","sourceDevice":"dev"}"#,
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            assert!(finalize_pending_backup_metadata_transaction(&pool)
+                .await
+                .unwrap());
+            let (count, backup_type): (i64, String) = sqlx::query_as(
+                "SELECT COUNT(*), MAX(backup_type) FROM backups_log WHERE path='C:/safety.db'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!((count, backup_type.as_str()), (1, "SAFETY"));
+            assert!(!finalize_pending_backup_metadata_transaction(&pool)
+                .await
+                .unwrap());
+
+            // A corrupt marker must fail loudly, leaving the marker in place to
+            // be inspected rather than silently dropping the safety copy.
+            sqlx::query("INSERT INTO settings(key,value) VALUES('pending_restore_safety','{')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(finalize_pending_backup_metadata_transaction(&pool)
+                .await
+                .unwrap_err()
+                .starts_with("PENDING_BACKUP_METADATA_INVALID"));
+            let marker: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM settings WHERE key='pending_restore_safety'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(marker, 1);
+        });
+    }
+
+    fn document_input(sha256: Option<&str>, cache: Option<&str>) -> DocumentCommandInput {
+        DocumentCommandInput {
+            project_id: 1,
+            category: "OTHER".into(),
+            title: "plan.pdf".into(),
+            document_uuid: uuid_like(),
+            original_filename: "plan.pdf".into(),
+            extension: Some("pdf".into()),
+            mime_type: "application/pdf".into(),
+            size_bytes: Some(10),
+            sha256: sha256.map(str::to_string),
+            storage_provider: "LOCAL_ONLY".into(),
+            cloud_storage_key: None,
+            version_number: 1,
+            uploaded_at: None,
+            uploaded_by: None,
+            local_cache_path: cache.map(str::to_string),
+            is_available_offline: true,
+            path: None,
+        }
+    }
+
+    fn uuid_like() -> String {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(1);
+        format!("doc-{}", NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    #[test]
+    fn document_and_its_cache_row_commit_or_roll_back_together() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::raw_sql(
+                "INSERT INTO clients(name) VALUES('Doc Co');
+                 INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-2026-001','Docs',1,'EGP',1000000);",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let id = create_document_transaction(
+                &pool,
+                document_input(Some(&"a".repeat(64)), Some("C:/a.pdf")),
+            )
+            .await
+            .unwrap();
+            let cached: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM document_cache WHERE document_id=?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(cached, 1);
+
+            // Identical content in the same project is refused, and the
+            // refusal leaves nothing behind.
+            let duplicate = create_document_transaction(
+                &pool,
+                document_input(Some(&"a".repeat(64)), Some("C:/b.pdf")),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(duplicate, "DUPLICATE_DOCUMENT_CONTENT");
+            let documents: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(documents, 1);
+
+            // A failure registering the cache row must take the document row
+            // with it, or the app points at a file it cannot find.
+            sqlx::raw_sql(
+                "CREATE TRIGGER fail_cache BEFORE INSERT ON document_cache
+                 BEGIN SELECT RAISE(ABORT,'injected'); END",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            assert!(create_document_transaction(
+                &pool,
+                document_input(Some(&"c".repeat(64)), Some("C:/c.pdf"))
+            )
+            .await
+            .is_err());
+            let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM documents")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(after, 1, "rolled back with its cache row");
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3610,12 +4456,17 @@ pub fn run() {
             reconcile_certificates_atomic,
             create_person_payment_atomic,
             delete_person_payment_atomic,
+            cancel_assignment_atomic,
             create_milestone_certificates_atomic,
             create_project_atomic,
             update_project_atomic,
             create_contract_atomic,
             update_contract_atomic,
             import_rows_atomic,
+            reserve_next_number_atomic,
+            finalize_pending_restore_audit_atomic,
+            finalize_pending_backup_metadata_atomic,
+            create_document_atomic,
             import_project_document,
             cache_project_document,
             document_file_exists,

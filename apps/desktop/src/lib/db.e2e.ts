@@ -10,6 +10,13 @@ import { assertRestrictedSql } from "./sqlGuard";
  * guard is shared with production rather than reimplemented, so a mutation the
  * app would refuse is refused here too.
  *
+ * One thing behaves differently on purpose: `runInTransaction` works here and
+ * throws in production. The WebView cannot own a transaction on a pooled
+ * connection, so the shipped app routes multi-statement writes to Rust; this
+ * bridge has one synchronous connection and one Playwright worker, so it can
+ * give the test doubles a real boundary. Nothing that runs through those
+ * doubles is evidence about the Rust commands.
+ *
  * This module is never reachable from a production build.
  */
 
@@ -73,4 +80,38 @@ export async function execute(sql: string, params: unknown[] = []): Promise<Exec
 
 export async function closeDb(): Promise<void> {
   // The bridge owns the database lifetime; tests reset it between specs.
+}
+
+async function transaction(action: "begin" | "commit" | "rollback"): Promise<void> {
+  const response = await fetch(`${ENDPOINT}/transaction`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) throw new Error("E2E_TRANSACTION_FAILED");
+}
+
+/**
+ * The transaction boundary the WebView is not allowed to open for itself.
+ *
+ * In the shipped app this throws (see db.ts) and multi-statement writes go
+ * through a Rust atomic command. The bridge asks its server for the boundary
+ * rather than issuing BEGIN as SQL, because `assertRestrictedSql` refuses
+ * transaction control here exactly as in production.
+ */
+export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  await transaction("begin");
+  try {
+    const result = await fn();
+    await transaction("commit");
+    return result;
+  } catch (error) {
+    await transaction("rollback");
+    throw error;
+  }
+}
+
+/** Test counterpart of the KNOWN-UNSAFE production remnant (syncConflicts). */
+export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
+  await transaction(step === "BEGIN IMMEDIATE" ? "begin" : step === "COMMIT" ? "commit" : "rollback");
 }

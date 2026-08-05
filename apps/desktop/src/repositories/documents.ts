@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DocumentCategory, DocumentInput, DocumentStorageProvider, ProjectDocument } from "@mep/core";
 import { documentSchema } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import { getSyncClient } from "../lib/sync/client";
 
 const STORAGE_BUCKET = "namaa-documents";
@@ -45,37 +46,62 @@ export async function listDocumentsByProject(projectId: number): Promise<Project
   return rows.map(mapDocument);
 }
 
+/**
+ * Insert a document and its device-cache row as one all-or-nothing operation.
+ *
+ * A documents row without its cache row points at a file the app cannot find; a
+ * cache row without its document is an orphaned file on disk. The duplicate
+ * check belongs inside the same boundary, so two imports of identical content
+ * cannot both pass it. Rust owns the boundary — see `create_document_atomic`.
+ */
 async function insertDocument(input: DocumentInput): Promise<number> {
   const parsed=documentSchema.parse(input);
+  return atomicCommand<number>(
+    "create_document_atomic",
+    { input: { ...parsed, path: null } },
+    () => insertDocumentWithinTransaction(parsed),
+  );
+}
+
+async function insertDocumentWithinTransaction(parsed: DocumentInput): Promise<number> {
   const duplicate=await selectOne<{id:number}>("SELECT id FROM documents WHERE project_id=$1 AND sha256=$2 AND archived_at IS NULL",[parsed.projectId,parsed.sha256]);
   if(duplicate)throw new Error("DUPLICATE_DOCUMENT_CONTENT");
-  await execute("BEGIN IMMEDIATE");
-  try{
-    const result=await execute(
-      `INSERT INTO documents(project_id,category,title,document_uuid,original_filename,extension,mime_type,size_bytes,sha256,
-         storage_provider,cloud_storage_key,version_number,uploaded_at,uploaded_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [parsed.projectId,parsed.category,parsed.title,parsed.documentUuid,parsed.originalFilename,parsed.extension??null,
-        parsed.mimeType,parsed.sizeBytes,parsed.sha256,parsed.storageProvider,parsed.cloudStorageKey??null,
-        parsed.versionNumber,parsed.uploadedAt??null,parsed.uploadedBy??null],
-    );
-    const id=result.lastInsertId??0;
-    if(parsed.localCachePath)await execute("INSERT INTO document_cache(document_id,local_cache_path,is_available_offline,verified_at) VALUES($1,$2,$3,datetime('now'))",[id,parsed.localCachePath,parsed.isAvailableOffline?1:0]);
-    await execute("COMMIT");
-    return id;
-  }catch(error){await execute("ROLLBACK").catch(()=>undefined);throw error;}
+  const result=await execute(
+    `INSERT INTO documents(project_id,category,title,document_uuid,original_filename,extension,mime_type,size_bytes,sha256,
+       storage_provider,cloud_storage_key,version_number,uploaded_at,uploaded_by)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    [parsed.projectId,parsed.category,parsed.title,parsed.documentUuid,parsed.originalFilename,parsed.extension??null,
+      parsed.mimeType,parsed.sizeBytes,parsed.sha256,parsed.storageProvider,parsed.cloudStorageKey??null,
+      parsed.versionNumber,parsed.uploadedAt??null,parsed.uploadedBy??null],
+  );
+  const id=result.lastInsertId??0;
+  if(parsed.localCachePath)await execute("INSERT INTO document_cache(document_id,local_cache_path,is_available_offline,verified_at) VALUES($1,$2,$3,datetime('now'))",[id,parsed.localCachePath,parsed.isAvailableOffline?1:0]);
+  return id;
 }
 
 /** Backward-compatible local reference creation. New UI flows use importDocument. */
 export async function createDocument(input:{projectId:number;category:DocumentCategory;title:string;path:string}):Promise<number>{
-  await execute("BEGIN IMMEDIATE");
-  try{
-    const result=await execute(`INSERT INTO documents(project_id,category,title,path,document_uuid,original_filename,mime_type,storage_provider,version_number)
-      VALUES($1,$2,$3,$4,$5,$3,'application/octet-stream','LEGACY_LOCAL',1)`,[input.projectId,input.category,input.title,input.path,crypto.randomUUID()]);
-    const id=result.lastInsertId??0;
-    await execute("INSERT INTO document_cache(document_id,local_cache_path,is_available_offline) VALUES($1,$2,1)",[id,input.path]);
-    await execute("COMMIT");return id;
-  }catch(error){await execute("ROLLBACK").catch(()=>undefined);throw error;}
+  const documentUuid=crypto.randomUUID();
+  return atomicCommand<number>(
+    "create_document_atomic",
+    {
+      input: {
+        projectId:input.projectId, category:input.category, title:input.title,
+        documentUuid, originalFilename:input.title, extension:null,
+        mimeType:"application/octet-stream", sizeBytes:null, sha256:null,
+        storageProvider:"LEGACY_LOCAL", cloudStorageKey:null, versionNumber:1,
+        uploadedAt:null, uploadedBy:null,
+        localCachePath:input.path, isAvailableOffline:true, path:input.path,
+      },
+    },
+    async () => {
+      const result=await execute(`INSERT INTO documents(project_id,category,title,path,document_uuid,original_filename,mime_type,storage_provider,version_number)
+        VALUES($1,$2,$3,$4,$5,$3,'application/octet-stream','LEGACY_LOCAL',1)`,[input.projectId,input.category,input.title,input.path,documentUuid]);
+      const id=result.lastInsertId??0;
+      await execute("INSERT INTO document_cache(document_id,local_cache_path,is_available_offline) VALUES($1,$2,1)",[id,input.path]);
+      return id;
+    },
+  );
 }
 
 export async function importDocument(projectId:number,category:DocumentCategory,sourcePath:string,logical?:Pick<ProjectDocument,"documentUuid"|"versionNumber">):Promise<number>{

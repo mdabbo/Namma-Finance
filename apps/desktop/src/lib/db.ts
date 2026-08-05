@@ -58,6 +58,42 @@ export async function execute(sql: string, params: unknown[] = []): Promise<Exec
   return db.execute(sql, params);
 }
 
+/**
+ * Refused in the shipped app, by design.
+ *
+ * The WebView cannot own a transaction: `tauri-plugin-sql` releases the pooled
+ * connection between statements, so a boundary opened here would be stranded on
+ * a connection any other caller can pick up mid-transaction. Multi-statement
+ * writes go through a Rust atomic command, which holds one connection for the
+ * whole transaction.
+ *
+ * The vitest harness and the Playwright bridge replace this module wholesale
+ * and implement this against their own single connection, which is why the
+ * test doubles behind `atomicCommand` are still atomic there.
+ */
+export async function runInTransaction<T>(_fn: () => Promise<T>): Promise<T> {
+  throw new Error("TRANSACTION_REQUIRES_RUST_COMMAND");
+}
+
+/**
+ * KNOWN UNSAFE — one remaining caller: `resolveSyncConflict`.
+ *
+ * This is the WebView transaction described above, with every hazard intact: it
+ * is stranded on the shared pooled connection, and a concurrent statement joins
+ * it and commits or rolls back with it. It is retained ONLY because sync
+ * conflict resolution reads inside its own boundary to decide later writes, so
+ * it needs a Rust command of its own rather than a mechanical conversion, and
+ * removing the boundary outright would be worse than the race.
+ *
+ * It bypasses `assertRestrictedSql` deliberately, so the guard can stay strict
+ * for everything else and this path cannot be reached by accident. Do not add
+ * callers. `test/security.test.ts` pins the caller list at exactly one.
+ */
+export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
+  const db = await getDb();
+  await db.execute(step);
+}
+
 /** Close the pool (needed before restoring a backup). */
 export async function closeDb(): Promise<void> {
   const pending = dbPromise;

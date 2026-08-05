@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   PROJECT_FINANCE_VIEWS,
   PROJECT_WORKSPACE_TABS,
@@ -82,5 +85,49 @@ describe("Milestone 4 project workspace", () => {
     expect(projectActivityDestination("project_stage")).toEqual({
       tab: "summary",
     });
+  });
+});
+
+/**
+ * M1: the workspace summary asserted 0.00 for money it had not measured.
+ *
+ * The list query and the financial read model resolve independently, so on
+ * every open of a project there is a window where `financials` is undefined.
+ * Coalescing that to zero prints "this project has collected 0.00" when the
+ * truth is "not known yet" — the exact claim readModel.ts exists to prevent,
+ * made by the screen a project manager looks at first.
+ */
+describe("workspace summary never asserts money it has not measured", () => {
+  const src = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
+  const summary = readFileSync(join(src, "features/projects/ProjectSummaryTab.tsx"), "utf8");
+  const clientDetail = readFileSync(join(src, "features/clients/ClientDetailPage.tsx"), "utf8");
+
+  it("renders a placeholder rather than a formatted zero", () => {
+    expect(readModelAmount(undefined, () => "EGP 0")).toBe(UNKNOWN_AMOUNT);
+    expect(readModelAmount({ egp: 0 }, () => "EGP 0")).toBe("EGP 0");
+  });
+
+  it.each([
+    ["contractValueEgp"],
+    ["revenueEgp"],
+    ["certificateCollectionsEgp"],
+    ["outstandingEgp"],
+    ["actualPaidCostEgp"],
+    ["actualProfitEgp"],
+  ])("guards %s instead of coalescing it to zero", (field) => {
+    // Double-escaped on purpose: a single `\?` in a template literal is just
+    // `?`, which makes the pattern a quantifier and the assertion vacuous.
+    expect(summary).not.toMatch(new RegExp(`${field} \\?\\? 0`));
+    expect(summary).toContain(field);
+  });
+
+  it("guards the ratios too, since a percentage over an absent figure is the same claim", () => {
+    expect(summary).not.toMatch(/certifiedRatioBp \?\? 0/);
+    expect(summary).not.toMatch(/collectionRatioBp \?\? 0/);
+  });
+
+  it("applies the same rule to the client detail KPIs", () => {
+    expect(clientDetail).not.toMatch(/Egp \?\? 0/);
+    expect(clientDetail).toContain("readModelAmount(");
   });
 });

@@ -7,7 +7,7 @@ import { Badge, Card, EmptyState, RatioBar, SectionHeader, cx } from "../../comp
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { StagesTab } from "./StagesTab";
-import { projectAttentionSummary, type ProjectFinanceView, type ProjectWorkspaceTab } from "./projectWorkspaceModel";
+import { projectAttentionSummary, readModelAmount, type ProjectFinanceView, type ProjectWorkspaceTab } from "./projectWorkspaceModel";
 
 const ACTIVITY_ACTION_KEYS: Record<string, string> = {
   CREATE: "dashboard.activityActions.create",
@@ -78,36 +78,45 @@ export function ProjectSummary({
               currency: base.code,
             })}
           />
+          {/*
+            Coalescing a figure the read model has not produced yet to zero
+            prints a definite financial claim — "this project has collected
+            0.00" — when the truth is "not known yet". The list query and the
+            financial read model resolve independently, so that gap is real on
+            every open of the workspace. A measured zero still prints as zero.
+            Tone and hint follow the same rule: a colour or a percentage
+            asserted over an absent figure is the same claim in another form.
+          */}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <ProjectMetric
               label={t("cash.contractValueExcludingVat")}
-              value={base.format(fin?.contractValueEgp ?? 0)}
+              value={readModelAmount(fin, (f) => base.format(f.contractValueEgp))}
             />
             <ProjectMetric
               label={t("cash.certifiedRevenue")}
-              value={base.format(fin?.revenueEgp ?? 0)}
-              hint={fmt.percent(fin?.certifiedRatioBp ?? 0)}
+              value={readModelAmount(fin, (f) => base.format(f.revenueEgp))}
+              hint={fin ? fmt.percent(fin.certifiedRatioBp) : undefined}
             />
             <ProjectMetric
               label={t("cash.certificateCollections")}
-              value={base.format(fin?.certificateCollectionsEgp ?? 0)}
-              hint={fmt.percent(fin?.collectionRatioBp ?? 0)}
-              tone="success"
+              value={readModelAmount(fin, (f) => base.format(f.certificateCollectionsEgp))}
+              hint={fin ? fmt.percent(fin.collectionRatioBp) : undefined}
+              tone={fin ? "success" : "neutral"}
             />
             <ProjectMetric
               label={t("cash.outstandingReceivables")}
-              value={base.format(fin?.outstandingEgp ?? 0)}
-              tone="warning"
+              value={readModelAmount(fin, (f) => base.format(f.outstandingEgp))}
+              tone={fin ? "warning" : "neutral"}
             />
             <ProjectMetric
               label={t("projects.projectCost")}
-              value={base.format(cost?.actualPaidCostEgp ?? 0)}
+              value={readModelAmount(cost, (c) => base.format(c.actualPaidCostEgp))}
             />
             <ProjectMetric
               label={t("costs.actualProfit")}
-              value={base.format(cost?.actualProfitEgp ?? 0)}
-              hint={fmt.percent(cost?.actualMarginBp ?? 0)}
-              tone={(cost?.actualProfitEgp ?? 0) >= 0 ? "success" : "danger"}
+              value={readModelAmount(cost, (c) => base.format(c.actualProfitEgp))}
+              hint={cost ? fmt.percent(cost.actualMarginBp) : undefined}
+              tone={cost ? (cost.actualProfitEgp >= 0 ? "success" : "danger") : "neutral"}
             />
           </div>
         </section>
@@ -135,7 +144,7 @@ export function ProjectSummary({
               <div>
                 <p className="text-muted">{t("cash.certifiedRevenue")}</p>
                 <p className="mt-1 font-semibold tnum">
-                  {fmt.percent(fin?.certifiedRatioBp ?? 0)}
+                  {readModelAmount(fin, (f) => fmt.percent(f.certifiedRatioBp))}
                 </p>
               </div>
               <div>
@@ -143,7 +152,7 @@ export function ProjectSummary({
                   {t("cash.certificateCollectionRate")}
                 </p>
                 <p className="mt-1 font-semibold tnum">
-                  {fmt.percent(fin?.collectionRatioBp ?? 0)}
+                  {readModelAmount(fin, (f) => fmt.percent(f.collectionRatioBp))}
                 </p>
               </div>
             </div>

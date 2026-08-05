@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Contract, ContractInput, ContractRevision } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
-import { invoke } from "@tauri-apps/api/core";
+import { atomicCommand } from "../lib/atomic";
 
 export interface RevisionMetadata { effectiveDate: string; reason: string }
 
@@ -99,11 +99,7 @@ export async function nextContractNumber(_projectId: number, prefix = "CON"): Pr
 }
 
 export async function createContract(input: ContractInput): Promise<number> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return invoke<number>("create_contract_atomic", { input });
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  return atomicCommand<number>("create_contract_atomic", { input }, async () => {
     const r = await execute(
     `INSERT INTO contracts (project_id, number, title, value_minor, vat_bp, retention_bp, withholding_bp,
         advance_minor, advance_recovery_method, performance_bond_bp, performance_bond_bank,
@@ -125,12 +121,8 @@ export async function createContract(input: ContractInput): Promise<number> {
       [id, input.signedDate ?? new Date().toISOString().slice(0, 10), input.valueMinor, input.vatBp, input.retentionBp,
        input.withholdingBp, input.advanceMinor, input.advanceRecoveryMethod, input.paymentTermsDays, project.currency, project.fxRateMicro],
     );
-    await execute("COMMIT");
     return id;
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export async function updateContract(id: number, input: ContractInput, revision?: RevisionMetadata): Promise<void> {
@@ -147,13 +139,7 @@ export async function updateContract(id: number, input: ContractInput, revision?
   const hasHistory = (history?.count ?? 0) > 0;
   if (hasHistory && protectedChanged && (!revision?.reason.trim() || !revision.effectiveDate)) throw new Error("CONTRACT_REVISION_REQUIRED");
 
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("update_contract_atomic", { contractId: id, input, revision: revision ?? null });
-    return;
-  }
-
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>("update_contract_atomic", { contractId: id, input, revision: revision ?? null }, async () => {
     await execute(
     `UPDATE contracts SET number=$1, title=$2, value_minor=$3, vat_bp=$4, retention_bp=$5,
         withholding_bp=$6, advance_minor=$7, advance_recovery_method=$8, performance_bond_bp=$9,
@@ -188,11 +174,7 @@ export async function updateContract(id: number, input: ContractInput, revision?
           );
       }
     }
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export async function contractCascadeInfo(id: number) {

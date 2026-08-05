@@ -234,19 +234,232 @@
     }
   ],
   "status": [
-    { "name": "draft never promoted by full collection", "current": "DRAFT", "netPayableMinor": 10000, "allocatedMinor": 10000, "expected": "DRAFT" },
-    { "name": "draft with no collection", "current": "DRAFT", "netPayableMinor": 10000, "allocatedMinor": 0, "expected": "DRAFT" },
-    { "name": "collection does not bypass approval", "current": "SUBMITTED", "netPayableMinor": 10000, "allocatedMinor": 10000, "expected": "SUBMITTED" },
-    { "name": "over-collection does not bypass approval", "current": "SUBMITTED", "netPayableMinor": 10000, "allocatedMinor": 25000, "expected": "SUBMITTED" },
-    { "name": "submitted and uncollected", "current": "SUBMITTED", "netPayableMinor": 10000, "allocatedMinor": 0, "expected": "SUBMITTED" },
-    { "name": "approved settles when covered exactly", "current": "APPROVED", "netPayableMinor": 10000, "allocatedMinor": 10000, "expected": "PAID" },
-    { "name": "approved settles when over-covered", "current": "APPROVED", "netPayableMinor": 10000, "allocatedMinor": 10001, "expected": "PAID" },
-    { "name": "approved stays open one unit short", "current": "APPROVED", "netPayableMinor": 10000, "allocatedMinor": 9999, "expected": "APPROVED" },
-    { "name": "approved with no collection", "current": "APPROVED", "netPayableMinor": 10000, "allocatedMinor": 0, "expected": "APPROVED" },
-    { "name": "paid reopens when collection falls short", "current": "PAID", "netPayableMinor": 10000, "allocatedMinor": 9999, "expected": "APPROVED" },
-    { "name": "paid reopens when evidence disappears", "current": "PAID", "netPayableMinor": 10000, "allocatedMinor": 0, "expected": "APPROVED" },
-    { "name": "paid stays paid while covered", "current": "PAID", "netPayableMinor": 10000, "allocatedMinor": 10000, "expected": "PAID" },
-    { "name": "zero-value approved is not collected", "current": "APPROVED", "netPayableMinor": 0, "allocatedMinor": 0, "expected": "APPROVED" },
-    { "name": "zero-value paid reopens", "current": "PAID", "netPayableMinor": 0, "allocatedMinor": 0, "expected": "APPROVED" }
-  ]
+    {
+      "name": "draft never promoted by full collection",
+      "current": "DRAFT",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "DRAFT",
+      "baseMinor": 10000
+    },
+    {
+      "name": "draft with no collection",
+      "current": "DRAFT",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "DRAFT",
+      "baseMinor": 10000
+    },
+    {
+      "name": "collection does not bypass approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "over-collection does not bypass approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 25000,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "submitted and uncollected",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved settles when covered exactly",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved settles when over-covered",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10001,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved stays open one unit short",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 9999,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved with no collection",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid reopens when collection falls short",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 9999,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid reopens when evidence disappears",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid stays paid while covered",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "empty certificate claims nothing, so nothing settles",
+      "current": "APPROVED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 0
+    },
+    {
+      "name": "empty certificate marked paid reopens",
+      "current": "PAID",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 0
+    },
+    {
+      "name": "certified work fully consumed by advance recovery is settled",
+      "current": "APPROVED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    },
+    {
+      "name": "settled-by-offset certificate stays paid",
+      "current": "PAID",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    },
+    {
+      "name": "submitted work consumed by advance still awaits approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "SUBMITTED"
+    },
+    {
+      "name": "draft consumed by advance is still a draft",
+      "current": "DRAFT",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "DRAFT"
+    },
+    {
+      "name": "retention and withholding exceeding the claim leave nothing collectible",
+      "current": "APPROVED",
+      "netPayableMinor": -2500,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    }
+  ],
+  "rounding": {
+    "_comment": "mulDivRound / mul_div_round_i64: rounded amount x numerator / denominator, HALF AWAY FROM ZERO. Negative cases exist because the two engines silently disagreed on them (Rust truncated toward zero, landing one minor unit high); nothing reaches them today, and this fixture is what keeps it that way.",
+    "cases": [
+      {
+        "name": "positive half rounds away from zero",
+        "amount": 5,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": 3
+      },
+      {
+        "name": "positive third truncates down",
+        "amount": 100,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": 33
+      },
+      {
+        "name": "positive two-thirds rounds up",
+        "amount": 200,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": 67
+      },
+      {
+        "name": "negative half rounds away from zero",
+        "amount": -5,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": -3
+      },
+      {
+        "name": "negative third rounds away from zero",
+        "amount": -100,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": -33
+      },
+      {
+        "name": "negative exact half of one unit",
+        "amount": -1,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": -1
+      },
+      {
+        "name": "negative VAT line stays symmetric with its positive twin",
+        "amount": -10000,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": -1400
+      },
+      {
+        "name": "positive VAT line",
+        "amount": 10000,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": 1400
+      },
+      {
+        "name": "zero is unsigned",
+        "amount": 0,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": 0
+      },
+      {
+        "name": "exact division needs no rounding",
+        "amount": -400,
+        "numerator": 1,
+        "denominator": 4,
+        "expected": -100
+      }
+    ]
+  }
 }

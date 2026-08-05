@@ -94,7 +94,11 @@ const cash = (contractId: number, number: string, amountMinor: number) => ({
 
 const statusOf = async (id: number) => (await getCertificate(id))?.status;
 
-const netPayableOf = (id: number) =>
+/**
+ * Gross less discount — the certified BASE, not the net payable. Net payable
+ * subtracts retention, withholding and advance recovery from this.
+ */
+const certifiedBaseOf = (id: number) =>
   rawOne<{ n: number }>(`SELECT gross_minor - discount_minor AS n FROM payment_certificates WHERE id=${id}`)?.n ?? 0;
 
 describe("collection status follows payment evidence", () => {
@@ -202,7 +206,7 @@ describe("net payable drives the settlement threshold", () => {
     // base 10 000; VAT +1 400; retention −500; withholding −300 → 10 600
     const { contractId } = await workspace({ vatBp: 1400, retentionBp: 500, withholdingBp: 300 });
     const id = await certificate(contractId, 10_000);
-    expect(netPayableOf(id)).toBe(10_000);
+    expect(certifiedBaseOf(id)).toBe(10_000);
 
     await createPayment(cash(contractId, "GROSS", 10_000), [{ certificateId: id, amountMinor: 10_000 }]);
     expect(await statusOf(id)).toBe("APPROVED");
@@ -335,5 +339,120 @@ describe("a failure before commit leaves no trace", () => {
     expect(raw("SELECT id FROM payments")).toHaveLength(0);
     expect(raw("SELECT id FROM payment_certificate_allocations")).toHaveLength(0);
     expect(await statusOf(id)).toBe("APPROVED");
+  });
+});
+
+/**
+ * M4: a certificate whose payable nets to zero could never settle.
+ *
+ * The rule required a POSITIVE net payable before it would return PAID, so any
+ * certificate fully consumed by advance recovery, retention and withholding sat
+ * at APPROVED permanently — reported as an open claim for money nobody would
+ * ever pay, and re-examined by every reconciliation pass. On a contract billed
+ * fully in advance that is every certificate on the job.
+ *
+ * The fix distinguishes "nothing was claimed" from "the claim was fully offset"
+ * using the certified base, so an empty certificate is still left alone.
+ */
+describe("a certificate with nothing left to collect is settled", () => {
+  it("settles certified work fully consumed by a 100% advance, with no payment", async () => {
+    // Advance equals the contract value, so proportional recovery consumes the
+    // whole base of every certificate: net payable is exactly zero.
+    const { contractId } = await workspace({
+      valueMinor: 100_000,
+      advanceMinor: 100_000,
+      vatBp: 0,
+      retentionBp: 0,
+      withholdingBp: 0,
+    });
+    const id = await certificate(contractId, 40_000);
+    // Real certified work: the base is positive, and proportional recovery of a
+    // 100% advance consumes all of it, so the net payable is exactly zero.
+    expect(certifiedBaseOf(id)).toBe(40_000);
+
+    await reconcileCertificateStatuses([id]);
+    expect(await statusOf(id)).toBe("PAID");
+  });
+
+  it("leaves an empty certificate alone, because it claims nothing", async () => {
+    const { contractId } = await workspace({ vatBp: 0, retentionBp: 0, withholdingBp: 0 });
+    const id = await certificate(contractId, 0);
+    expect(certifiedBaseOf(id)).toBe(0);
+
+    await reconcileCertificateStatuses([id]);
+    expect(await statusOf(id)).toBe("APPROVED");
+  });
+
+  it("never promotes a submitted certificate that nets to zero past approval", async () => {
+    const { contractId } = await workspace({
+      valueMinor: 100_000,
+      advanceMinor: 100_000,
+      vatBp: 0,
+      retentionBp: 0,
+      withholdingBp: 0,
+    });
+    const id = await certificate(contractId, 40_000, "SUBMITTED");
+
+    await reconcileCertificateStatuses([id]);
+    expect(await statusOf(id)).toBe("SUBMITTED");
+  });
+
+  it("keeps a partly-recovered certificate open until its remainder is collected", async () => {
+    // Recovery takes 20% of the base; the remaining 80% is still owed, so this
+    // must NOT be swept up by the zero-payable rule.
+    const { contractId } = await workspace({ valueMinor: 100_000, advanceMinor: 20_000 });
+    const id = await certificate(contractId, 10_000);
+    expect(certifiedBaseOf(id)).toBe(10_000);
+
+    // Recovery takes 2 000 of the 10 000 base, so 8 000 is still owed and the
+    // certificate must stay open rather than being swept up as "fully offset".
+    await reconcileCertificateStatuses([id]);
+    expect(await statusOf(id)).toBe("APPROVED");
+    await createPayment(cash(contractId, "REST", 8_000), [{ certificateId: id, amountMinor: 8_000 }]);
+    expect(await statusOf(id)).toBe("PAID");
+  });
+});
+
+/**
+ * M6: voiding guarded only `voided_at IS NULL`, so a payment already retired
+ * from the ledger could be voided again — stamping a fresh void date and reason
+ * over a record that left the books earlier.
+ */
+describe("an already-retired payment cannot be voided again", () => {
+  it("refuses a second void and leaves the original evidence untouched", async () => {
+    const { contractId } = await workspace();
+    const id = await certificate(contractId, 10_000);
+    const paymentId = await createPayment(cash(contractId, "ONCE", 10_000), [
+      { certificateId: id, amountMinor: 10_000 },
+    ]);
+    expect(await statusOf(id)).toBe("PAID");
+
+    await deletePayment(paymentId, "first void");
+    const afterFirst = rawOne<{ void_reason: string; voided_at: string }>(
+      `SELECT void_reason, voided_at FROM payments WHERE id=${paymentId}`,
+    );
+
+    await expect(deletePayment(paymentId, "second void")).rejects.toThrow();
+
+    const afterSecond = rawOne<{ void_reason: string; voided_at: string }>(
+      `SELECT void_reason, voided_at FROM payments WHERE id=${paymentId}`,
+    );
+    expect(afterSecond).toEqual(afterFirst);
+    expect(afterSecond?.void_reason).toBe("first void");
+  });
+
+  it("refuses to void a payment that was soft-deleted without being voided", async () => {
+    const { contractId } = await workspace();
+    const paymentId = await createPayment(cash(contractId, "SOFT", 5_000), []);
+    // Legacy shape: retired from the ledger with no void evidence recorded.
+    rawExec(`UPDATE payments SET deleted_at='2026-01-01T00:00:00Z' WHERE id=${paymentId}`);
+
+    await expect(deletePayment(paymentId, "late void")).rejects.toThrow();
+
+    const row = rawOne<{ deleted_at: string; voided_at: string | null }>(
+      `SELECT deleted_at, voided_at FROM payments WHERE id=${paymentId}`,
+    );
+    expect(row?.deleted_at).toBe("2026-01-01T00:00:00Z");
+    expect(row?.voided_at).toBeNull();
   });
 });

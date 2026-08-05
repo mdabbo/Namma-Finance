@@ -73,6 +73,7 @@ export function resetRig(): void {
   devices.clear();
   active = null;
   remote.clear();
+  transactionDepth = 0;
 }
 
 function requireDb(): DatabaseSync {
@@ -113,6 +114,31 @@ export async function execute(sql: string, params: unknown[] = []): Promise<Exec
 
 export async function getDb(): Promise<DatabaseSync> {
   return requireDb();
+}
+
+/**
+ * The transaction boundary the WebView is not allowed to open for itself.
+ * Refused in the shipped app (see src/lib/db.ts); real here, because each
+ * simulated device owns one synchronous connection with no other writer.
+ * Nested calls join the outer transaction — SQLite has no nested ones.
+ */
+let transactionDepth = 0;
+
+export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (transactionDepth > 0) return fn();
+  const handle = requireDb();
+  handle.exec("BEGIN IMMEDIATE");
+  transactionDepth += 1;
+  try {
+    const result = await fn();
+    handle.exec("COMMIT");
+    return result;
+  } catch (error) {
+    handle.exec("ROLLBACK");
+    throw error;
+  } finally {
+    transactionDepth -= 1;
+  }
 }
 
 export async function closeDb(): Promise<void> {
@@ -290,4 +316,9 @@ export function makeFakeClient() {
       getSession: async () => ({ data: { session: { user: { id: "test-user" } } } }),
     },
   };
+}
+
+/** Test counterpart of the KNOWN-UNSAFE production remnant (syncConflicts). */
+export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
+  requireDb().exec(step);
 }

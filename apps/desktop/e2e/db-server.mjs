@@ -28,6 +28,7 @@ const MIGRATIONS = [
 ];
 
 let db = null;
+let transactionDepth = 0;
 
 function resetDatabase() {
   db?.close();
@@ -107,8 +108,34 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (request.url === "/reset") {
+      transactionDepth = 0;
       resetDatabase();
       send(200, { ok: true });
+      return;
+    }
+
+    // The transaction boundary the bridged app cannot spell as SQL: the guard
+    // refuses BEGIN/COMMIT from the WebView here exactly as in production, so
+    // the boundary is a verb on this server instead. Safe because Playwright
+    // runs one worker against one synchronous connection — nothing else can
+    // interleave, which is precisely what is NOT true of the pooled connection
+    // in the shipped app.
+    if (request.url === "/transaction") {
+      const { action } = await readBody(request);
+      if (action === "begin") {
+        if (transactionDepth === 0) db.exec("BEGIN IMMEDIATE");
+        transactionDepth += 1;
+      } else if (action === "commit") {
+        transactionDepth = Math.max(0, transactionDepth - 1);
+        if (transactionDepth === 0) db.exec("COMMIT");
+      } else if (action === "rollback") {
+        transactionDepth = Math.max(0, transactionDepth - 1);
+        if (transactionDepth === 0) db.exec("ROLLBACK");
+      } else {
+        send(400, { error: "unknown transaction action" });
+        return;
+      }
+      send(200, { depth: transactionDepth });
       return;
     }
 

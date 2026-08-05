@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type { AssignmentInput, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import { withLock } from "../lib/mutex";
 
 interface PersonRow {
@@ -214,7 +214,12 @@ export function cancelAssignment(id: number, reason: string): Promise<void> {
   // workspace-wide read and is final once written, so a team payment or a
   // certificate collection committing between that read and the write would
   // freeze a figure that never matched the evidence. The lock closes that
-  // window; migration 0004 makes the result tamper-evident.
+  // window within this process; `cancel_assignment_atomic` owns the write's
+  // transaction and re-checks the assignment inside it; migration 0004 makes
+  // the result tamper-evident.
+  //
+  // The derivation itself deliberately stays here rather than moving to Rust —
+  // see the command's own note for why, and what it validates instead.
   return withLock(() => cancelAssignmentUnlocked(id, reason));
 }
 
@@ -222,13 +227,26 @@ async function cancelAssignmentUnlocked(id: number, reason: string): Promise<voi
   const trimmed = reason.trim();
   if (!trimmed) throw new Error("CANCELLATION_REASON_REQUIRED");
   const earnedMinor = await assignmentEarnedMinor(id);
-  const result = await execute(
-    `UPDATE project_assignments SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),
-       cancellation_reason=$1, earned_minor_at_cancellation=$2
-     WHERE id=$3 AND lifecycle_status<>'CANCELLED'`,
-    [trimmed, earnedMinor, id],
+  await atomicCommand<void>(
+    "cancel_assignment_atomic",
+    { assignmentId: id, reason: trimmed, earnedMinor },
+    async () => {
+      const assignment = await selectOne<{ agreedMinor: number; lifecycleStatus: string }>(
+        "SELECT agreed_minor AS agreedMinor, lifecycle_status AS lifecycleStatus FROM project_assignments WHERE id=$1",
+        [id],
+      );
+      if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+      if (assignment.lifecycleStatus === "CANCELLED") throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+      if (earnedMinor < 0 || earnedMinor > assignment.agreedMinor) throw new Error("FROZEN_EARNED_OUT_OF_RANGE");
+      const result = await execute(
+        `UPDATE project_assignments SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),
+           cancellation_reason=$1, earned_minor_at_cancellation=$2
+         WHERE id=$3 AND lifecycle_status<>'CANCELLED'`,
+        [trimmed, earnedMinor, id],
+      );
+      if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+    },
   );
-  if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
 }
 
 /** Fee released to this assignment by client certificates paid so far. */
@@ -278,11 +296,7 @@ export async function listPersonPayments(assignmentIds: number[]): Promise<Perso
  * revenue − expenses — always includes team costs.
  */
 export async function createPersonPayment(input: PersonPaymentInput): Promise<number> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return invoke<number>("create_person_payment_atomic", { input });
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  return atomicCommand<number>("create_person_payment_atomic", { input }, async () => {
   // guard against accidental double-recording (double-click, repeated "Pay"):
   // an EXACT twin — same assignment, date, amount and note — is rejected;
   // change the date or note to record a genuine second payment
@@ -325,22 +339,13 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
         [input.date, fallback.id, input.note ? `${ctx.person_name} — ${input.note}` : ctx.person_name,
          ctx.project_id, ctx.person_name, input.amountMinor, ctx.currency, ctx.fx_rate_micro, paymentId],
       );
-    await execute("COMMIT");
     return paymentId;
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 /** Reverse a team payment without destroying either financial record. */
 export async function deletePersonPayment(id: number): Promise<void> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("delete_person_payment_atomic", { paymentId: id });
-    return;
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>("delete_person_payment_atomic", { paymentId: id }, async () => {
     const result = await execute("UPDATE person_payments SET voided_at=datetime('now'), void_reason='Reversed by user' WHERE id=$1 AND voided_at IS NULL", [id]);
     if (result.rowsAffected !== 1) throw new Error("PERSON_PAYMENT_NOT_FOUND");
     const reversal = await execute(
@@ -358,11 +363,7 @@ export async function deletePersonPayment(id: number): Promise<void> {
        SELECT date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,attachment_path,$1,datetime('now'),'Reversal record',id FROM expenses WHERE id=$2`,
       [reversalId, originalExpense.id],
     );
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function usePeople(includeArchived = false) {

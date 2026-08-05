@@ -5,6 +5,7 @@ import { exists, mkdir, remove } from "@tauri-apps/plugin-fs";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { closeDb, execute, select } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import { loadSettings, saveSetting } from "../lib/settings";
 import { todayIso } from "../lib/format";
 
@@ -101,16 +102,27 @@ export async function restoreFromBackup(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Register the safety copy taken before a restore, and clear its marker.
+ *
+ * The backups_log row is the record that the safety copy exists, so leaving the
+ * marker behind would duplicate it on the next launch and clearing the marker
+ * alone would lose it. Rust owns the boundary — see
+ * `finalize_pending_backup_metadata_atomic`.
+ */
 export async function finalizePendingBackupMetadata(): Promise<void> {
-  const rows=await select<{value:string}>("SELECT value FROM settings WHERE key='pending_restore_safety'");
-  if(!rows.length)return;
-  const value=JSON.parse(rows[0]!.value) as {path:string;filename:string;databaseVersion:number;applicationVersion:string;sha256Checksum:string;sourceDevice:string};
-  await execute("BEGIN IMMEDIATE");
-  try{
-    await execute("INSERT INTO backups_log(path,kind,filename,database_version,application_version,sha256_checksum,backup_type,source_device) VALUES($1,'AUTO',$2,$3,$4,$5,'SAFETY',$6)",[value.path,value.filename,value.databaseVersion,value.applicationVersion,value.sha256Checksum,value.sourceDevice]);
-    await execute("DELETE FROM settings WHERE key='pending_restore_safety'");
-    await execute("COMMIT");
-  }catch(error){await execute("ROLLBACK");throw error;}
+  await atomicCommand<boolean>(
+    "finalize_pending_backup_metadata_atomic",
+    {},
+    async () => {
+      const rows=await select<{value:string}>("SELECT value FROM settings WHERE key='pending_restore_safety'");
+      if(!rows.length)return false;
+      const value=JSON.parse(rows[0]!.value) as {path:string;filename:string;databaseVersion:number;applicationVersion:string;sha256Checksum:string;sourceDevice:string};
+      await execute("INSERT INTO backups_log(path,kind,filename,database_version,application_version,sha256_checksum,backup_type,source_device) VALUES($1,'AUTO',$2,$3,$4,$5,'SAFETY',$6)",[value.path,value.filename,value.databaseVersion,value.applicationVersion,value.sha256Checksum,value.sourceDevice]);
+      await execute("DELETE FROM settings WHERE key='pending_restore_safety'");
+      return true;
+    },
+  );
 }
 
 export function useBackups() {

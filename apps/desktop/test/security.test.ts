@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sanitizeExportCell } from "../src/lib/export";
 import { assertRestrictedSql } from "../src/lib/db";
@@ -44,6 +44,52 @@ describe("Milestone 10 security boundaries",()=>{
     expect(()=>assertRestrictedSql("UPDATE payments SET amount_minor=$1; DROP TABLE payments",[1])).toThrow("SQL_STACKED_OR_COMMENTED");
     expect(()=>assertRestrictedSql("UPDATE payments SET amount_minor=$2",[1])).toThrow("SQL_PARAMETER_MISSING");
     expect(()=>assertRestrictedSql("UPDATE payments SET amount_minor=$1 WHERE id=$2",[100,7])).not.toThrow();
+  });
+
+  /**
+   * The WebView cannot own a transaction. `tauri-plugin-sql` releases the
+   * pooled connection between statements, so a boundary opened from here is
+   * stranded on a shared connection and the next statement from ANY caller — a
+   * list refetch, the auto-sync tick, a Rust command's own transaction — joins
+   * it and commits or rolls back with it. Serializing the runtime pool to one
+   * connection makes that certain rather than merely likely.
+   */
+  it("refuses transaction control from the WebView, in the bridge as in production",()=>{
+    for(const sql of ["BEGIN IMMEDIATE","BEGIN","COMMIT","ROLLBACK","END","SAVEPOINT s1","RELEASE s1"]){
+      expect(()=>assertRestrictedSql(sql,[])).toThrow("SQL_TRANSACTION_CONTROL_DENIED");
+    }
+  });
+
+  /**
+   * `resolveSyncConflict` is the one path still opening its own transaction.
+   * It is NOT fixed: its reads feed later writes and it renumbers records
+   * through dynamic table names, so it needs a Rust port of its own rather
+   * than a mechanical conversion. It is listed here so the fence stays green
+   * on the paths that ARE fixed while naming the one that is not — a new
+   * offender fails this test, and removing the last entry is the definition of
+   * done.
+   */
+  const KNOWN_WEBVIEW_TRANSACTIONS=["src\\repositories\\syncConflicts.ts"];
+
+  it("leaves no source path able to open a WebView transaction beyond the one known offender",()=>{
+    const sources=globSync("src/**/*.{ts,tsx}",{cwd:root})
+      // The database modules DEFINE the boundary helpers; everything else is a
+      // caller, and callers are what this fence counts.
+      .filter((file)=>!/db(\.e2e)?\.ts$/.test(file))
+      .map((file)=>({ file, text:readFileSync(resolve(root,file),"utf8") }));
+    const offenders=sources
+      .filter(({text})=>
+        /execute\(\s*["'`]\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|END)\b/i.test(text)
+        || /unsafeWebViewTransaction\s*\(/.test(text))
+      .map(({file})=>file);
+    expect(offenders).toEqual(KNOWN_WEBVIEW_TRANSACTIONS);
+  });
+
+  it("keeps the production database layer unable to hand out a transaction",()=>{
+    const db=readFileSync(resolve(root,"src/lib/db.ts"),"utf8");
+    // Present as a refusal, so a caller that needs a boundary is pushed to a
+    // Rust command instead of silently getting a broken one.
+    expect(db).toContain("TRANSACTION_REQUIRES_RUST_COMMAND");
   });
 
   it("makes RLS remediation repeatable and keeps financial writes role-gated",()=>{

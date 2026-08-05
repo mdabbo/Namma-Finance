@@ -2,6 +2,7 @@ export * from "./certificate";
 export * from "./contract";
 export * from "./overdue";
 export * from "./aggregate";
+export * from "./cashValuation";
 export * from "./allocation";
 export * from "./valuation";
 export * from "./teamPayout";

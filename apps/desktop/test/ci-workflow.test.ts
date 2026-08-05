@@ -26,6 +26,18 @@ describe("quality workflow", () => {
     }
   });
 
+  /**
+   * CI ran typecheck and tests but nothing that catches what a type checker is
+   * happy with: an import left behind by a refactor, or a regex escape that
+   * makes an assertion vacuous. Both were present in this repository when the
+   * gate was added.
+   */
+  it("lints before it typechecks or tests", () => {
+    const unit = workflow.slice(workflow.indexOf("\n  unit:"), workflow.indexOf("\n  rust:"));
+    expect(unit).toContain("pnpm lint");
+    expect(unit.indexOf("pnpm lint")).toBeLessThan(unit.indexOf("pnpm test"));
+  });
+
   it("runs the Playwright suite as its own job", () => {
     expect(workflow).toMatch(/^ {2}e2e:/m);
     expect(workflow).toContain("playwright test");
@@ -49,8 +61,10 @@ describe("quality workflow", () => {
 
   it("ties recorded evidence to the exact commit", () => {
     expect(workflow).toContain("release-evidence.txt");
+    /* eslint-disable no-template-curly-in-string -- asserting workflow syntax verbatim */
     expect(workflow).toContain("COMMIT_SHA: ${{ github.sha }}");
     expect(workflow).toContain("RUN_ID: ${{ github.run_id }}");
+    /* eslint-enable no-template-curly-in-string */
   });
 
   /**
@@ -92,6 +106,27 @@ describe("quality workflow", () => {
     for (const job of ["unit", "rust", "e2e"]) {
       expect(needs, `build must wait for ${job}`).toContain(job);
     }
+  });
+
+  /**
+   * Audit regression: the job was named "Desktop production build" and its
+   * evidence step recorded a commit SHA, but it only ran `vite build` — a web
+   * bundle, not the thing a user installs. It could stay green through a Rust
+   * compile error, so the recorded evidence attested to an artifact that had
+   * never been built.
+   */
+  it("actually compiles the desktop application, not just the web bundle", () => {
+    const build = workflow.slice(workflow.indexOf("\n  build:"));
+    expect(build).toContain("tauri build");
+    // The Rust toolchain must be present or the compile cannot happen at all.
+    expect(build).toContain("dtolnay/rust-toolchain");
+  });
+
+  it("keeps the installers, not only the log that says a build happened", () => {
+    const build = workflow.slice(workflow.indexOf("\n  build:"));
+    expect(build).toContain("name: desktop-installers");
+    // An empty upload must fail loudly rather than pass as "nothing to do".
+    expect(build).toMatch(/name: desktop-installers[\s\S]{0,160}if-no-files-found: error/);
   });
 
   it("bounds every job with a timeout", () => {

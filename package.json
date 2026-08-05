@@ -8,10 +8,18 @@
     "test:coverage": "pnpm --filter @mep/core test:coverage",
     "typecheck": "pnpm -r typecheck",
     "version:sync": "node scripts/sync-version.mjs",
-    "version:check": "node scripts/sync-version.mjs --check"
+    "version:check": "node scripts/sync-version.mjs --check",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "packageManager": "pnpm@10.0.0",
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "eslint-plugin-react-hooks": "^5",
+    "typescript-eslint": "^8"
   }
 }

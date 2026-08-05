@@ -3,6 +3,7 @@ import {
   assignmentCostPosition,
   assignmentRaisesAlerts,
   computeContractState,
+  computeProjectCashValuation,
   computeProjectFinancials,
   computeReadyToBill,
   computeProjectCostProfile,
@@ -228,69 +229,41 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
     );
   }
 
+  // One shared implementation with the mobile workspace: the split has to be
+  // exact, and two copies of "exact" drift. See computeProjectCashValuation.
   const cashValuationByProject = new Map<number, ProjectCashValuationEgp>();
   for (const project of projects) {
-    const valuation: ProjectCashValuationEgp = {
-      certificateCollectionsEgp: 0,
-      advanceReceivedEgp: 0,
-      retentionReleasedEgp: 0,
-      totalActualCashInEgp: 0,
-      unallocatedCustomerCreditEgp: 0,
-    };
-    for (const contract of contracts.filter((item) => item.projectId === project.id)) {
-      const state = contractStates.get(contract.id)!;
-      const billableCertificateIds = new Set(
-        state.certificates
+    const projectContracts = contracts.filter((item) => item.projectId === project.id);
+    const contractIds = new Set(projectContracts.map((contract) => contract.id));
+    const billableCertificateIds = new Set(
+      projectContracts.flatMap((contract) =>
+        (contractStates.get(contract.id)?.certificates ?? [])
           .filter((item) => item.certificate.status !== "DRAFT")
           .map((item) => item.certificate.id),
-      );
-      const allocatedByPayment = new Map<number, number>();
-      for (const allocation of allocations) {
-        if (!billableCertificateIds.has(allocation.certificateId)) continue;
-        allocatedByPayment.set(
-          allocation.paymentId,
-          (allocatedByPayment.get(allocation.paymentId) ?? 0) + allocation.amountMinor,
-        );
-      }
-      // Every cash figure is valued at the FX effective when the cash arrived —
-      // the PAYMENT's rate. Certificate collections are cash too: they are the
-      // part of a receipt that settled a certificate, so they must not be
-      // valued at the certificate's own snapshot rate. Doing that mixed a
-      // receivable-measurement rate into a cash measurement, and the reported
-      // components then failed to add up to the reported total whenever a
-      // certificate was paid under a later contract revision.
-      for (const payment of payments.filter((item) => item.contractId === contract.id)) {
-        const fx = paymentFx.get(payment.id) ?? {
-          currency: project.currency,
-          fxRateMicro: project.fxRateMicro,
-        };
-        const paymentEgp = toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
-        valuation.totalActualCashInEgp += paymentEgp;
-        if (payment.kind === "ADVANCE") {
-          valuation.advanceReceivedEgp += paymentEgp;
-        } else if (payment.kind === "RETENTION_RELEASE") {
-          valuation.retentionReleasedEgp += paymentEgp;
-        } else {
-          const allocatedMinor = Math.min(
-            payment.amountMinor,
-            Math.max(0, allocatedByPayment.get(payment.id) ?? 0),
-          );
-          const collectedEgp = toEgpPiasters(allocatedMinor, fx.currency, fx.fxRateMicro);
-          valuation.certificateCollectionsEgp += collectedEgp;
-          // The balancing remainder, never rounded independently, so the parts
-          // of a receipt always add back to the receipt exactly.
-          valuation.unallocatedCustomerCreditEgp += paymentEgp - collectedEgp;
-        }
-      }
-    }
-    cashValuationByProject.set(project.id, valuation);
+      ),
+    );
+    cashValuationByProject.set(
+      project.id,
+      computeProjectCashValuation({
+        payments: payments.filter((payment) => contractIds.has(payment.contractId)),
+        allocations,
+        billableCertificateIds,
+        // Desktop has contract-revision history, so cash is valued at the FX
+        // effective when it actually arrived.
+        resolveFx: (payment) =>
+          paymentFx.get(payment.id) ?? {
+            currency: project.currency,
+            fxRateMicro: project.fxRateMicro,
+          },
+      }),
+    );
   }
   const projectFinancials = projects.map((project) => computeProjectFinancials(
     project,
     contracts.filter((contract) => contract.projectId === project.id)
       .map((contract) => contractStates.get(contract.id)!),
     expenses.filter((expense) => expense.projectId === project.id),
-    cashValuationByProject.get(project.id),
+    cashValuationByProject.get(project.id)!,
   ));
 
   const cashIn = payments.flatMap((p) => {

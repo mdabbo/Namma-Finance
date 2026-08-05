@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FileUp, Check } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { invoke } from "@tauri-apps/api/core";
+import { atomicCommand } from "../../lib/atomic";
 import { parseWorkbook } from "../../lib/export";
 import { parseToMinor } from "../../lib/format";
 import { selectOne, execute } from "../../lib/db";
@@ -170,25 +170,26 @@ export function ImportWizard() {
     let imported = 0;
     const settings = await loadSettings();
 
-    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-      const validRows = parsedRows.filter((row) => row.errors.length === 0).map((row) => row.values);
-      try {
-        imported = await invoke<number>("import_rows_atomic", {
-          entity,
-          rows: validRows,
-          projectCodePrefix: settings.projectCodePrefix,
-        });
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-      await qc.invalidateQueries();
-      setResult({ imported, errors });
-      setRunning(false);
-      return;
-    }
-
-    await execute("BEGIN IMMEDIATE");
+    const validRows = parsedRows.filter((row) => row.errors.length === 0).map((row) => row.values);
     try {
+      imported = await atomicCommand<number>(
+        "import_rows_atomic",
+        { entity, rows: validRows, projectCodePrefix: settings.projectCodePrefix },
+        () => importRowsWithinTransaction(),
+      );
+    } catch (error) {
+      imported = 0;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+    const { reconcileCertificateStatuses } = await import("../../repositories/payments");
+    await reconcileCertificateStatuses();
+    await qc.invalidateQueries();
+    setResult({ imported, errors });
+    setRunning(false);
+    return;
+
+    async function importRowsWithinTransaction(): Promise<number> {
+    let count = 0;
     for (let i = 0; i < parsedRows.length; i++) {
       const { values, errors: rowErrors } = parsedRows[i]!;
       if (rowErrors.length > 0) continue;
@@ -246,22 +247,13 @@ export function ImportWizard() {
             [contract.id, values.number, values.date, values.amount, method, values.reference],
           );
         }
-        imported += 1;
+        count += 1;
       } catch (err) {
         throw new Error(`Row ${i + 2}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-      await execute("COMMIT");
-    } catch (error) {
-      await execute("ROLLBACK");
-      imported = 0;
-      errors.push(error instanceof Error ? error.message : String(error));
+    return count;
     }
-    const { reconcileCertificateStatuses } = await import("../../repositories/payments");
-    await reconcileCertificateStatuses();
-    await qc.invalidateQueries();
-    setResult({ imported, errors });
-    setRunning(false);
   }
 
   return (

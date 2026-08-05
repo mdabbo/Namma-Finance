@@ -52,6 +52,7 @@ export async function ready(page: Page): Promise<void> {
 
 export const test = base.extend<{ workspace: void }>({
   workspace: [
+    // eslint-disable-next-line no-empty-pattern -- Playwright fixture with no dependencies
     async ({}, use) => {
       await resetWorkspace("en");
       await use();

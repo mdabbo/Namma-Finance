@@ -83,13 +83,18 @@ test("Arabic RTL dashboard", async ({ page }) => {
     .toBeHidden({ timeout: 30_000 });
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
   await settle(page);
-  // The Arabic page resolves a different font stack, and its metrics differ
+  // The Arabic page resolves a different font stack whose metrics differ
   // between a developer machine and the CI runner: every text baseline shifts a
   // few pixels while the cards, charts and columns stay put. That shift alone
   // measured 3% of the page here, over the 2% global budget, so this assertion
-  // carries its own. It still catches structural regressions — a collapsed
-  // column or a lost section moves far more than this — but it deliberately
-  // does not police glyph rendering, which is not portable across machines.
+  // carries its own.
+  //
+  // A budget that large cannot be the RTL gate — a genuinely mirrored-wrong
+  // panel could hide inside it. The gate is
+  // `navigation.spec.ts › mirrors the layout in Arabic`, which asserts portable
+  // geometry (where the sidebar sits, that main fills what it vacated) rather
+  // than pixels. This screenshot supplements that with colour and gross layout,
+  // and deliberately does not police glyph rendering.
   await expect(page).toHaveScreenshot("dashboard-rtl.png", {
     fullPage: true,
     maxDiffPixelRatio: 0.08,

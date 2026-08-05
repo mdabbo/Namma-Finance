@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   computeContractState,
   computeDashboardKpis,
+  computeProjectCashValuation,
   computeProjectFinancials,
   computeReadyToBill,
   computeTeamPayout,
@@ -91,7 +92,7 @@ export interface MobileWorkspace {
 export async function loadMobileWorkspace(client: SupabaseClient): Promise<MobileWorkspace> {
   const [
     clientRows, projectRows, contractRows, certRows, paymentRows, allocRows,
-    categoryRows, expenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
+    _categoryRows, expenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
   ] = await Promise.all([
     fetchAll(client, "clients"),
     fetchAll(client, "projects"),
@@ -249,13 +250,39 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
     );
   }
 
-  const projectFinancials = projects.map((project) =>
-    computeProjectFinancials(
+  const projectFinancials = projects.map((project) => {
+    const projectContracts = contracts.filter((c) => c.projectId === project.id);
+    const contractIds = new Set(projectContracts.map((c) => c.id));
+    // Every incoming payment is valued once, at the project's rate, and the
+    // unallocated remainder is derived from the receipt rather than converted
+    // separately — so the four reported components sum to the reported total
+    // exactly. This screen previously took an optional fallback that valued
+    // collections at each certificate's FX snapshot and everything else at the
+    // project rate, so its parts did not add up to its own headline.
+    //
+    // The mobile client has no contract-revision history, so there is no
+    // per-payment rate to resolve: the project's own rate is used for all of
+    // them, which is internally consistent.
+    const billableCertificateIds = new Set(
+      projectContracts.flatMap((contract) =>
+        (contractStates.get(contract.id)?.certificates ?? [])
+          .filter((state) => state.certificate.status !== "DRAFT")
+          .map((state) => state.certificate.id),
+      ),
+    );
+    const cashValuation = computeProjectCashValuation({
+      payments: payments.filter((payment) => contractIds.has(payment.contractId)),
+      allocations,
+      billableCertificateIds,
+      resolveFx: () => ({ currency: project.currency, fxRateMicro: project.fxRateMicro }),
+    });
+    return computeProjectFinancials(
       project,
-      contracts.filter((c) => c.projectId === project.id).map((c) => contractStates.get(c.id)!),
+      projectContracts.map((c) => contractStates.get(c.id)!),
       expenses.filter((e) => e.projectId === project.id),
-    ),
-  );
+      cashValuation,
+    );
+  });
 
   const kpis = computeDashboardKpis(projectFinancials, expenses);
 

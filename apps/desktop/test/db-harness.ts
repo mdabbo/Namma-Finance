@@ -68,6 +68,38 @@ export async function getDb(): Promise<DatabaseSync> {
   return requireDb();
 }
 
+/**
+ * The transaction boundary the WebView is not allowed to open for itself.
+ *
+ * In the shipped app this throws (see src/lib/db.ts) and multi-statement writes
+ * go through a Rust atomic command. Here there is exactly one synchronous
+ * connection and no other writer, so a real SQLite transaction is available and
+ * the test doubles behind `atomicCommand` are genuinely atomic — which is what
+ * makes the rollback assertions in atomicity.test.ts mean anything.
+ *
+ * Nested calls join the outer transaction rather than opening a second one,
+ * because SQLite has no nested transactions and a repository double may call
+ * another one (milestone reconciliation reserves a number, for instance).
+ */
+let transactionDepth = 0;
+
+export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (transactionDepth > 0) return fn();
+  const handle = requireDb();
+  handle.exec("BEGIN IMMEDIATE");
+  transactionDepth += 1;
+  try {
+    const result = await fn();
+    handle.exec("COMMIT");
+    return result;
+  } catch (error) {
+    handle.exec("ROLLBACK");
+    throw error;
+  } finally {
+    transactionDepth -= 1;
+  }
+}
+
 export async function closeDb(): Promise<void> {
   db?.close();
   db = null;
@@ -78,6 +110,7 @@ export async function closeDb(): Promise<void> {
 /** Fresh in-memory DB with all migrations applied. */
 export function resetDb(): void {
   db?.close();
+  transactionDepth = 0;
   db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
   for (const file of MIGRATIONS) {
@@ -97,4 +130,9 @@ export function rawOne<T = Record<string, unknown>>(sql: string): T | undefined 
 /** Execute DDL or failure-injection triggers in integration tests. */
 export function rawExec(sql: string): void {
   requireDb().exec(sql);
+}
+
+/** Test counterpart of the KNOWN-UNSAFE production remnant (syncConflicts). */
+export async function unsafeWebViewTransaction(step: "BEGIN IMMEDIATE" | "COMMIT" | "ROLLBACK"): Promise<void> {
+  requireDb().exec(step);
 }

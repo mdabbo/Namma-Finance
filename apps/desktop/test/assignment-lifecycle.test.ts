@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 vi.mock("../src/lib/db", async () => await import("./db-harness"));
 
@@ -392,5 +394,66 @@ describe("unrelated status changes stay unaffected", () => {
     });
     await setCertificateStatus(certificateId, "APPROVED");
     expect(await position(assignmentId)).toMatchObject({ lifecycleStatus: "ACTIVE" });
+  });
+});
+
+/**
+ * M5: the frozen earned figure is derived by the caller, and migration 0004
+ * makes it final once written — so a wrong figure is permanent. The write is
+ * now owned by `cancel_assignment_atomic`, which re-checks the assignment
+ * inside its own transaction and bounds the figure.
+ *
+ * The bound enforcement itself is asserted in `cargo test`, where the command
+ * lives. These cover the behaviour reachable from the repository.
+ */
+describe("cancellation evidence is bounded and written under one guard", () => {
+  it("freezes a figure inside the agreed fee and refuses a second cancellation", async () => {
+    const { assignmentId } = await workspace(40_000);
+
+    await cancelAssignment(assignmentId, "Client withdrew the package");
+    const first = rawOne<{ earned_minor_at_cancellation: number; cancellation_reason: string }>(
+      `SELECT earned_minor_at_cancellation, cancellation_reason FROM project_assignments WHERE id=${assignmentId}`,
+    );
+    expect(first?.earned_minor_at_cancellation).toBeGreaterThanOrEqual(0);
+    expect(first?.earned_minor_at_cancellation).toBeLessThanOrEqual(40_000);
+    expect(first?.cancellation_reason).toBe("Client withdrew the package");
+
+    await expect(cancelAssignment(assignmentId, "second attempt")).rejects.toThrow(
+      "ASSIGNMENT_ALREADY_CANCELLED",
+    );
+    // The refused attempt changed nothing — not the figure, not the reason.
+    expect(
+      rawOne(
+        `SELECT earned_minor_at_cancellation, cancellation_reason FROM project_assignments WHERE id=${assignmentId}`,
+      ),
+    ).toEqual(first);
+  });
+
+  it("leaves the assignment untouched when the reason is blank", async () => {
+    const { assignmentId } = await workspace(40_000);
+    await expect(cancelAssignment(assignmentId, "   ")).rejects.toThrow(
+      "CANCELLATION_REASON_REQUIRED",
+    );
+    const row = rawOne<{ lifecycle_status: string; earned_minor_at_cancellation: number | null }>(
+      `SELECT lifecycle_status, earned_minor_at_cancellation FROM project_assignments WHERE id=${assignmentId}`,
+    );
+    expect(row?.lifecycle_status).toBe("ACTIVE");
+    expect(row?.earned_minor_at_cancellation).toBeNull();
+  });
+
+  /**
+   * Pins the deliberate asymmetry with payment-driven certificate status, so a
+   * later reader sees it was decided rather than overlooked — and so moving the
+   * derivation into Rust is a visible change here rather than a silent one.
+   */
+  it("records that the derivation still lives in the caller, and what Rust checks instead", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../src-tauri/src/lib.rs"),
+      "utf8",
+    );
+    const command = source.slice(source.indexOf("async fn cancel_assignment_transaction"));
+    expect(source).toContain("KNOWN LIMIT, deliberate");
+    expect(command).toContain("FROZEN_EARNED_OUT_OF_RANGE");
+    expect(command).toContain("ASSIGNMENT_ALREADY_CANCELLED");
   });
 });

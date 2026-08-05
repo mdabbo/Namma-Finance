@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { computeCertificate, desiredCertificateStatus } from "../src";
+import { computeCertificate, desiredCertificateStatus, mulDivRound } from "../src";
 import type { AdvanceRecoveryMethod, CertificateStatus } from "../src";
 
 /**
@@ -29,17 +29,31 @@ interface NetPayableFixture {
   expectedRecoveryMinor: number;
 }
 
+interface RoundingFixture {
+  name: string;
+  amount: number;
+  numerator: number;
+  denominator: number;
+  expected: number;
+}
+
 interface StatusFixture {
   name: string;
   current: CertificateStatus;
   netPayableMinor: number;
   allocatedMinor: number;
+  /** Gross less discount — what separates "nothing claimed" from "fully offset". */
+  baseMinor: number;
   expected: CertificateStatus;
 }
 
 const fixtures = JSON.parse(
   readFileSync(resolve(import.meta.dirname, "../../../fixtures/certificate-financials.json"), "utf8"),
-) as { netPayable: NetPayableFixture[]; status: StatusFixture[] };
+) as {
+  netPayable: NetPayableFixture[];
+  status: StatusFixture[];
+  rounding: { cases: RoundingFixture[] };
+};
 
 describe("shared certificate fixtures", () => {
   it("covers every deduction and both advance-recovery methods", () => {
@@ -76,8 +90,41 @@ describe("shared certificate fixtures", () => {
     "status: %s",
     (_name, fixture) => {
       expect(
-        desiredCertificateStatus(fixture.current, fixture.netPayableMinor, fixture.allocatedMinor),
+        desiredCertificateStatus(
+          fixture.current,
+          fixture.netPayableMinor,
+          fixture.allocatedMinor,
+          fixture.baseMinor,
+        ),
       ).toBe(fixture.expected);
     },
   );
+
+  /**
+   * The rounding rule underneath every figure above.
+   *
+   * Rust rounded the SIGNED value with truncating integer division, so negative
+   * amounts landed one minor unit away from what this engine produces — a −1400
+   * VAT line came out −1399. Nothing reaches it with a negative amount today,
+   * which is exactly why it needs a fixture: the divergence was invisible.
+   */
+  it.each(fixtures.rounding.cases.map((fixture) => [fixture.name, fixture] as const))(
+    "rounding: %s",
+    (_name, fixture) => {
+      expect(mulDivRound(fixture.amount, fixture.numerator, fixture.denominator)).toBe(
+        fixture.expected,
+      );
+    },
+  );
+
+  it("rounds symmetrically around zero", () => {
+    // Negating zero yields -0, which Object.is separates from 0; the sign of
+    // nothing is not part of the rule under test.
+    const unsigned = (value: number) => (value === 0 ? 0 : value);
+    for (const { amount, numerator, denominator } of fixtures.rounding.cases) {
+      expect(unsigned(mulDivRound(-amount, numerator, denominator))).toBe(
+        unsigned(-mulDivRound(amount, numerator, denominator)),
+      );
+    }
+  });
 });
