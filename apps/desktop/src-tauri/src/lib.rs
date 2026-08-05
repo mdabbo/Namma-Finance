@@ -672,11 +672,18 @@ async fn load_contract_payables(
         let id: i64 = row.try_get("id").map_err(|e| e.to_string())?;
         let status: String = row.try_get("status").map_err(|e| e.to_string())?;
         if status == "DRAFT" {
+            // A draft owes nothing and consumes no advance, but it still HAS a
+            // certified base: `computeTeamPayout` weights a payout stage by
+            // every certificate's base, drafts included. Zeroing it here would
+            // give the two engines different stage weights on any contract
+            // holding a draft.
+            let gross: i64 = row.try_get("gross_minor").map_err(|e| e.to_string())?;
+            let discount: i64 = row.try_get("discount_minor").map_err(|e| e.to_string())?;
             payables.push(CertificatePayable {
                 id,
                 status,
                 net_payable_minor: 0,
-                certified_base_minor: 0,
+                certified_base_minor: gross.saturating_sub(discount),
             });
             continue;
         }
@@ -1194,62 +1201,302 @@ async fn create_person_payment_atomic(
     Ok(payment_id)
 }
 
+/// Largest-remainder allocation, the counterpart of `allocate` in @mep/core.
+///
+/// Splits `total_minor` across `weights` so the parts sum to the total exactly.
+/// Shares are floored, then the leftover units go to the largest remainders,
+/// ties broken by index — the same order the TypeScript sort produces, which is
+/// what makes the two engines agree unit for unit rather than approximately.
+/// All-zero weights split evenly, matching `allocate`'s own fallback.
+fn allocate_largest_remainder(total_minor: i64, weights: &[i64]) -> Result<Vec<i64>, String> {
+    if weights.is_empty() {
+        return Ok(Vec::new());
+    }
+    if weights.iter().any(|weight| *weight < 0) {
+        return Err("allocation weights must be non-negative".into());
+    }
+    let mut weight_sum: i128 = weights.iter().map(|weight| i128::from(*weight)).sum();
+    let effective: Vec<i128> = if weight_sum == 0 {
+        weight_sum = weights.len() as i128;
+        vec![1; weights.len()]
+    } else {
+        weights.iter().map(|weight| i128::from(*weight)).collect()
+    };
+
+    let total = i128::from(total_minor);
+    let negative = total < 0;
+    let magnitude = total.checked_abs().ok_or("allocation overflow")?;
+
+    let mut shares: Vec<i128> = Vec::with_capacity(weights.len());
+    let mut remainders: Vec<(usize, i128)> = Vec::with_capacity(weights.len());
+    let mut allocated: i128 = 0;
+    for (index, weight) in effective.iter().enumerate() {
+        let exact = magnitude
+            .checked_mul(*weight)
+            .ok_or_else(|| "allocation overflow".to_string())?;
+        let share = exact / weight_sum;
+        shares.push(share);
+        allocated += share;
+        remainders.push((index, exact % weight_sum));
+    }
+
+    // Descending remainder, ascending index on a tie.
+    remainders.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    let mut leftover = magnitude - allocated;
+    let mut cursor = 0usize;
+    while leftover > 0 {
+        shares[remainders[cursor].0] += 1;
+        leftover -= 1;
+        cursor = (cursor + 1) % remainders.len();
+    }
+
+    shares
+        .into_iter()
+        .map(|share| {
+            i64::try_from(if negative { -share } else { share })
+                .map_err(|_| "allocation overflow".to_string())
+        })
+        .collect()
+}
+
+/// Milestone amounts from a contract value, matching `milestoneAmounts`.
+///
+/// A plan totalling exactly 100% is allocated by largest remainder so the parts
+/// sum to the contract value; a partial plan is a preview, each line taken
+/// independently.
+fn milestone_amounts(value_minor: i64, percents_bp: &[i64]) -> Result<Vec<i64>, String> {
+    if percents_bp.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total: i128 = percents_bp.iter().map(|value| i128::from(*value)).sum();
+    if total == 10_000 {
+        return allocate_largest_remainder(value_minor, percents_bp);
+    }
+    percents_bp
+        .iter()
+        .map(|percent| mul_div_round_i64(value_minor, *percent, 10_000))
+        .collect()
+}
+
+/// One stage of a person's payout schedule: how much of the contract it
+/// represents, and the status of the certificate that releases it.
+struct PayoutStage {
+    weight_minor: i64,
+    certificate_status: Option<String>,
+}
+
+/// Fee released to an assignment by client certificates paid so far.
+///
+/// The Rust counterpart of `computeTeamPayout(...).releasedMinor` in @mep/core.
+/// Every person on a project follows the same payment stages as the project's
+/// contracts: the agreed fee is split across those stages by the same value
+/// shares, and a stage is released the moment its certificate is PAID.
+///
+/// This exists so `cancel_assignment_atomic` can DERIVE the figure it freezes
+/// instead of trusting one computed in the WebView. The frozen figure decides
+/// the assignment's committed cost and what is still owed, and migration 0004
+/// makes it final once written — a caller-supplied value could bound-check as
+/// plausible and still be wrong forever.
+///
+/// `fixtures/team-payout.json` is asserted by this and by the TypeScript engine,
+/// because the two must not drift.
+async fn assignment_released_minor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: i64,
+    agreed_minor: i64,
+) -> Result<i64, String> {
+    // Same boundary and order as the read model: live contracts of a live
+    // project, ascending id.
+    let contracts = sqlx::query(
+        "SELECT c.id, c.value_minor, c.valuation_mode, c.milestones
+         FROM contracts c JOIN projects p ON p.id=c.project_id
+         WHERE c.project_id=? AND c.archived_at IS NULL AND p.archived_at IS NULL
+         ORDER BY c.id",
+    )
+    .bind(project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut stages: Vec<PayoutStage> = Vec::new();
+    for contract in contracts {
+        let contract_id: i64 = contract.try_get("id").map_err(|e| e.to_string())?;
+        let value_minor: i64 = contract.try_get("value_minor").map_err(|e| e.to_string())?;
+        let valuation_mode: String = contract
+            .try_get("valuation_mode")
+            .map_err(|e| e.to_string())?;
+        let milestones_json: Option<String> =
+            contract.try_get("milestones").map_err(|e| e.to_string())?;
+
+        let payables = load_contract_payables(tx, contract_id).await?;
+        let status_by_id: std::collections::HashMap<i64, String> = payables
+            .iter()
+            .map(|payable| (payable.id, payable.status.clone()))
+            .collect();
+
+        let milestones = if valuation_mode == "MILESTONES" {
+            parse_milestones(milestones_json.as_deref())?
+        } else {
+            Vec::new()
+        };
+
+        if !milestones.is_empty() {
+            let percents: Vec<i64> = milestones.iter().map(|(percent, _)| *percent).collect();
+            let amounts = milestone_amounts(value_minor, &percents)?;
+            for (index, (_, certificate_id)) in milestones.iter().enumerate() {
+                stages.push(PayoutStage {
+                    weight_minor: amounts.get(index).copied().unwrap_or(0),
+                    certificate_status: certificate_id
+                        .and_then(|id| status_by_id.get(&id).cloned()),
+                });
+            }
+        } else {
+            let mut scheduled = 0_i64;
+            for payable in &payables {
+                stages.push(PayoutStage {
+                    weight_minor: payable.certified_base_minor,
+                    certificate_status: Some(payable.status.clone()),
+                });
+                scheduled = scheduled.saturating_add(payable.certified_base_minor);
+            }
+            // Contract value not yet certified is a single pending remainder.
+            if value_minor > scheduled {
+                stages.push(PayoutStage {
+                    weight_minor: value_minor - scheduled,
+                    certificate_status: None,
+                });
+            }
+        }
+    }
+
+    let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
+    let amounts = allocate_largest_remainder(agreed_minor, &weights)?;
+    let mut released = 0_i64;
+    for (index, stage) in stages.iter().enumerate() {
+        if stage.certificate_status.as_deref() == Some("PAID") {
+            released = released.saturating_add(amounts.get(index).copied().unwrap_or(0));
+        }
+    }
+    Ok(released)
+}
+
+/// Milestones as (percentBp, certificateId), matching `parseMilestones`.
+///
+/// Malformed JSON is an error rather than an empty plan: silently treating a
+/// corrupt milestone list as "no milestones" would fall through to the
+/// certificate schedule and freeze a figure computed from the wrong stages.
+fn parse_milestones(raw: Option<&str>) -> Result<Vec<(i64, Option<i64>)>, String> {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    if raw.trim().is_empty() {
+        return Err("MILESTONES_INVALID_JSON".into());
+    }
+    let parsed: JsonValue =
+        serde_json::from_str(raw).map_err(|_| "MILESTONES_INVALID_JSON".to_string())?;
+    let items = parsed
+        .as_array()
+        .ok_or_else(|| "MILESTONES_INVALID_SHAPE".to_string())?;
+    let mut milestones = Vec::with_capacity(items.len());
+    for item in items {
+        let object = item
+            .as_object()
+            .ok_or_else(|| "MILESTONES_INVALID_SHAPE".to_string())?;
+        if !object.get("title").is_some_and(JsonValue::is_string) {
+            return Err("MILESTONES_INVALID_SHAPE".into());
+        }
+        let percent = item
+            .get("percentBp")
+            .and_then(JsonValue::as_i64)
+            .ok_or_else(|| "MILESTONES_INVALID_SHAPE".to_string())?;
+        if !(0..=MAX_SAFE_INTEGER).contains(&percent) {
+            return Err("MILESTONES_INVALID_SHAPE".into());
+        }
+        if let Some(stage_id) = object.get("stageId") {
+            if !stage_id.is_null()
+                && !stage_id
+                    .as_i64()
+                    .is_some_and(|value| value.unsigned_abs() <= MAX_SAFE_INTEGER as u64)
+            {
+                return Err("MILESTONES_INVALID_SHAPE".into());
+            }
+        }
+        if object.get("done").is_some_and(|done| !done.is_boolean()) {
+            return Err("MILESTONES_INVALID_SHAPE".into());
+        }
+        let certificate_id = match object.get("certificateId") {
+            None | Some(JsonValue::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_i64()
+                    .filter(|id| id.unsigned_abs() <= MAX_SAFE_INTEGER as u64)
+                    .ok_or_else(|| "MILESTONES_INVALID_SHAPE".to_string())?,
+            ),
+        };
+        milestones.push((percent, certificate_id));
+    }
+    Ok(milestones)
+}
+
 /// Cancel an assignment and freeze its earned value as one operation.
 ///
 /// The frozen figure decides the assignment's committed cost AND what is still
 /// owed to the person, and migration 0004 makes it final once written — so the
 /// write must not be separable from the check that it is allowed.
 ///
-/// KNOWN LIMIT, deliberate: unlike payment-driven certificate status, the
-/// figure itself is still DERIVED BY THE CALLER (`computeTeamPayout` in
-/// @mep/core) rather than recomputed here. Moving that derivation into Rust
-/// means porting largest-remainder allocation, milestone parsing and the
-/// contract/certificate selection exactly; `load_contract_payables` here
-/// excludes voided and archived certificates while `computeContractState` in
-/// TypeScript excludes only soft-deleted ones, so a naive port would freeze a
-/// figure that disagrees with every other screen — and then make it immutable.
-/// That port belongs with its own shared fixture, like
-/// `fixtures/certificate-financials.json` does for certificate status.
-///
-/// What Rust does enforce meanwhile: the transaction boundary, that the
-/// assignment is still cancellable when the write lands, and that the figure is
-/// within the only bound derivable without the full payout schedule — released
-/// value is a subset of an allocation of the agreed fee, so it can never be
-/// negative or exceed it. A caller cannot freeze arbitrary nonsense.
+/// The figure is DERIVED here, not accepted from the caller. It used to arrive
+/// as a command argument that Rust could only bound-check — a wrong value could
+/// look plausible and still be frozen forever. `assignment_released_minor`
+/// recomputes it from stored evidence inside this transaction, so the read that
+/// decides it and the write that freezes it cannot be separated by a concurrent
+/// payment or collection.
 #[tauri::command]
 async fn cancel_assignment_atomic(
     db_instances: State<'_, DbInstances>,
     assignment_id: i64,
     reason: String,
-    earned_minor: i64,
 ) -> Result<(), String> {
     let pool = application_database_pool(&db_instances).await?;
-    cancel_assignment_transaction(&pool, assignment_id, &reason, earned_minor).await
+    cancel_assignment_transaction(&pool, assignment_id, &reason).await
 }
 
 async fn cancel_assignment_transaction(
     pool: &sqlx::SqlitePool,
     assignment_id: i64,
     reason: &str,
-    earned_minor: i64,
 ) -> Result<(), String> {
     let trimmed = reason.trim();
     if trimmed.is_empty() {
         return Err("CANCELLATION_REASON_REQUIRED".into());
     }
     let mut tx = begin_immediate(pool).await?;
-    let row =
-        sqlx::query("SELECT agreed_minor, lifecycle_status FROM project_assignments WHERE id=?")
-            .bind(assignment_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
+    let row = sqlx::query(
+        "SELECT a.agreed_minor, a.lifecycle_status, a.project_id, p.archived_at AS project_archived_at
+         FROM project_assignments a JOIN projects p ON p.id=a.project_id WHERE a.id=?",
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
     let agreed_minor: i64 = row.try_get("agreed_minor").map_err(|e| e.to_string())?;
     let lifecycle: String = row.try_get("lifecycle_status").map_err(|e| e.to_string())?;
+    let project_id: i64 = row.try_get("project_id").map_err(|e| e.to_string())?;
+    let project_archived_at: Option<String> = row
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
     if lifecycle == "CANCELLED" {
         return Err("ASSIGNMENT_ALREADY_CANCELLED".into());
     }
+    if project_archived_at.is_some() {
+        return Err("PROJECT_ARCHIVED".into());
+    }
+
+    let earned_minor = assignment_released_minor(&mut tx, project_id, agreed_minor).await?;
+    // Released value is a subset of an allocation of the agreed fee, so this
+    // cannot fail — it is kept as a assertion on the derivation itself rather
+    // than a check on an untrusted input.
     if earned_minor < 0 || earned_minor > agreed_minor {
         return Err("FROZEN_EARNED_OUT_OF_RANGE".into());
     }
@@ -4435,28 +4682,6 @@ mod financial_transaction_tests {
         pool
     }
 
-    /// A project with one assignment, for the cancellation guard.
-    async fn assignment_fixture(pool: &sqlx::SqlitePool, agreed_minor: i64) -> i64 {
-        sqlx::raw_sql(
-            "INSERT INTO clients(name) VALUES('Cancel Co');
-             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
-             VALUES('PRJ-2026-900','Cancel',1,'EGP',1000000);
-             INSERT INTO people(type,name,currency) VALUES('FREELANCER','Someone','EGP');",
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO project_assignments(person_id,project_id,agreed_minor,currency,fx_rate_micro)
-             VALUES(1,1,?,'EGP',1000000)",
-        )
-        .bind(agreed_minor)
-        .execute(pool)
-        .await
-        .unwrap()
-        .last_insert_rowid()
-    }
-
     async fn assignment_row(pool: &sqlx::SqlitePool, id: i64) -> (String, Option<i64>) {
         sqlx::query_as(
             "SELECT lifecycle_status, earned_minor_at_cancellation FROM project_assignments WHERE id=?",
@@ -4467,49 +4692,112 @@ mod financial_transaction_tests {
         .unwrap()
     }
 
-    /// The frozen figure decides committed cost and what is owed, and migration
-    /// 0004 makes it final. Rust cannot re-derive it without porting the whole
-    /// payout schedule, but released value is a subset of an allocation of the
-    /// agreed fee — so anything outside `0..=agreed` is provably not a real
-    /// figure and must never be frozen.
-    #[test]
-    fn cancellation_refuses_a_frozen_figure_outside_the_agreed_fee() {
-        tauri::async_runtime::block_on(async {
-            let pool = migrated_pool().await;
-            let id = assignment_fixture(&pool, 40_000).await;
-
-            for bad in [-1_i64, 40_001, i64::MAX] {
-                let error = cancel_assignment_transaction(&pool, id, "Called off", bad)
-                    .await
-                    .unwrap_err();
-                assert_eq!(error, "FROZEN_EARNED_OUT_OF_RANGE", "accepted {bad}");
-            }
-
-            // Every refusal left the assignment live and unfrozen.
-            let (lifecycle, frozen) = assignment_row(&pool, id).await;
-            assert_eq!(lifecycle, "ACTIVE");
-            assert_eq!(frozen, None);
-        });
+    /// A project whose single certificate can be paid, so a real released
+    /// figure exists to derive.
+    async fn payout_fixture(pool: &sqlx::SqlitePool, agreed_minor: i64) -> (i64, i64) {
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Payout Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+             VALUES('PRJ-2026-500','Payout',1,'EGP',1000000);
+             INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                 withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,valuation_mode)
+             VALUES(1,'C-PAY',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30,'LUMP_SUM');
+             INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                 contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                 advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+             VALUES(1,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+             INSERT INTO people(type,name,currency) VALUES('FREELANCER','Someone','EGP');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let assignment = sqlx::query(
+            "INSERT INTO project_assignments(person_id,project_id,agreed_minor,currency,fx_rate_micro)
+             VALUES(1,1,?,'EGP',1000000)",
+        )
+        .bind(agreed_minor)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        (assignment, 1)
     }
 
+    async fn add_certificate(
+        pool: &sqlx::SqlitePool,
+        seq: i64,
+        number: &str,
+        gross: i64,
+        status: &str,
+    ) -> i64 {
+        sqlx::query(
+            "INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status)
+             VALUES(1,?,?,'2026-02-01',?,?)",
+        )
+        .bind(seq)
+        .bind(number)
+        .bind(gross)
+        .bind(status)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    /// The figure is derived from evidence, not supplied.
+    ///
+    /// It used to arrive as a command argument that Rust could only bound-check,
+    /// so a wrong value could look plausible and be frozen forever — and
+    /// migration 0004 makes it final. The payout schedule is now ported, and
+    /// fixtures/team-payout.json holds both engines to the same arithmetic.
     #[test]
-    fn cancellation_accepts_the_bounds_and_is_refused_a_second_time() {
+    fn cancellation_derives_the_frozen_figure_from_paid_certificates() {
         tauri::async_runtime::block_on(async {
             let pool = migrated_pool().await;
-            let id = assignment_fixture(&pool, 40_000).await;
+            let (assignment, _) = payout_fixture(&pool, 40_000).await;
 
-            // Zero and the full fee are both legitimate: nothing released yet,
-            // or everything released.
-            cancel_assignment_transaction(&pool, id, "  Client withdrew  ", 40_000)
+            // Nothing certified yet: the whole contract value is one pending
+            // remainder stage, so nothing is released.
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            assert_eq!(
+                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                0
+            );
+            tx.commit().await.unwrap();
+
+            // Half the contract certified and PAID releases half the fee.
+            add_certificate(&pool, 1, "PC-1", 50_000, "PAID").await;
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            assert_eq!(
+                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                20_000
+            );
+            tx.commit().await.unwrap();
+
+            // An APPROVED certificate is not collected, so it releases nothing.
+            add_certificate(&pool, 2, "PC-2", 50_000, "APPROVED").await;
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            assert_eq!(
+                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                20_000
+            );
+            tx.commit().await.unwrap();
+
+            cancel_assignment_transaction(&pool, assignment, "  Client withdrew  ")
                 .await
                 .unwrap();
-            let (lifecycle, frozen) = assignment_row(&pool, id).await;
+            let (lifecycle, frozen) = assignment_row(&pool, assignment).await;
             assert_eq!(lifecycle, "CANCELLED");
-            assert_eq!(frozen, Some(40_000));
+            assert_eq!(
+                frozen,
+                Some(20_000),
+                "frozen at what the client had paid for"
+            );
+
             let reason: String = sqlx::query_scalar(
                 "SELECT cancellation_reason FROM project_assignments WHERE id=?",
             )
-            .bind(id)
+            .bind(assignment)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4517,35 +4805,265 @@ mod financial_transaction_tests {
                 reason, "Client withdrew",
                 "reason is trimmed before storing"
             );
+        });
+    }
 
-            let again = cancel_assignment_transaction(&pool, id, "again", 0)
-                .await
-                .unwrap_err();
-            assert_eq!(again, "ASSIGNMENT_ALREADY_CANCELLED");
-            // The second attempt did not rewrite the evidence.
-            assert_eq!(assignment_row(&pool, id).await.1, Some(40_000));
+    /// A draft certificate owes nothing, but it still occupies a payout stage —
+    /// its base is part of the split. Zeroing it in Rust while the TypeScript
+    /// engine weights by it would hand the two engines different stage weights.
+    #[test]
+    fn a_draft_certificate_still_carries_its_stage_weight() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            payout_fixture(&pool, 40_000).await;
+            add_certificate(&pool, 1, "PC-PAID", 50_000, "PAID").await;
+            add_certificate(&pool, 2, "PC-DRAFT", 50_000, "DRAFT").await;
+
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000).await.unwrap();
+            tx.commit().await.unwrap();
+            // Two stages of equal base: the paid one releases exactly half. If
+            // the draft's base were dropped, the paid stage would absorb the
+            // remainder and release the whole fee.
+            assert_eq!(released, 20_000);
         });
     }
 
     #[test]
-    fn cancellation_requires_a_reason_and_an_existing_assignment() {
+    fn cancellation_is_refused_twice_and_needs_a_reason() {
         tauri::async_runtime::block_on(async {
             let pool = migrated_pool().await;
-            let id = assignment_fixture(&pool, 40_000).await;
+            let (assignment, _) = payout_fixture(&pool, 40_000).await;
 
             assert_eq!(
-                cancel_assignment_transaction(&pool, id, "   ", 0)
+                cancel_assignment_transaction(&pool, assignment, "   ")
                     .await
                     .unwrap_err(),
                 "CANCELLATION_REASON_REQUIRED"
             );
             assert_eq!(
-                cancel_assignment_transaction(&pool, 9_999, "Called off", 0)
+                cancel_assignment_transaction(&pool, 9_999, "Called off")
                     .await
                     .unwrap_err(),
                 "ASSIGNMENT_NOT_FOUND"
             );
-            assert_eq!(assignment_row(&pool, id).await.0, "ACTIVE");
+            assert_eq!(assignment_row(&pool, assignment).await.0, "ACTIVE");
+
+            cancel_assignment_transaction(&pool, assignment, "Called off")
+                .await
+                .unwrap();
+            assert_eq!(
+                cancel_assignment_transaction(&pool, assignment, "again")
+                    .await
+                    .unwrap_err(),
+                "ASSIGNMENT_ALREADY_CANCELLED"
+            );
+            // The refused second attempt rewrote nothing.
+            assert_eq!(assignment_row(&pool, assignment).await.1, Some(0));
+        });
+    }
+
+    /// The allocation arithmetic the payout schedule stands on, asserted
+    /// against the same file the TypeScript engine asserts.
+    ///
+    /// `computeTeamPayout` now exists twice, because cancellation derives the
+    /// figure it freezes. Allocation is where a port drifts: flooring, then
+    /// giving leftover units to the largest remainders with ties broken by
+    /// index, is easy to get almost right — and "almost" freezes a figure a
+    /// piastre off that migration 0004 then makes permanent.
+    #[test]
+    fn team_payout_fixtures_match_typescript() {
+        let raw = include_str!("../../../../fixtures/team-payout.json");
+        let fixtures: serde_json::Value = serde_json::from_str(raw).expect("fixture json");
+
+        let allocate_cases = fixtures["allocate"].as_array().expect("allocate array");
+        assert!(allocate_cases.len() >= 12, "allocate fixtures too thin");
+        for case in allocate_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let total = case["total"].as_i64().unwrap();
+            let weights: Vec<i64> = case["weights"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_i64().unwrap())
+                .collect();
+            let expected: Vec<i64> = case["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_i64().unwrap())
+                .collect();
+            let actual = allocate_largest_remainder(total, &weights)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(actual, expected, "allocation mismatch: {name}");
+            // The property the schedule depends on: nothing is left behind.
+            assert_eq!(
+                actual.iter().sum::<i64>(),
+                total,
+                "allocation lost or invented units: {name}"
+            );
+        }
+
+        let milestone_cases = fixtures["milestoneAmounts"]
+            .as_array()
+            .expect("milestoneAmounts array");
+        assert!(milestone_cases.len() >= 5, "milestone fixtures too thin");
+        for case in milestone_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let value = case["valueMinor"].as_i64().unwrap();
+            let percents: Vec<i64> = case["percentsBp"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_i64().unwrap())
+                .collect();
+            let expected: Vec<i64> = case["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_i64().unwrap())
+                .collect();
+            let actual = milestone_amounts(value, &percents)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(actual, expected, "milestone amount mismatch: {name}");
+        }
+
+        let payout_cases = fixtures["payoutSchedules"]
+            .as_array()
+            .expect("payoutSchedules array");
+        assert!(payout_cases.len() >= 3, "payout schedule fixtures too thin");
+        for case in payout_cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let agreed = case["agreedMinor"].as_i64().unwrap();
+            let paid_out = case["personPaidMinor"].as_i64().unwrap();
+            let stages = case["expectedStages"].as_array().unwrap();
+            let weights: Vec<i64> = stages
+                .iter()
+                .map(|stage| stage["weightMinor"].as_i64().unwrap())
+                .collect();
+            let amounts = allocate_largest_remainder(agreed, &weights).unwrap();
+            let released: i64 = stages
+                .iter()
+                .enumerate()
+                .filter(|(_, stage)| {
+                    matches!(stage["status"].as_str(), Some("PAYABLE" | "PAID_OUT"))
+                })
+                .map(|(index, _)| amounts[index])
+                .sum();
+            assert_eq!(
+                released,
+                case["expectedReleasedMinor"].as_i64().unwrap(),
+                "released mismatch: {name}"
+            );
+            assert_eq!(
+                released.saturating_sub(paid_out).max(0),
+                case["expectedDueMinor"].as_i64().unwrap(),
+                "due mismatch: {name}"
+            );
+        }
+    }
+
+    /// A milestone contract splits the fee by the milestone plan, and a stage is
+    /// released only when the certificate that milestone generated is PAID.
+    #[test]
+    fn milestone_contracts_release_by_milestone_not_by_certificate_order() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            payout_fixture(&pool, 40_000).await;
+            let paid = add_certificate(&pool, 1, "MS-1", 50_000, "PAID").await;
+            let approved = add_certificate(&pool, 2, "MS-2", 50_000, "APPROVED").await;
+            // A 50/50 plan whose first milestone is linked to the paid
+            // certificate.
+            let milestones = format!(
+                r#"[{{"title":"A","percentBp":5000,"certificateId":{paid}}},
+                    {{"title":"B","percentBp":5000,"certificateId":{approved}}}]"#
+            );
+            sqlx::query(
+                "UPDATE contracts SET valuation_mode='MILESTONES', milestones=? WHERE id=1",
+            )
+            .bind(&milestones)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000).await.unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(released, 20_000, "only the paid milestone releases");
+        });
+    }
+
+    /// A corrupt milestone list must not silently fall through to the
+    /// certificate schedule: that would freeze a figure computed from entirely
+    /// different stages.
+    #[test]
+    fn a_corrupt_milestone_plan_is_refused_rather_than_ignored() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 40_000).await;
+            add_certificate(&pool, 1, "PC-1", 50_000, "PAID").await;
+            sqlx::query(
+                "UPDATE contracts SET valuation_mode='MILESTONES', milestones='{oops' WHERE id=1",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let error = cancel_assignment_transaction(&pool, assignment, "Called off")
+                .await
+                .unwrap_err();
+            assert_eq!(error, "MILESTONES_INVALID_JSON");
+            // Nothing frozen, assignment still live.
+            let (lifecycle, frozen) = assignment_row(&pool, assignment).await;
+            assert_eq!(lifecycle, "ACTIVE");
+            assert_eq!(frozen, None);
+        });
+    }
+
+    #[test]
+    fn milestone_shape_validation_matches_the_typescript_schema() {
+        for invalid in [
+            r#"[{"percentBp":10000}]"#,
+            r#"[{"title":"A","percentBp":10000,"done":"yes"}]"#,
+            r#"[{"title":"A","percentBp":10000,"stageId":1.5}]"#,
+            r#"[{"title":"A","percentBp":9007199254740992}]"#,
+            r#"[{"title":"A","percentBp":10000,"certificateId":1.5}]"#,
+        ] {
+            assert_eq!(
+                parse_milestones(Some(invalid)).unwrap_err(),
+                "MILESTONES_INVALID_SHAPE",
+                "accepted {invalid}"
+            );
+        }
+        assert_eq!(
+            parse_milestones(Some(
+                r#"[{"title":"A","percentBp":10000,"done":false,"stageId":null,"certificateId":null}]"#
+            ))
+            .unwrap(),
+            vec![(10_000, None)]
+        );
+    }
+
+    #[test]
+    fn cancellation_refuses_an_archived_project_without_freezing_zero() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 40_000).await;
+            sqlx::query("UPDATE projects SET archived_at=datetime('now') WHERE id=1")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                cancel_assignment_transaction(&pool, assignment, "Called off")
+                    .await
+                    .unwrap_err(),
+                "PROJECT_ARCHIVED"
+            );
+            assert_eq!(
+                assignment_row(&pool, assignment).await,
+                ("ACTIVE".into(), None)
+            );
         });
     }
 

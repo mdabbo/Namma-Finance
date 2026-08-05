@@ -441,19 +441,57 @@ describe("cancellation evidence is bounded and written under one guard", () => {
     expect(row?.earned_minor_at_cancellation).toBeNull();
   });
 
+  it("refuses cancellation after the project is archived", async () => {
+    const { projectId, assignmentId } = await workspace(40_000);
+    rawExec(`UPDATE projects SET archived_at=datetime('now') WHERE id=${projectId}`);
+
+    await expect(cancelAssignment(assignmentId, "Called off")).rejects.toThrow(
+      "PROJECT_ARCHIVED",
+    );
+    expect(rawOne(
+      `SELECT lifecycle_status, earned_minor_at_cancellation, cancellation_reason
+       FROM project_assignments WHERE id=${assignmentId}`,
+    )).toEqual({
+      lifecycle_status: "ACTIVE",
+      earned_minor_at_cancellation: null,
+      cancellation_reason: null,
+    });
+  });
+
   /**
-   * Pins the deliberate asymmetry with payment-driven certificate status, so a
-   * later reader sees it was decided rather than overlooked — and so moving the
-   * derivation into Rust is a visible change here rather than a silent one.
+   * The figure is derived, not received.
+   *
+   * It used to arrive as a command argument that Rust could only bound-check,
+   * which left the asymmetry with payment-driven certificate status: status was
+   * derived from evidence, this was asserted by the caller and then made final
+   * by migration 0004. The payout schedule is ported now, so the command takes
+   * no financial input at all — and if it ever gains one again, this fails.
    */
-  it("records that the derivation still lives in the caller, and what Rust checks instead", () => {
+  it("takes no financial figure from the caller", () => {
     const source = readFileSync(
       resolve(import.meta.dirname, "../src-tauri/src/lib.rs"),
       "utf8",
     );
-    const command = source.slice(source.indexOf("async fn cancel_assignment_transaction"));
-    expect(source).toContain("KNOWN LIMIT, deliberate");
-    expect(command).toContain("FROZEN_EARNED_OUT_OF_RANGE");
-    expect(command).toContain("ASSIGNMENT_ALREADY_CANCELLED");
+    const signature = source.slice(
+      source.indexOf("async fn cancel_assignment_atomic"),
+      source.indexOf("async fn cancel_assignment_transaction"),
+    );
+    expect(signature).not.toMatch(/earned_minor/);
+    expect(signature).toMatch(/assignment_id: i64/);
+    expect(signature).toMatch(/reason: String/);
+
+    const body = source.slice(source.indexOf("async fn cancel_assignment_transaction"));
+    // Derived inside the transaction that freezes it.
+    expect(body).toContain("assignment_released_minor(&mut tx");
+    expect(body).toContain("ASSIGNMENT_ALREADY_CANCELLED");
+
+    // And the caller no longer computes one for it.
+    const repository = readFileSync(
+      resolve(import.meta.dirname, "../src/repositories/people.ts"),
+      "utf8",
+    );
+    expect(repository).toMatch(
+      /"cancel_assignment_atomic",\s*\{ assignmentId: id, reason: trimmed \}/,
+    );
   });
 });

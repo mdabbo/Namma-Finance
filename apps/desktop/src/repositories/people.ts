@@ -209,34 +209,37 @@ export async function completeAssignment(id: number): Promise<void> {
  * required: removing a commitment is an accounting decision.
  */
 export function cancelAssignment(id: number, reason: string): Promise<void> {
-  // Serialised on the same global financial lock as payments, milestone
-  // reconciliation and number reservation. The frozen figure is derived from a
-  // workspace-wide read and is final once written, so a team payment or a
-  // certificate collection committing between that read and the write would
-  // freeze a figure that never matched the evidence. The lock closes that
-  // window within this process; `cancel_assignment_atomic` owns the write's
-  // transaction and re-checks the assignment inside it; migration 0004 makes
-  // the result tamper-evident.
+  // The frozen figure is DERIVED by `cancel_assignment_atomic`, from stored
+  // evidence, inside the transaction that writes it — nothing is sent from here
+  // for Rust to trust. It used to be computed in this process and passed as an
+  // argument that Rust could only bound-check, so a wrong value could look
+  // plausible and migration 0004 would then make it final.
   //
-  // The derivation itself deliberately stays here rather than moving to Rust —
-  // see the command's own note for why, and what it validates instead.
+  // The lock still serialises this against payments and collections in the same
+  // process, which keeps the read model consistent for whatever the UI shows
+  // next.
   return withLock(() => cancelAssignmentUnlocked(id, reason));
 }
 
 async function cancelAssignmentUnlocked(id: number, reason: string): Promise<void> {
   const trimmed = reason.trim();
   if (!trimmed) throw new Error("CANCELLATION_REASON_REQUIRED");
-  const earnedMinor = await assignmentEarnedMinor(id);
   await atomicCommand<void>(
     "cancel_assignment_atomic",
-    { assignmentId: id, reason: trimmed, earnedMinor },
+    { assignmentId: id, reason: trimmed },
     async () => {
-      const assignment = await selectOne<{ agreedMinor: number; lifecycleStatus: string }>(
-        "SELECT agreed_minor AS agreedMinor, lifecycle_status AS lifecycleStatus FROM project_assignments WHERE id=$1",
+      const assignment = await selectOne<{ agreedMinor: number; lifecycleStatus: string; projectArchivedAt: string | null }>(
+        `SELECT a.agreed_minor AS agreedMinor, a.lifecycle_status AS lifecycleStatus,
+                p.archived_at AS projectArchivedAt
+         FROM project_assignments a JOIN projects p ON p.id=a.project_id WHERE a.id=$1`,
         [id],
       );
       if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
       if (assignment.lifecycleStatus === "CANCELLED") throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+      if (assignment.projectArchivedAt !== null) throw new Error("PROJECT_ARCHIVED");
+      // The double derives it the same way the command does, from the same
+      // evidence — `computeTeamPayout` is the reference the Rust port mirrors.
+      const earnedMinor = await assignmentEarnedMinor(id);
       if (earnedMinor < 0 || earnedMinor > assignment.agreedMinor) throw new Error("FROZEN_EARNED_OUT_OF_RANGE");
       const result = await execute(
         `UPDATE project_assignments SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),

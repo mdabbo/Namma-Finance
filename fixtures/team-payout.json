@@ -1,0 +1,292 @@
+{
+  "_comment": "Shared by allocate (packages/core/src/money/money.ts) and allocate_largest_remainder (apps/desktop/src-tauri/src/lib.rs). Both engines assert these; the payout schedule splits an agreed fee by exactly this rule.",
+  "allocate": [
+    {
+      "name": "even split",
+      "total": 100,
+      "weights": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "expected": [
+        25,
+        25,
+        25,
+        25
+      ]
+    },
+    {
+      "name": "leftover goes to the largest remainders",
+      "total": 100,
+      "weights": [
+        1,
+        1,
+        1
+      ],
+      "expected": [
+        34,
+        33,
+        33
+      ]
+    },
+    {
+      "name": "ties break by index, not by luck",
+      "total": 10,
+      "weights": [
+        1,
+        1,
+        1
+      ],
+      "expected": [
+        4,
+        3,
+        3
+      ]
+    },
+    {
+      "name": "weighted split",
+      "total": 1000,
+      "weights": [
+        50,
+        30,
+        20
+      ],
+      "expected": [
+        500,
+        300,
+        200
+      ]
+    },
+    {
+      "name": "uneven weights still sum to the total",
+      "total": 1000,
+      "weights": [
+        333,
+        333,
+        334
+      ],
+      "expected": [
+        333,
+        333,
+        334
+      ]
+    },
+    {
+      "name": "single stage takes everything",
+      "total": 777,
+      "weights": [
+        5
+      ],
+      "expected": [
+        777
+      ]
+    },
+    {
+      "name": "zero weights split evenly",
+      "total": 9,
+      "weights": [
+        0,
+        0,
+        0
+      ],
+      "expected": [
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "name": "a zero weight beside real ones gets nothing",
+      "total": 100,
+      "weights": [
+        0,
+        1,
+        1
+      ],
+      "expected": [
+        0,
+        50,
+        50
+      ]
+    },
+    {
+      "name": "nothing to split",
+      "total": 0,
+      "weights": [
+        7,
+        3
+      ],
+      "expected": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "one piastre across three stages",
+      "total": 1,
+      "weights": [
+        1,
+        1,
+        1
+      ],
+      "expected": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "large amounts stay exact",
+      "total": 100000000,
+      "weights": [
+        1,
+        2,
+        3
+      ],
+      "expected": [
+        16666667,
+        33333333,
+        50000000
+      ]
+    },
+    {
+      "name": "negative total mirrors the positive split",
+      "total": -100,
+      "weights": [
+        1,
+        1,
+        1
+      ],
+      "expected": [
+        -34,
+        -33,
+        -33
+      ]
+    }
+  ],
+  "milestoneAmounts": [
+    {
+      "name": "a complete plan sums to the contract value",
+      "valueMinor": 1000,
+      "percentsBp": [
+        3333,
+        3333,
+        3334
+      ],
+      "expected": [
+        333,
+        333,
+        334
+      ]
+    },
+    {
+      "name": "a complete plan of equal thirds still sums exactly",
+      "valueMinor": 100,
+      "percentsBp": [
+        3334,
+        3333,
+        3333
+      ],
+      "expected": [
+        34,
+        33,
+        33
+      ]
+    },
+    {
+      "name": "a partial plan is a preview, each line independent",
+      "valueMinor": 1000,
+      "percentsBp": [
+        2500,
+        2500
+      ],
+      "expected": [
+        250,
+        250
+      ]
+    },
+    {
+      "name": "an over-100% plan is also treated as a preview",
+      "valueMinor": 1000,
+      "percentsBp": [
+        6000,
+        6000
+      ],
+      "expected": [
+        600,
+        600
+      ]
+    },
+    {
+      "name": "no milestones, no amounts",
+      "valueMinor": 1000,
+      "percentsBp": [],
+      "expected": []
+    }
+  ],
+  "payoutSchedules": [
+    {
+      "name": "lump sum keeps draft weight and releases paid certificate only",
+      "agreedMinor": 40000,
+      "personPaidMinor": 5000,
+      "contracts": [{
+        "id": 1, "number": "C-1", "valueMinor": 100000, "valuationMode": "LUMP_SUM",
+        "milestones": null,
+        "certificates": [
+          { "id": 1, "seq": 1, "number": "PC-1", "status": "PAID", "baseMinor": 50000 },
+          { "id": 2, "seq": 2, "number": "PC-2", "status": "DRAFT", "baseMinor": 50000 }
+        ]
+      }],
+      "expectedStages": [
+        { "weightMinor": 50000, "amountMinor": 20000, "status": "PAYABLE" },
+        { "weightMinor": 50000, "amountMinor": 20000, "status": "AWAITING_COLLECTION" }
+      ],
+      "expectedReleasedMinor": 20000,
+      "expectedDueMinor": 15000
+    },
+    {
+      "name": "milestones release by linked certificate",
+      "agreedMinor": 10001,
+      "personPaidMinor": 0,
+      "contracts": [{
+        "id": 2, "number": "C-MS", "valueMinor": 100000, "valuationMode": "MILESTONES",
+        "milestones": [
+          { "title": "Concept", "percentBp": 3334, "certificateId": 12 },
+          { "title": "IFC", "percentBp": 3333, "certificateId": 11 },
+          { "title": "Support", "percentBp": 3333, "certificateId": null }
+        ],
+        "certificates": [
+          { "id": 11, "seq": 1, "number": "MS-1", "status": "APPROVED", "baseMinor": 33330 },
+          { "id": 12, "seq": 2, "number": "MS-2", "status": "PAID", "baseMinor": 33340 }
+        ]
+      }],
+      "expectedStages": [
+        { "weightMinor": 33340, "amountMinor": 3335, "status": "PAYABLE" },
+        { "weightMinor": 33330, "amountMinor": 3333, "status": "AWAITING_COLLECTION" },
+        { "weightMinor": 33330, "amountMinor": 3333, "status": "PENDING" }
+      ],
+      "expectedReleasedMinor": 3335,
+      "expectedDueMinor": 3335
+    },
+    {
+      "name": "multiple contracts are ordered by id before allocation",
+      "agreedMinor": 7,
+      "personPaidMinor": 1,
+      "contracts": [
+        { "id": 20, "number": "C-20", "valueMinor": 1, "valuationMode": "LUMP_SUM", "milestones": null,
+          "certificates": [{ "id": 20, "seq": 1, "number": "B", "status": "PAID", "baseMinor": 1 }] },
+        { "id": 10, "number": "C-10", "valueMinor": 2, "valuationMode": "LUMP_SUM", "milestones": null,
+          "certificates": [{ "id": 10, "seq": 1, "number": "A", "status": "PAID", "baseMinor": 1 }] }
+      ],
+      "expectedStages": [
+        { "weightMinor": 1, "amountMinor": 3, "status": "PAYABLE" },
+        { "weightMinor": 1, "amountMinor": 2, "status": "PENDING" },
+        { "weightMinor": 1, "amountMinor": 2, "status": "PAYABLE" }
+      ],
+      "expectedReleasedMinor": 5,
+      "expectedDueMinor": 4
+    }
+  ]
+}

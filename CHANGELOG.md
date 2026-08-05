@@ -135,18 +135,24 @@ deleted and recreated** — see below.
   now runs `tauri build`, which compiles the Rust binary and produces the NSIS
   installer, and uploads the installers themselves rather than only the log
   saying a build happened.
-- **Assignment cancellation is written under one guard.** The frozen earned
+- **Rust derives the figure it freezes at cancellation.** The frozen earned
   figure decides an assignment's committed cost and what is still owed, and
   migration 0004 makes it final once written — so a wrong figure is permanent.
-  `cancel_assignment_atomic` now owns the write's transaction, re-reads the
-  assignment inside it, and refuses a figure outside `0..=agreed fee`: released
-  value is a subset of an allocation of the agreed fee, so anything outside that
-  range is provably not a real figure. The derivation itself deliberately stays
-  in `computeTeamPayout`; moving it into Rust means porting largest-remainder
-  allocation, milestone parsing and the exact certificate selection, and the two
-  layers currently disagree about voided and archived certificates — a naive
-  port would freeze a figure that contradicts every other screen and then make
-  it immutable. That port belongs with its own shared fixture.
+  It used to arrive as a command argument that Rust could only bound-check to
+  `0..=agreed fee`, which a wrong-but-plausible value passes.
+  `cancel_assignment_atomic` now takes no financial input at all: it recomputes
+  the released value from stored evidence inside the transaction that writes it,
+  so the read that decides the figure and the write that freezes it cannot be
+  separated by a concurrent payment or collection.
+  That required porting `computeTeamPayout`'s schedule — largest-remainder
+  allocation, milestone parsing, the uncertified remainder stage — and
+  `fixtures/team-payout.json` is asserted by both engines so they cannot drift.
+  One trap the port had to clear: Rust zeroed a draft certificate's certified
+  base, but the payout weights a stage by every certificate's base, drafts
+  included, so a contract holding a draft would have produced different stage
+  weights in each engine. Cancellation also refuses archived projects instead
+  of freezing a misleading zero, and Rust now applies the same milestone shape
+  and safe-integer validation as the shared TypeScript schema.
 - **The RTL gate is geometry, not pixels.** Whether the Arabic layout actually
   mirrors was left to a full-page screenshot whose tolerance had to be raised to
   8% to absorb font metrics differing between machines — a budget large enough

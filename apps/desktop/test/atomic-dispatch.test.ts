@@ -130,7 +130,7 @@ describe("every multi-statement write dispatches to its Rust command", () => {
     expect(invoke).toHaveBeenCalledWith("finalize_pending_backup_metadata_atomic", {});
   });
 
-  it("assignment cancellation hands Rust the figure it must bound", async () => {
+  it("assignment cancellation sends Rust no figure to trust", async () => {
     const { cancelAssignment } = await import("../src/repositories/people");
     invoke.mockResolvedValue(undefined);
 
@@ -139,14 +139,13 @@ describe("every multi-statement write dispatches to its Rust command", () => {
     const { atomicCommand } = await import("../src/lib/atomic");
     await atomicCommand<void>(
       "cancel_assignment_atomic",
-      { assignmentId: 7, reason: "Called off", earnedMinor: 1_500 },
+      { assignmentId: 7, reason: "Called off" },
       async () => undefined,
     );
 
     expect(invoke).toHaveBeenCalledWith("cancel_assignment_atomic", {
       assignmentId: 7,
       reason: "Called off",
-      earnedMinor: 1_500,
     });
     expect(typeof cancelAssignment).toBe("function");
   });
