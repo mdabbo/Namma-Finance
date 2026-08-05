@@ -1659,15 +1659,23 @@ async fn import_rows_atomic(
     rows: Vec<serde_json::Value>,
     project_code_prefix: String,
 ) -> Result<i64, String> {
-    let instances = db_instances.0.read().await;
-    let pool = match instances.get("sqlite:mep-finance.db") {
-        Some(DbPool::Sqlite(pool)) => pool,
-        _ => return Err("database is not loaded".into()),
-    };
+    let pool = application_database_pool(&db_instances).await?;
+    import_rows_transaction(&pool, &entity, &rows, &project_code_prefix).await
+}
+
+async fn import_rows_transaction(
+    pool: &sqlx::SqlitePool,
+    entity: &str,
+    rows: &[serde_json::Value],
+    project_code_prefix: &str,
+) -> Result<i64, String> {
     let mut tx = begin_immediate(pool).await?;
+    // Certificates created by this import, so their collection status can be
+    // derived from evidence inside the same transaction that inserts them.
+    let mut imported_certificates: Vec<i64> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let fail = |message: &str| format!("row {}: {message}", index + 2);
-        match entity.as_str() {
+        match entity {
             "clients" => {
                 let name = json_text(row, "name").ok_or_else(|| fail("client name is required"))?;
                 sqlx::query("INSERT INTO clients (name,company,phone,email,tax_number,address,notes) VALUES (?,?,?,?,?,?,?)")
@@ -1797,10 +1805,11 @@ async fn import_rows_atomic(
                     .bind(contract_id).fetch_one(&mut *tx).await.map_err(|e|fail(&e.to_string()))?;
                 let date =
                     json_text(row, "date").ok_or_else(|| fail("certificate date is required"))?;
-                sqlx::query("INSERT INTO payment_certificates (contract_id,seq,number,date,submission_date,gross_minor,discount_minor,status) VALUES (?,?,?,?,?,?,?,?)")
+                let inserted = sqlx::query("INSERT INTO payment_certificates (contract_id,seq,number,date,submission_date,gross_minor,discount_minor,status) VALUES (?,?,?,?,?,?,?,?)")
                     .bind(contract_id).bind(seq).bind(json_text(row,"number").ok_or_else(||fail("certificate number is required"))?).bind(&date)
                     .bind(json_text(row,"submissionDate").unwrap_or_else(|| date.clone())).bind(json_i64(row,"gross").ok_or_else(||fail("gross amount is required"))?)
                     .bind(json_i64(row,"discount").unwrap_or(0)).bind(status).execute(&mut *tx).await.map_err(|e|fail(&e.to_string()))?;
+                imported_certificates.push(inserted.last_insert_rowid());
             }
             "payments" => {
                 let contract_number = json_text(row, "contractNumber")
@@ -1828,6 +1837,21 @@ async fn import_rows_atomic(
             }
             _ => return Err("unsupported import entity".into()),
         }
+    }
+    // Status follows the evidence just written, for the certificates this
+    // import created and nothing else.
+    //
+    // An import never creates an allocation — imported cash stays explicitly
+    // unallocated until someone links it — so the only status this can settle is
+    // a certificate whose payable is already fully consumed by advance recovery,
+    // retention and withholding. Leaving it out would import that certificate as
+    // an open claim while every identical one elsewhere reads as settled.
+    //
+    // Scoped rather than global: importing clients or projects must not sweep
+    // every certificate in the database, which would attribute unrelated
+    // corrections to an import that did not cause them.
+    if !imported_certificates.is_empty() {
+        reconcile_certificates(&mut tx, &imported_certificates).await?;
     }
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(rows.len() as i64)
@@ -4878,6 +4902,185 @@ mod financial_transaction_tests {
             .await
             .unwrap();
             assert_eq!(baselines, 0, "the baseline write must roll back too");
+        });
+    }
+
+    /// An import derives the status of the certificates it creates, inside the
+    /// transaction that creates them — and touches nothing else.
+    ///
+    /// Previously the wizard called a whole-database reconciliation after the
+    /// import had already committed. That was wrong twice over: unscoped, so
+    /// importing clients swept every certificate in the file and attributed any
+    /// correction to an import that did not cause it; and outside the boundary,
+    /// so a crash between the two left imported rows with a status that had
+    /// never been derived.
+    #[test]
+    fn importing_certificates_settles_only_what_it_created() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::raw_sql(
+                "INSERT INTO clients(name) VALUES('Import Co');
+                 INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-2026-001','Imported',1,'EGP',1000000);
+                 -- Advance equals the contract value, so proportional recovery
+                 -- consumes the whole base: an imported certificate has nothing
+                 -- collectible and is settled on arrival.
+                 INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                     withholding_bp,advance_minor,advance_recovery_method,payment_terms_days)
+                 VALUES(1,'C-ADV',100000,'2026-01-01',0,0,0,100000,'PROPORTIONAL',30);
+                 INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                     withholding_bp,advance_minor,advance_recovery_method,payment_terms_days)
+                 VALUES(1,'C-PLAIN',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30);
+                 INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                     contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                     advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+                 VALUES(1,1,'2026-01-01',100000,0,0,0,100000,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+                 INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                     contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                     advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+                 VALUES(2,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+                 -- A pre-existing certificate on the plain contract, deliberately
+                 -- left in a state reconciliation WOULD change if it were swept.
+                 INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status)
+                 VALUES(2,1,'PRE-1','2026-01-01',40000,'PAID');",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let rows = vec![serde_json::json!({
+                "contractNumber": "C-ADV",
+                "number": "IMP-1",
+                "date": "2026-02-01",
+                "gross": 40000,
+                "status": "APPROVED"
+            })];
+            let imported = import_rows_transaction(&pool, "certificates", &rows, "PRJ")
+                .await
+                .unwrap();
+            assert_eq!(imported, 1);
+
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE number='IMP-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                status, "PAID",
+                "nothing is collectible on a fully-advanced contract, so the claim is closed"
+            );
+
+            let untouched: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE number='PRE-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            // Left PAID with no allocations backing it. A global sweep would
+            // reopen it to APPROVED; surviving untouched is the proof that
+            // reconciliation is scoped to the rows this import created.
+            assert_eq!(
+                untouched, "PAID",
+                "an unrelated certificate must not be corrected by someone else's import"
+            );
+        });
+    }
+
+    #[test]
+    fn importing_clients_reconciles_nothing() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::raw_sql(
+                "INSERT INTO clients(name) VALUES('Existing');
+                 INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-2026-002','P',1,'EGP',1000000);
+                 INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                     withholding_bp,advance_minor,advance_recovery_method,payment_terms_days)
+                 VALUES(1,'C-1',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30);
+                 INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                     contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                     advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+                 VALUES(1,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+                 -- Status disagrees with its evidence. A global sweep would
+                 -- silently correct it and report the change as part of an
+                 -- unrelated client import.
+                 INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status)
+                 VALUES(1,1,'STALE','2026-01-01',40000,'PAID');",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let rows = vec![serde_json::json!({ "name": "Imported Client" })];
+            import_rows_transaction(&pool, "clients", &rows, "PRJ")
+                .await
+                .unwrap();
+
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE number='STALE'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                status, "PAID",
+                "an import of clients must not touch certificate status at all"
+            );
+        });
+    }
+
+    /// Imported cash stays explicitly unallocated, so importing payments cannot
+    /// settle anything — the reconciliation it triggers has nothing to act on.
+    #[test]
+    fn importing_payments_creates_no_allocations_and_settles_nothing() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::raw_sql(
+                "INSERT INTO clients(name) VALUES('Cash Co');
+                 INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-2026-003','P',1,'EGP',1000000);
+                 INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                     withholding_bp,advance_minor,advance_recovery_method,payment_terms_days)
+                 VALUES(1,'C-1',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30);
+                 INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                     contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                     advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+                 VALUES(1,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+                 INSERT INTO payment_certificates(contract_id,seq,number,date,gross_minor,status)
+                 VALUES(1,1,'OPEN-1','2026-01-01',40000,'APPROVED');",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            let rows = vec![serde_json::json!({
+                "contractNumber": "C-1",
+                "number": "PAY-1",
+                "date": "2026-02-01",
+                "amount": 40000,
+                "method": "CASH"
+            })];
+            import_rows_transaction(&pool, "payments", &rows, "PRJ")
+                .await
+                .unwrap();
+
+            let allocations: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM payment_certificate_allocations")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                allocations, 0,
+                "imported cash is not linked to a certificate"
+            );
+
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE number='OPEN-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                status, "APPROVED",
+                "cash that settles nothing must not close a claim"
+            );
         });
     }
 

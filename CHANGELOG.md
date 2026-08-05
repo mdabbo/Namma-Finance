@@ -173,6 +173,18 @@ deleted and recreated** — see below.
   because a wide one on audited financial code trains everyone to ignore
   warnings. It immediately found dead imports and, in this branch's own test
   suite, a regex whose escaping made a negative assertion vacuous.
+- **An import derives the status of what it imported, and nothing else.** The
+  wizard used to call a whole-database reconciliation after the import had
+  already committed. That was wrong twice: unscoped, so importing clients swept
+  every certificate in the file and attributed any correction to an import that
+  did not cause it; and outside the boundary, so a crash between the two left
+  imported rows carrying a status that had never been derived. Reconciliation
+  now runs inside the import's own transaction, over the certificates it
+  created. An import creates no allocations — imported cash stays explicitly
+  unallocated until someone links it — so the only claim this can close is one
+  whose payable is already fully consumed by advance recovery, retention and
+  withholding, which would otherwise arrive as an open claim while every
+  identical certificate elsewhere reads as settled.
 - **Rust owns payment-driven certificate status.** The payment commands no
   longer accept a status derived by the frontend; create, update and void
   recalculate the affected certificates from stored evidence inside the same

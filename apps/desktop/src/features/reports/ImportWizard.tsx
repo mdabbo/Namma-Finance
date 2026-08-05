@@ -181,8 +181,6 @@ export function ImportWizard() {
       imported = 0;
       errors.push(error instanceof Error ? error.message : String(error));
     }
-    const { reconcileCertificateStatuses } = await import("../../repositories/payments");
-    await reconcileCertificateStatuses();
     await qc.invalidateQueries();
     setResult({ imported, errors });
     setRunning(false);
@@ -190,6 +188,7 @@ export function ImportWizard() {
 
     async function importRowsWithinTransaction(): Promise<number> {
     let count = 0;
+    const importedCertificates: number[] = [];
     for (let i = 0; i < parsedRows.length; i++) {
       const { values, errors: rowErrors } = parsedRows[i]!;
       if (rowErrors.length > 0) continue;
@@ -231,11 +230,12 @@ export function ImportWizard() {
           if (requestedStatus === "PAID") throw new Error(t("importer.paidRequiresPayment"));
           const status = CERT_STATUSES.includes(requestedStatus) ? requestedStatus : "APPROVED";
           const seq = await nextCertificateSeq(contract.id);
-          await execute(
+          const inserted = await execute(
             `INSERT INTO payment_certificates (contract_id, seq, number, date, submission_date, gross_minor, discount_minor, status)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
             [contract.id, seq, values.number, values.date, values.submissionDate ?? values.date, values.gross, values.discount ?? 0, status],
           );
+          if (inserted.lastInsertId) importedCertificates.push(inserted.lastInsertId);
         } else if (entity === "payments") {
           const contract = await selectOne<{ id: number }>("SELECT id FROM contracts WHERE number = $1", [values.contractNumber]);
           if (!contract) throw new Error(`contract ${values.contractNumber}?`);
@@ -251,6 +251,13 @@ export function ImportWizard() {
       } catch (err) {
         throw new Error(`Row ${i + 2}: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+    // Matches the Rust command: an import creates no allocations, so the only
+    // status this can settle is a certificate whose payable is already fully
+    // consumed. Scoped to the rows just inserted, inside the same transaction.
+    if (importedCertificates.length > 0) {
+      const { reconcileCertificateStatuses } = await import("../../repositories/payments");
+      await reconcileCertificateStatuses(importedCertificates);
     }
     return count;
     }
