@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AlarmClock, CalendarClock, CircleDollarSign } from "lucide-react";
@@ -16,7 +16,14 @@ import { Badge, Button, PageHeader } from "../../components/ui";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
-import { financeContractInputs, inProjectScope, parseFinanceScope } from "./financeSectionModel";
+import {
+  applyFinanceScopeParams,
+  financeContractInputs,
+  inProjectScope,
+  normalizeLegacyProjectParam,
+  parseFinanceScope,
+  resetFinanceScopeParams,
+} from "./financeSectionModel";
 import { FinanceScopeChips, type FinanceScopeChip } from "./FinanceScopeChips";
 
 export function ReceivablesPage() {
@@ -29,6 +36,12 @@ export function ReceivablesPage() {
   const financials = workspace.data;
   const paymentMutations = usePaymentMutations();
   const [paying, setPaying] = useState<PaymentDefaults | null>(null);
+
+  // Normalise a legacy `?project=` bookmark onto the canonical parameter once.
+  useEffect(() => {
+    const normalized = normalizeLegacyProjectParam(searchParams);
+    if (normalized) setSearchParams(normalized, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const receivables = useMemo(
     () => (financials ? selectOpenReceivables(financeContractInputs(financials)) : []),
@@ -217,24 +230,17 @@ export function ReceivablesPage() {
         initialSort={{ key: "dueDate", dir: "asc" }}
         exportName="receivables"
         viewKey="finance-receivables"
+        // One canonical project parameter: `projectId`, the same key
+        // parseFinanceScope reads. See financeSectionModel for why.
         filters={{
-          project: scope.projectId === null ? "" : String(scope.projectId),
+          projectId: scope.projectId === null ? "" : String(scope.projectId),
           view: scope.view ?? "",
         }}
         onApplyFilters={(next) => {
-          const params = new URLSearchParams(searchParams);
-          const project = Number(next.project);
-          if (Number.isSafeInteger(project) && project > 0) params.set("project", String(project));
-          else params.delete("project");
-          if (next.view === "overdue") params.set("view", next.view);
-          else params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(applyFinanceScopeParams(searchParams, "receivables", next), { replace: true });
         }}
         onResetFilters={() => {
-          const params = new URLSearchParams(searchParams);
-          params.delete("project");
-          params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
         }}
         toolbar={<FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />}
       />

@@ -15,14 +15,14 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import type { SavedViewFilters } from "../../lib/savedViews";
-import { expenseSectionKpis, parseFinanceScope } from "../finance/financeSectionModel";
+import { expenseSectionKpis, parseFinanceScope, resetFinanceScopeParams } from "../finance/financeSectionModel";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function ExpensesPage() {
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
   const base = useBaseMoney();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: expenses = [], isLoading } = useExpenses();
   const { data: categories = [] } = useCategories();
   const { data: financials } = useWorkspaceFinancials();
@@ -148,16 +148,20 @@ export function ExpensesPage() {
         emptyMessage={t("common.empty")}
         exportName="expenses"
         viewKey="expenses"
+        // `projectId` is the finance-wide saved-view key for project scope.
+        // Expenses keeps the scope in local state rather than the URL (its
+        // project control also offers "overhead", which is not a project id),
+        // but the key name stays the same across the finance section.
         filters={{
           category: categoryFilter ? String(categoryFilter) : "",
-          project: projectFilter === "" ? "" : String(projectFilter),
+          projectId: projectFilter === "" ? "" : String(projectFilter),
         }}
         onApplyFilters={(next: SavedViewFilters) => {
           const category = Number(next.category);
           setCategoryFilter(
             Number.isSafeInteger(category) && categories.some((c) => c.id === category) ? category : 0,
           );
-          const project = next.project ?? "";
+          const project = next.projectId ?? "";
           if (project === "overhead") setProjectFilter("overhead");
           else {
             const id = Number(project);
@@ -167,6 +171,8 @@ export function ExpensesPage() {
         onResetFilters={() => {
           setCategoryFilter(0);
           setProjectFilter("");
+          // The seeding parameter must go too, or a reset re-seeds on remount.
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
         }}
         toolbar={
           <>

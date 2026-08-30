@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { CalendarDays, Coins, Plus, Wallet } from "lucide-react";
@@ -12,7 +12,14 @@ import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import type { SavedViewFilters } from "../../lib/savedViews";
-import { inProjectScope, parseFinanceScope, paymentSectionKpis } from "../finance/financeSectionModel";
+import {
+  applyFinanceScopeParams,
+  inProjectScope,
+  normalizeLegacyProjectParam,
+  parseFinanceScope,
+  paymentSectionKpis,
+  resetFinanceScopeParams,
+} from "../finance/financeSectionModel";
 import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { PaymentForm } from "./PaymentForm";
 
@@ -33,6 +40,14 @@ export function PaymentsPage() {
   const [kindFilter, setKindFilter] = useState("");
   const [editing, setEditing] = useState<PaymentListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<PaymentListItem | null>(null);
+
+  // An old bookmark carrying `?project=` is rewritten onto the canonical
+  // parameter once, replacing the entry so Back does not return to the legacy
+  // URL and re-trigger the rewrite.
+  useEffect(() => {
+    const normalized = normalizeLegacyProjectParam(searchParams);
+    if (normalized) setSearchParams(normalized, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   function clearScopeParam(name: string) {
     const next = new URLSearchParams(searchParams);
@@ -164,31 +179,27 @@ export function PaymentsPage() {
         emptyMessage={t("common.empty")}
         exportName="payments"
         viewKey="payments"
+        // `projectId` is the one URL parameter for project scope — the same one
+        // parseFinanceScope reads and the dashboard and project links write.
+        // Saved views used to store and restore `project`, which nothing read:
+        // the view reported "applied" while the list stayed unscoped, and reset
+        // deleted a parameter that was never set while leaving the real one.
         filters={{
           kind: kindFilter,
-          project: scope.projectId === null ? "" : String(scope.projectId),
+          projectId: scope.projectId === null ? "" : String(scope.projectId),
           voided: includeVoided ? "1" : "",
-          view: searchParams.get("view") ?? "",
+          view: scope.view ?? "",
         }}
         onApplyFilters={(next: SavedViewFilters) => {
           const kind = next.kind ?? "";
           setKindFilter(PAYMENT_KINDS.includes(kind) ? kind : "");
           setIncludeVoided(next.voided === "1");
-          const params = new URLSearchParams(searchParams);
-          const project = Number(next.project);
-          if (Number.isSafeInteger(project) && project > 0) params.set("project", String(project));
-          else params.delete("project");
-          if (next.view === "unallocated") params.set("view", next.view);
-          else params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(applyFinanceScopeParams(searchParams, "payments", next), { replace: true });
         }}
         onResetFilters={() => {
           setKindFilter("");
           setIncludeVoided(false);
-          const params = new URLSearchParams(searchParams);
-          params.delete("project");
-          params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
         }}
         toolbar={<>
           <Select className="!w-48" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>

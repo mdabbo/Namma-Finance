@@ -45,6 +45,75 @@ export function inProjectScope(rowProjectId: number | null, projectId: number | 
   return projectId === null || rowProjectId === projectId;
 }
 
+/** The canonical project-scope parameter. There is deliberately only one. */
+export const FINANCE_PROJECT_PARAM = "projectId";
+
+/**
+ * Saved-view filter keys the finance lists put in the URL, so applying and
+ * resetting a view touch exactly the parameters the page actually reads.
+ *
+ * Saved views used to write `project` while every reader used `projectId`.
+ * Nothing consumed the value, so a restored view reported "applied" over an
+ * unscoped list, and reset removed `project` — which was never set — while
+ * leaving a real `projectId` in place. One key, written and read by the same
+ * name, is what makes the applied state truthful.
+ */
+export function applyFinanceScopeParams(
+  current: URLSearchParams,
+  list: FinanceListId,
+  filters: Readonly<Record<string, string | undefined>>,
+): URLSearchParams {
+  const params = new URLSearchParams(current);
+  const requested = Number(filters[FINANCE_PROJECT_PARAM]);
+  if (Number.isSafeInteger(requested) && requested > 0) {
+    params.set(FINANCE_PROJECT_PARAM, String(requested));
+  } else {
+    params.delete(FINANCE_PROJECT_PARAM);
+  }
+  const allowed: readonly string[] = FINANCE_ATTENTION_VIEWS[list];
+  const view = filters.view ?? "";
+  if (allowed.includes(view)) params.set("view", view);
+  else params.delete("view");
+  return params;
+}
+
+/**
+ * Clear every URL-driven filter this page owns: the project scope, the
+ * attention view, and the legacy `project` key so a stale link cannot leave a
+ * parameter behind that outlives the reset.
+ */
+export function resetFinanceScopeParams(current: URLSearchParams): URLSearchParams {
+  const params = new URLSearchParams(current);
+  params.delete(FINANCE_PROJECT_PARAM);
+  params.delete("view");
+  params.delete(LEGACY_FINANCE_PROJECT_PARAM);
+  return params;
+}
+
+/**
+ * The pre-0.7.0 parameter name. It is read ONCE, to normalise an old bookmark
+ * onto the canonical key — never written, so there is a single active contract.
+ */
+export const LEGACY_FINANCE_PROJECT_PARAM = "project";
+
+/**
+ * If a URL still carries the legacy `project` parameter, return the params
+ * rewritten onto `projectId`; otherwise `null` (nothing to migrate). An
+ * unusable legacy value is dropped rather than carried forward, so an invalid
+ * id degrades to the unfiltered list.
+ */
+export function normalizeLegacyProjectParam(current: URLSearchParams): URLSearchParams | null {
+  const legacy = current.get(LEGACY_FINANCE_PROJECT_PARAM);
+  if (legacy === null) return null;
+  const params = new URLSearchParams(current);
+  params.delete(LEGACY_FINANCE_PROJECT_PARAM);
+  const id = Number(legacy);
+  if (!params.has(FINANCE_PROJECT_PARAM) && /^\d+$/.test(legacy) && Number.isSafeInteger(id) && id > 0) {
+    params.set(FINANCE_PROJECT_PARAM, String(id));
+  }
+  return params;
+}
+
 /**
  * Pair each live contract state with its project's FX context so the core
  * receivables selectors can value certificates at their historical terms.

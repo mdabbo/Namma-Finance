@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, FileCheck2, FileDown, Hourglass, Plus } from "lucide-react";
@@ -14,7 +14,14 @@ import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import type { SavedViewFilters } from "../../lib/savedViews";
 import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { useBaseMoney } from "../../lib/baseCurrency";
-import { certificateSectionKpis, inProjectScope, parseFinanceScope } from "../finance/financeSectionModel";
+import {
+  applyFinanceScopeParams,
+  certificateSectionKpis,
+  inProjectScope,
+  normalizeLegacyProjectParam,
+  parseFinanceScope,
+  resetFinanceScopeParams,
+} from "../finance/financeSectionModel";
 import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { usePaymentMutations } from "../../repositories/payments";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
@@ -33,6 +40,12 @@ export function CertificatesPage() {
   const { data: certificates = [], isLoading } = useCertificates();
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useCertificateMutations();
+
+  // Normalise a legacy `?project=` bookmark onto the canonical parameter once.
+  useEffect(() => {
+    const normalized = normalizeLegacyProjectParam(searchParams);
+    if (normalized) setSearchParams(normalized, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   function clearScopeParam(name: string) {
     const next = new URLSearchParams(searchParams);
@@ -246,29 +259,22 @@ export function CertificatesPage() {
         emptyMessage={t("common.empty")}
         exportName="certificates"
         viewKey="certificates"
+        // One canonical project parameter: `projectId`, the same key
+        // parseFinanceScope reads. See financeSectionModel for why.
         filters={{
           status: statusFilter,
-          project: scope.projectId === null ? "" : String(scope.projectId),
+          projectId: scope.projectId === null ? "" : String(scope.projectId),
           view: attentionView ?? "",
         }}
         onApplyFilters={(next: SavedViewFilters) => {
           const status = next.status ?? "";
           setStatusFilter(CERTIFICATE_STATUSES.includes(status as CertificateStatus)
             ? (status as CertificateStatus) : "");
-          const params = new URLSearchParams(searchParams);
-          const project = Number(next.project);
-          if (Number.isSafeInteger(project) && project > 0) params.set("project", String(project));
-          else params.delete("project");
-          if (next.view === "overdue") params.set("view", next.view);
-          else params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(applyFinanceScopeParams(searchParams, "certificates", next), { replace: true });
         }}
         onResetFilters={() => {
           setStatusFilter("");
-          const params = new URLSearchParams(searchParams);
-          params.delete("project");
-          params.delete("view");
-          setSearchParams(params, { replace: true });
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
         }}
         toolbar={
           <>
