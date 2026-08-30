@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { buildMigratedDb } from "./sync-harness";
+import { applyMigrations, buildMigratedDb } from "./sync-harness";
 
 /**
  * Baseline acceptance (v0.7.0 database rebase, Milestone 7).
@@ -87,7 +89,95 @@ describe("baseline database creation", () => {
     const finalize = (database.prepare(
       "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='finalize_audit_insert'",
     ).get() as { sql: string }).sql;
-    expect(finalize).not.toMatch(/0.6.d+/);
+    expect(finalize).not.toMatch(/0\.6\.\d+/);
+  });
+
+  /**
+   * Milestone 2 regression. The schema-27 migration once carried
+   *
+   *     UPDATE audit_logs SET application_version='0.7.0'
+   *     WHERE application_version IN ('0.6.0','0.6.3');
+   *
+   * `prevent_audit_update` permits only finalising a fresh row and binding a
+   * NULL entity_uuid, so on any database holding one finalized 0.6.x-stamped
+   * row that statement raised AUDIT_LOG_IMMUTABLE, the migration aborted, and
+   * user_version stayed at 26 — an unopenable database. Reproduced before the
+   * correction; asserted here so it cannot return.
+   */
+  it("upgrades a schema-26 database that already holds finalized 0.6.x audit rows", () => {
+    // Build the exact pre-migration state: schema 26, one finalized audit row
+    // stamped by the retired 0.6.x context default.
+    db = buildMigratedDb(4);
+    const database = db;
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 26 });
+    database.exec("INSERT INTO clients (name) VALUES ('Legacy Row')");
+    const historical = database.prepare(
+      "SELECT application_version, finalized FROM audit_logs ORDER BY id",
+    ).all() as { application_version: string; finalized: number }[];
+    expect(historical).toHaveLength(1);
+    expect(historical[0]!.finalized).toBe(1);
+    expect(["0.6.0", "0.6.3"]).toContain(historical[0]!.application_version);
+
+    // The schema-27 migration must apply, not abort.
+    expect(() => applyMigrations(database, 4)).not.toThrow();
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
+    expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
+      .toEqual({ value: "27" });
+
+    // The historical row keeps the version that actually wrote it: a row
+    // stamped 0.6.3 is TRUE, and rewriting it would replace an accurate record
+    // with a tidier falsehood.
+    expect(database.prepare("SELECT application_version FROM audit_logs ORDER BY id LIMIT 1").get())
+      .toEqual({ application_version: historical[0]!.application_version });
+
+    // Everything written from here on carries the shipping version.
+    expect(database.prepare("SELECT application_version FROM audit_context WHERE id=1").get())
+      .toEqual({ application_version: "0.7.0" });
+    database.exec("INSERT INTO clients (name) VALUES ('After Upgrade')");
+    expect(database.prepare("SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1").get())
+      .toEqual({ application_version: "0.7.0" });
+  });
+
+  /**
+   * The migration must never reinstate a historical-rewrite statement, and must
+   * never buy its way past the trigger by dropping or relaxing it.
+   */
+  it("keeps the schema-27 migration free of audit rewrites and immutability weakening", () => {
+    const sql = readFileSync(
+      join(import.meta.dirname, "..", "src-tauri", "migrations", "0005_audit_version_baseline.sql"),
+      "utf8",
+    );
+    // Strip comments (the file documents the removed statement on purpose) and
+    // trigger bodies (finalize_audit_insert legitimately updates the row it is
+    // finalising). What must not exist is a TOP-LEVEL write to audit_logs.
+    const executable = sql.split("\n").filter((line) => !line.trimStart().startsWith("--")).join("\n");
+    const topLevel = executable.replace(/CREATE TRIGGER[\s\S]*?\nEND;/gi, "");
+    expect(topLevel).not.toMatch(/UPDATE\s+audit_logs/i);
+    expect(topLevel).not.toMatch(/DELETE\s+FROM\s+audit_logs/i);
+    expect(executable).not.toMatch(/DROP\s+TRIGGER\s+prevent_audit_(update|delete)/i);
+    // The one trigger it does replace is the version-stamping one.
+    expect(executable).toMatch(/DROP TRIGGER finalize_audit_insert/);
+  });
+
+  it("refuses to update or delete an audit row on a fresh schema-27 database", () => {
+    const database = freshDb();
+    database.exec("INSERT INTO clients (name) VALUES ('Immutable Probe')");
+    const { id } = database.prepare("SELECT id FROM audit_logs ORDER BY id DESC LIMIT 1").get() as { id: number };
+    expect(() => database.exec(`UPDATE audit_logs SET application_version='9.9.9' WHERE id=${id}`))
+      .toThrow(/AUDIT_LOG_IMMUTABLE/);
+    expect(() => database.exec(`DELETE FROM audit_logs WHERE id=${id}`))
+      .toThrow(/AUDIT_LOG_IMMUTABLE/);
+  });
+
+  it("seeds reference data without fabricating audit activity", () => {
+    const database = freshDb();
+    expect(database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
+    // The reference rows themselves are present — the seed ran, it just ran
+    // before the audit triggers exist.
+    const categories = database.prepare("SELECT COUNT(*) AS count FROM expense_categories").get() as { count: number };
+    expect(categories.count).toBeGreaterThan(0);
+    const currencies = database.prepare("SELECT COUNT(*) AS count FROM currencies").get() as { count: number };
+    expect(currencies.count).toBeGreaterThan(0);
   });
 
   it("carries the assignment lifecycle columns", () => {

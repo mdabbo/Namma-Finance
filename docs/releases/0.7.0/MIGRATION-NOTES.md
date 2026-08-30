@@ -159,11 +159,29 @@ harness and the Playwright database bridge — recorded the false version
 permanently, because `audit_logs` is immutable by trigger and a wrong stamp can
 never be corrected afterwards.
 
-`0005` updates the stored `audit_context` row, rewrites any row still carrying a
-retired default, and recreates `finalize_audit_insert` with a truthful fallback.
-The baseline files are again untouched, so recorded checksums stay valid. The
-`audit_logs.application_version` column default remains `0.6.0` and is
-unreachable: the trigger overwrites it on every insert, and rebuilding that
-table to change a dead default would risk the audit history for no gain.
+`0005` updates the stored `audit_context` row and recreates
+`finalize_audit_insert` with a truthful fallback, so every audit row written
+from schema 27 onward carries `0.7.0`. The baseline files are again untouched,
+so recorded checksums stay valid. The `audit_logs.application_version` column
+default remains `0.6.0` and is unreachable: the trigger overwrites it on every
+insert, and rebuilding that table to change a dead default would risk the audit
+history for no gain.
+
+**Historical rows are not rewritten.** An earlier draft of this migration also
+carried `UPDATE audit_logs SET application_version='0.7.0' WHERE
+application_version IN ('0.6.0','0.6.3')`. That statement cannot succeed:
+`prevent_audit_update` allows only finalising a fresh row and binding a NULL
+`entity_uuid`, so on any database holding one finalized 0.6.x-stamped row it
+raised `AUDIT_LOG_IMMUTABLE`, aborting the migration and pinning
+`user_version` at 26 — a database that could never reach schema 27. It was
+removed rather than forced through: suppressing the trigger would make
+append-only conditional, and a row stamped `0.6.3` is factually correct for the
+binary that wrote it. `test/migrations.test.ts` upgrades a schema-26 database
+holding such a row and asserts both the successful upgrade and the preserved
+historical stamp.
+
+Because `0005` was corrected in place while v0.7.0 is unreleased, its checksum
+changed: a development database that already recorded migration 5 under the
+previous checksum must be recreated. See `docs/MIGRATION-NOTES.md`.
 
 Schema identity moves 26 → **27**. No data is lost.

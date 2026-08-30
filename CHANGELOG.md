@@ -57,6 +57,12 @@ deleted and recreated** — see below.
   assignment lifecycle (25), cancellation evidence integrity (26), and truthful
   audit application version (27). The baseline files are never edited, so
   recorded migration checksums stay valid.
+- The schema-27 migration stamps new audit rows `0.7.0` through `audit_context`,
+  `finalize_audit_insert` and runtime release stamping. It does **not** rewrite
+  historical audit rows: `audit_logs` is append-only by trigger, and a row
+  stamped by a 0.6.x binary is factually correct for that row. Development
+  databases that recorded migration 5 under its earlier checksum must be
+  recreated — see `docs/MIGRATION-NOTES.md`.
 - Backup validation now checks migration lineage, not just schema version.
 
 #### Post-redesign audit remediation

@@ -5073,6 +5073,150 @@ mod financial_transaction_tests {
         pool
     }
 
+    /// Milestone 2 regression, in the engine that actually runs the migrations.
+    ///
+    /// The schema-27 migration once rewrote historical audit rows. Because
+    /// `prevent_audit_update` allows only finalising a fresh row and binding a
+    /// NULL entity_uuid, that statement raised AUDIT_LOG_IMMUTABLE on any
+    /// database holding a finalized 0.6.x-stamped row: the migration aborted
+    /// and user_version stayed at 26, leaving a database that could never be
+    /// opened. The migration must upgrade such a database, keep the historical
+    /// stamp (it is true for the binary that wrote it), and stamp everything
+    /// afterwards with the shipping version.
+    #[test]
+    fn schema_27_upgrades_a_database_holding_finalized_legacy_audit_rows() {
+        tauri::async_runtime::block_on(async {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect("sqlite::memory:")
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA foreign_keys=ON")
+                .execute(&pool)
+                .await
+                .unwrap();
+            for migration in [
+                include_str!("../migrations/0001_baseline.sql"),
+                include_str!("../migrations/0002_seed_reference_data.sql"),
+                include_str!("../migrations/0003_assignment_lifecycle.sql"),
+                include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
+            ] {
+                sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+            }
+            let schema: i64 = sqlx::query_scalar("PRAGMA user_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(schema, 26, "fixture must start at schema 26");
+
+            // A real, finalized audit row carrying the retired default.
+            sqlx::query("INSERT INTO clients(name) VALUES('Legacy Audit Row')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let (legacy_version, finalized): (String, i64) = sqlx::query_as(
+                "SELECT application_version, finalized FROM audit_logs ORDER BY id LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(finalized, 1, "the row must be finalized to reproduce");
+            assert!(
+                legacy_version.starts_with("0.6."),
+                "expected a retired 0.6.x stamp, got {legacy_version}"
+            );
+
+            // The migration must apply rather than abort.
+            sqlx::raw_sql(include_str!(
+                "../migrations/0005_audit_version_baseline.sql"
+            ))
+            .execute(&pool)
+            .await
+            .expect("schema 27 migration must apply over finalized legacy audit rows");
+
+            let schema: i64 = sqlx::query_scalar("PRAGMA user_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(schema, CURRENT_SCHEMA_VERSION);
+
+            // The historical row keeps the version that wrote it.
+            let preserved: String = sqlx::query_scalar(
+                "SELECT application_version FROM audit_logs ORDER BY id LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(preserved, legacy_version);
+
+            // Everything written afterwards carries the shipping version.
+            let context: String =
+                sqlx::query_scalar("SELECT application_version FROM audit_context WHERE id=1")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(context, CURRENT_APP_VERSION);
+            sqlx::query("INSERT INTO clients(name) VALUES('After Upgrade')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let newest: String = sqlx::query_scalar(
+                "SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(newest, CURRENT_APP_VERSION);
+
+            // Immutability is intact: the migration bought nothing by weakening it.
+            let update =
+                sqlx::query("UPDATE audit_logs SET application_version='9.9.9' WHERE id=1")
+                    .execute(&pool)
+                    .await;
+            assert!(update
+                .unwrap_err()
+                .to_string()
+                .contains("AUDIT_LOG_IMMUTABLE"));
+            let delete = sqlx::query("DELETE FROM audit_logs WHERE id=1")
+                .execute(&pool)
+                .await;
+            assert!(delete
+                .unwrap_err()
+                .to_string()
+                .contains("AUDIT_LOG_IMMUTABLE"));
+        });
+    }
+
+    /// A fresh database starts with no fabricated audit activity: reference-data
+    /// seeding runs before the audit triggers exist.
+    #[test]
+    fn fresh_schema_27_database_starts_with_an_empty_audit_log() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let schema: i64 = sqlx::query_scalar("PRAGMA user_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(schema, CURRENT_SCHEMA_VERSION);
+            let audit_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(audit_rows, 0);
+            let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM expense_categories")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert!(categories > 0, "reference data must still be seeded");
+            let context: String =
+                sqlx::query_scalar("SELECT application_version FROM audit_context WHERE id=1")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(context, CURRENT_APP_VERSION);
+        });
+    }
+
     async fn assignment_row(pool: &sqlx::SqlitePool, id: i64) -> (String, Option<i64>) {
         sqlx::query_as(
             "SELECT lifecycle_status, earned_minor_at_cancellation FROM project_assignments WHERE id=?",

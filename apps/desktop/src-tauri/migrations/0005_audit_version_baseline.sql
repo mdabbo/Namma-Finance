@@ -20,13 +20,40 @@
 -- checksum per applied migration, and rewriting 0001 or 0002 would reject every
 -- existing development database. This migration corrects the stored row and
 -- replaces the one trigger that carries a literal fallback.
+--
+-- What this migration deliberately does NOT do
+-- --------------------------------------------
+-- It does not rewrite historical audit_logs rows. An earlier draft of this file
+-- carried
+--
+--     UPDATE audit_logs SET application_version='0.7.0'
+--     WHERE application_version IN ('0.6.0','0.6.3');
+--
+-- which cannot succeed and must never be reinstated. `prevent_audit_update`
+-- allows exactly two shapes — finalising a fresh row (finalized 0 -> 1) and
+-- binding a NULL entity_uuid — and an application_version rewrite on a
+-- finalized row matches neither, so the statement raises AUDIT_LOG_IMMUTABLE.
+-- On any database holding even one finalized 0.6.x-stamped row the whole
+-- migration aborted, leaving user_version pinned at 26: a permanently
+-- unopenable database. Reproduced before this correction, on a schema-26
+-- database with one finalized row, the migration failed with
+-- AUDIT_LOG_IMMUTABLE and user_version stayed 26.
+--
+-- Suppressing the trigger to force those rows through was rejected: audit
+-- immutability is the property the log exists to provide, and a historical row
+-- stamped 0.6.3 is TRUE — that row really was written by a 0.6.x-era binary.
+-- Rewriting it would replace an accurate record with a tidier falsehood.
+--
+-- v0.7.0 is unreleased and already requires a database reset (see
+-- docs/DATABASE-REBASE-0.7.0.md), so no user database carries such rows.
+-- Development databases created from earlier v0.7.0 commits — including any
+-- that already recorded version 5 with this file's previous checksum — must be
+-- recreated; see docs/MIGRATION-NOTES.md.
 
--- The single audit_context row drives every subsequent audit stamp.
+-- The single audit_context row drives every subsequent audit stamp, so every
+-- audit row written from here on is stamped 0.7.0. Historical rows keep the
+-- version that actually wrote them.
 UPDATE audit_context SET application_version = '0.7.0' WHERE id = 1;
-
--- Any row that recorded the retired default before this migration ran.
-UPDATE audit_logs SET application_version = '0.7.0'
-WHERE application_version IN ('0.6.0', '0.6.3');
 
 -- Recreated only to replace the '0.6.3' fallback with the shipping version.
 -- The body is otherwise identical to the baseline definition: it finalises a

@@ -27,20 +27,27 @@ git show pre-db-rebase-v0.6.7:apps/desktop/src-tauri/migrations/0012_audit_log.s
 git checkout pre-db-rebase-v0.6.7   # detached, full old tree
 ```
 
-## Schema version stays 24
+## Schema identity did not restart at 1
 
-The migration *file* numbers restarted at 1, but the **schema identity is still
-24** — `PRAGMA user_version` and `app_metadata.schema_version` both report 24,
-and `CURRENT_SCHEMA_VERSION` in `lib.rs` is unchanged.
+The migration *file* numbers restarted at 1, but the **schema identity did
+not**: the baseline recreates schema 24, and the forward migrations that follow
+carry it to 25, 26 and now **27**.
 
 This is deliberate. Renumbering the schema to 1 would mean two completely
 different database shapes both claiming "version 1": the old `0001_initial`
-schema and the new baseline. Keeping 24 guarantees that no database in
-existence claims a version whose shape differs from what that version means.
+schema and the new baseline. Keeping the identity continuous guarantees that no
+database in existence claims a version whose shape differs from what that
+version means.
+
+`PRAGMA user_version`, `app_metadata.schema_version` and
+`CURRENT_SCHEMA_VERSION` in `lib.rs` all report **27**. The per-migration
+breakdown is in [MIGRATION-NOTES.md](./MIGRATION-NOTES.md).
 
 ## You must delete your development database
 
 **Old development databases are not upgradeable and were never migrated.**
+Development databases created from *earlier v0.7.0 commits* may also need
+recreating — see the table in [MIGRATION-NOTES.md](./MIGRATION-NOTES.md).
 
 `tauri-plugin-sql` records which migrations ran, with a checksum per version.
 An existing database has version 1 recorded with `0001_initial.sql`'s checksum,
@@ -70,11 +77,12 @@ chain. They restore only into a pre-rebase build; treat them as archival.
 
 ### Pre-rebase backups are refused, by design
 
-A pre-rebase backup reports `schema_version` 24 — exactly like a rebased
-database — so the version number alone cannot tell them apart. What does is the
+A pre-rebase backup reports a `schema_version` in the same range as a rebased
+database, so the version number alone cannot tell them apart. What does is the
 migration lineage recorded in `_sqlx_migrations`: a rebased database starts with
 version 1 `baseline_schema`, an old one with version 1 `initial_schema` and 24
-applied migrations.
+applied migrations. A file whose highest migration exceeds
+`CURRENT_MIGRATION_VERSION` is refused for the same reason.
 
 Restore validation checks that lineage and fails with:
 

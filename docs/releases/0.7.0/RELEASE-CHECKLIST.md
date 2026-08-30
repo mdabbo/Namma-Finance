@@ -46,8 +46,18 @@ GitHub Actions run on the released commit.
 
 ## Data safety
 
-- [x] Schema identity remains 24; the baseline was verified object-for-object
-      against the retired chain before the chain was deleted.
+- [x] Schema identity is **27**: the baseline recreates 24 — verified
+      object-for-object against the retired chain before the chain was deleted —
+      and the forward migrations carry it to 25, 26 and 27. `PRAGMA
+      user_version`, `app_metadata.schema_version`, `CURRENT_SCHEMA_VERSION`
+      and `docs/MIGRATION-NOTES.md` agree.
+- [x] The schema-27 audit-version migration writes no historical `audit_logs`
+      row and does not weaken audit immutability; a schema-26 database holding
+      finalized 0.6.x-stamped rows upgrades cleanly
+      (`test/migrations.test.ts`).
+- [x] Development databases that recorded migration 5 under the previous
+      `0005` checksum must be recreated; documented in
+      `docs/MIGRATION-NOTES.md`.
 - [x] Pre-rebase source and all 24 migration files preserved at
       `pre-db-rebase-v0.6.7` and `pre-ui-redesign-v0.6.0`, both pushed.
 - [x] Old development databases fail loudly rather than being migrated, and
