@@ -7,6 +7,7 @@ import { createClient, deleteClient, listClients } from "../src/repositories/cli
 import { createProject, deleteProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createPayment, deletePayment, listPayments } from "../src/repositories/payments";
+import { createCertificate, nextCertificateSeq } from "../src/repositories/certificates";
 import { createPerson, createAssignment, createPersonPayment, deletePersonPayment, listPersonPayments } from "../src/repositories/people";
 
 beforeEach(() => resetDb());
@@ -51,7 +52,17 @@ describe("Milestone 3 immutable lifecycle", () => {
   });
 
   it("reverses a person payment and its expense without physical deletion", async () => {
-    const { projectId } = await fixture();
+    const { projectId, contractId } = await fixture();
+    // Person payments are capped at earned-and-unpaid value, so the client
+    // certificate is collected first: that is what releases the fee.
+    const certificateId = await createCertificate(await nextCertificateSeq(contractId), {
+      contractId, number: "LIFE-PC-1", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null,
+      description: null, grossMinor: 100_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
+    });
+    await createPayment(
+      { contractId, kind: "CERTIFICATE", number: "LIFE-PAY-1", date: "2026-07-02", amountMinor: 100_000, method: "CASH", bank: null, reference: null, notes: null },
+      [{ certificateId, amountMinor: 100_000 }],
+    );
     const personId = await createPerson({ type: "FREELANCER", name: "Lifecycle Person", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 20_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
     const paymentId = await createPersonPayment({ assignmentId, date: "2026-07-21", amountMinor: 5_000, note: "earned fee" });

@@ -1532,14 +1532,23 @@ async fn create_person_payment_atomic(
     db_instances: State<'_, DbInstances>,
     input: PersonPaymentCommandInput,
 ) -> Result<i64, String> {
-    if input.amount_minor <= 0 || input.date.trim().is_empty() {
-        return Err("invalid person payment".into());
-    }
     let instances = db_instances.0.read().await;
     let pool = match instances.get("sqlite:mep-finance.db") {
         Some(DbPool::Sqlite(pool)) => pool,
         _ => return Err("database is not loaded".into()),
     };
+    create_person_payment_transaction(pool, input).await
+}
+
+/// The payment itself, so the lifecycle and due-limit rules can be asserted
+/// directly by `cargo test` rather than only through the command wrapper.
+async fn create_person_payment_transaction(
+    pool: &sqlx::SqlitePool,
+    input: PersonPaymentCommandInput,
+) -> Result<i64, String> {
+    if input.amount_minor <= 0 || input.date.trim().is_empty() {
+        return Err("invalid person payment".into());
+    }
     let mut tx = begin_immediate(pool).await?;
     let twin: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND voided_at IS NULL LIMIT 1",
@@ -1549,9 +1558,19 @@ async fn create_person_payment_atomic(
         return Err("DUPLICATE_PERSON_PAYMENT".into());
     }
     let context = sqlx::query(
-        "SELECT a.project_id, a.currency, a.fx_rate_micro, pe.name AS person_name, pe.type AS person_type FROM project_assignments a JOIN people pe ON pe.id=a.person_id WHERE a.id=?",
-    ).bind(input.assignment_id).fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?
-        .ok_or_else(|| "assignment not found".to_string())?;
+        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+                a.earned_minor_at_cancellation, a.archived_at, p.archived_at AS project_archived_at,
+                pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
+         FROM project_assignments a
+         JOIN people pe ON pe.id=a.person_id
+         JOIN projects p ON p.id=a.project_id
+         WHERE a.id=?",
+    )
+    .bind(input.assignment_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "assignment not found".to_string())?;
     let project_id: i64 = context.try_get("project_id").map_err(|e| e.to_string())?;
     let currency: String = context.try_get("currency").map_err(|e| e.to_string())?;
     let fx_rate_micro: i64 = context
@@ -1559,6 +1578,55 @@ async fn create_person_payment_atomic(
         .map_err(|e| e.to_string())?;
     let person_name: String = context.try_get("person_name").map_err(|e| e.to_string())?;
     let person_type: String = context.try_get("person_type").map_err(|e| e.to_string())?;
+
+    // The payable ceiling is DERIVED here, never taken from the caller: the
+    // WebView's figure is a display of the same rule, not evidence for it.
+    // Mirrors `assignmentCostPosition` in @mep/core — a cancelled assignment
+    // earns the frozen figure, so certificates the client pays afterwards can
+    // no longer accrue to work that was called off.
+    let assignment_archived_at: Option<String> =
+        context.try_get("archived_at").map_err(|e| e.to_string())?;
+    let project_archived_at: Option<String> = context
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
+    let person_archived_at: Option<String> = context
+        .try_get("person_archived_at")
+        .map_err(|e| e.to_string())?;
+    if assignment_archived_at.is_some()
+        || project_archived_at.is_some()
+        || person_archived_at.is_some()
+    {
+        // Archiving is visibility, but it also means the office has stopped
+        // operating this record; a new payment is a new operational action.
+        return Err("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID".into());
+    }
+    let agreed_minor: i64 = context.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let lifecycle: String = context
+        .try_get("lifecycle_status")
+        .map_err(|e| e.to_string())?;
+    let frozen_earned: Option<i64> = context
+        .try_get("earned_minor_at_cancellation")
+        .map_err(|e| e.to_string())?;
+    let earned_minor = if lifecycle == "CANCELLED" {
+        frozen_earned.unwrap_or(0).max(0)
+    } else {
+        assignment_released_minor(&mut tx, project_id, agreed_minor)
+            .await?
+            .max(0)
+    };
+    let paid_minor: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount_minor),0) FROM person_payments WHERE assignment_id=? AND voided_at IS NULL",
+    )
+    .bind(input.assignment_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    // Floored at zero: an assignment already overpaid owes nothing further, and
+    // must not turn a negative balance into fresh headroom.
+    let due_minor = (earned_minor - paid_minor).max(0);
+    if input.amount_minor > due_minor {
+        return Err("PERSON_PAYMENT_EXCEEDS_DUE".into());
+    }
     let category_name = if person_type == "EMPLOYEE" {
         "Salaries"
     } else {
@@ -5361,6 +5429,135 @@ mod financial_transaction_tests {
             // the draft's base were dropped, the paid stage would absorb the
             // remainder and release the whole fee.
             assert_eq!(released, 20_000);
+        });
+    }
+
+    /// Milestone 3: the payable ceiling is derived in Rust, never trusted from
+    /// the caller. A rejected payment must leave neither a person payment nor
+    /// its linked expense behind.
+    #[test]
+    fn person_payment_is_capped_at_the_lifecycle_aware_amount_due() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 100_000).await;
+            // Half the contract is collected, so half the agreed fee is earned.
+            add_certificate(&pool, 1, "PC-EARN", 50_000, "PAID").await;
+            add_certificate(&pool, 2, "PC-OPEN", 50_000, "APPROVED").await;
+
+            let over = create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-10".into(),
+                    amount_minor: 50_001,
+                    note: Some("too much".into()),
+                },
+            )
+            .await;
+            assert_eq!(over.unwrap_err(), "PERSON_PAYMENT_EXCEEDS_DUE");
+            let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM person_payments")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(rows, 0, "a rejected payment must not be recorded");
+            let expenses: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM expenses WHERE person_payment_id IS NOT NULL",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(expenses, 0, "a rejected payment must not create an expense");
+
+            // Exactly the due amount is accepted.
+            create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-10".into(),
+                    amount_minor: 50_000,
+                    note: Some("in full".into()),
+                },
+            )
+            .await
+            .unwrap();
+
+            // Nothing further is payable while nothing is due.
+            let again = create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-11".into(),
+                    amount_minor: 1,
+                    note: Some("more".into()),
+                },
+            )
+            .await;
+            assert_eq!(again.unwrap_err(), "PERSON_PAYMENT_EXCEEDS_DUE");
+        });
+    }
+
+    /// A cancelled assignment earns the frozen figure, so certificates the
+    /// client pays afterwards cannot fund further payment; an archived one
+    /// takes no new payment at all.
+    #[test]
+    fn cancelled_and_archived_assignments_bound_further_payment() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 100_000).await;
+            add_certificate(&pool, 1, "PC-EARN", 40_000, "PAID").await;
+            add_certificate(&pool, 2, "PC-LATER", 60_000, "APPROVED").await;
+            cancel_assignment_transaction(&pool, assignment, "Called off")
+                .await
+                .unwrap();
+
+            // The rest of the contract is collected AFTER cancellation.
+            sqlx::query("UPDATE payment_certificates SET status='PAID' WHERE number='PC-LATER'")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            // Still capped at the frozen 40_000.
+            let over = create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-12".into(),
+                    amount_minor: 40_001,
+                    note: None,
+                },
+            )
+            .await;
+            assert_eq!(over.unwrap_err(), "PERSON_PAYMENT_EXCEEDS_DUE");
+
+            create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-12".into(),
+                    amount_minor: 40_000,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap();
+
+            // Archiving stops new operational actions.
+            sqlx::query("UPDATE project_assignments SET archived_at=datetime('now') WHERE id=?")
+                .bind(assignment)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let archived = create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-13".into(),
+                    amount_minor: 1,
+                    note: None,
+                },
+            )
+            .await;
+            assert_eq!(archived.unwrap_err(), "ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID");
         });
     }
 

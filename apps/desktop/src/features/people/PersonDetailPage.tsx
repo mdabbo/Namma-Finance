@@ -3,10 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Archive, ArrowLeft, ArrowRight, FileDown, Plus, Trash2 } from "lucide-react";
 import {
+  assignmentCostPosition,
   assignmentSchema,
-  computeAssignmentAccount,
   computeTeamPayout,
   personPaymentSchema,
+  type AssignmentCostPosition,
   type AssignmentInput,
   type ContractState,
   type PersonPaymentInput,
@@ -22,10 +23,11 @@ import {
 } from "../../repositories/people";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useProjects } from "../../repositories/projects";
-import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, RatioBar, Select, Textarea } from "../../components/ui";
+import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { PrintPortal } from "../../components/PrintPortal";
 import { todayIso, useFormat } from "../../lib/format";
+import { UNKNOWN_AMOUNT } from "../../lib/readModel";
 
 export function PersonDetailPage() {
   const { id } = useParams();
@@ -47,8 +49,6 @@ export function PersonDetailPage() {
   if (!person) return <EmptyState message={t("common.loading")} />;
   const BackIcon = i18n.dir() === "rtl" ? ArrowRight : ArrowLeft;
 
-  const accounts = assignments.map((a) => computeAssignmentAccount(a, payments));
-
   const statesByProject = new Map<number, ContractState[]>();
   for (const state of financials?.contractStates.values() ?? []) {
     const list = statesByProject.get(state.contract.projectId) ?? [];
@@ -58,6 +58,36 @@ export function PersonDetailPage() {
   const payoutOf = (a: AssignmentListItem): TeamPayoutState => {
     const paid = payments.filter((p) => p.assignmentId === a.id).reduce((s, p) => s + p.amountMinor, 0);
     return computeTeamPayout(a.agreedMinor, statesByProject.get(a.projectId) ?? [], paid);
+  };
+
+  /**
+   * One authoritative account position, shared with Project Team.
+   *
+   * `financials.teamAccounts` is the audited read model and is preferred; it
+   * omits assignments of archived projects, so those fall back to the SAME core
+   * selector over the same inputs rather than to a legacy agreed-minus-paid
+   * balance. `undefined` means the read model has not resolved yet — the caller
+   * shows an unknown placeholder instead of a fabricated zero.
+   */
+  const positionOf = (a: AssignmentListItem): AssignmentCostPosition | undefined => {
+    const account = financials?.teamAccounts.find((item) => item.assignmentId === a.id);
+    if (account) {
+      return {
+        earnedMinor: account.accruedMinor,
+        paidMinor: account.paidMinor,
+        dueMinor: account.dueMinor,
+        committedMinor: account.committedMinor,
+      };
+    }
+    if (!financials) return undefined;
+    const payout = payoutOf(a);
+    return assignmentCostPosition({
+      lifecycle: a.lifecycleStatus,
+      agreedMinor: a.agreedMinor,
+      releasedMinor: payout.releasedMinor,
+      paidOutMinor: payout.paidOutMinor,
+      earnedAtCancellationMinor: a.earnedMinorAtCancellation,
+    });
   };
 
   return (
@@ -91,55 +121,97 @@ export function PersonDetailPage() {
         <EmptyState message={t("common.empty")} />
       ) : (
         <div className="space-y-3">
-          {accounts.map((account) => {
-            const a = assignments.find((x) => x.id === account.assignment.id)!;
+          {assignments.map((a) => {
             const assignmentPayments = payments.filter((p) => p.assignmentId === a.id);
+            const position = positionOf(a);
             const payout = payoutOf(a);
+            const cancelled = a.lifecycleStatus === "CANCELLED";
+            const archived = a.archivedAt !== null || a.personArchived;
+            // Terms are final once the work is no longer running: editing the
+            // agreed fee of cancelled work would move a frozen accounting base.
+            const termsFinal = a.lifecycleStatus !== "ACTIVE" || archived;
+            const canPay = !archived && (position?.dueMinor ?? 0) > 0;
+            const money = (minor: number) => fmt.money(minor, a.currency, { compactFraction: true });
+            const figure = (value: number | undefined, className?: string) =>
+              value === undefined
+                ? <p className="font-medium tnum text-muted">{UNKNOWN_AMOUNT}</p>
+                : <p className={`font-medium tnum${className ? ` ${className}` : ""}`}>{money(value)}</p>;
             return (
               <Card key={a.id} className="p-4">
                 <div className="mb-3 flex items-start justify-between">
                   <div>
-                    <p className="font-semibold">{a.projectName}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold">{a.projectName}</p>
+                      <Badge value={a.lifecycleStatus} label={t(`assignments.lifecycle.${a.lifecycleStatus}`)} />
+                      {a.archivedAt !== null && <Badge value="CANCELLED" label={t("lifecycle.archived")} />}
+                    </div>
                     <p className="text-xs text-slate-400 tnum">{a.projectCode}</p>
                     {a.scope && <p className="mt-1 text-sm text-slate-500">{a.scope}</p>}
                   </div>
                   <div className="flex gap-1">
-                    <Button variant="ghost" onClick={() => setPaymentModal({ assignment: a })}>
-                      <Plus size={14} /> {t("people.newPayment")}
-                    </Button>
-                    <Button variant="ghost" onClick={() => setAssignmentModal(a)}>{t("common.edit")}</Button>
-                    <Button variant="ghost" title={t("lifecycle.archiveAssignment")} aria-label={t("lifecycle.archiveAssignment")} onClick={() => mutations.removeAssignment.mutate(a.id)}>
-                      <Archive size={14} />
-                    </Button>
+                    {canPay && (
+                      <Button variant="ghost" onClick={() => setPaymentModal({ assignment: a, amountMinor: position?.dueMinor })}>
+                        <Plus size={14} /> {t("people.newPayment")}
+                      </Button>
+                    )}
+                    {!termsFinal && (
+                      <Button variant="ghost" onClick={() => setAssignmentModal(a)}>{t("common.edit")}</Button>
+                    )}
+                    {a.archivedAt === null && (
+                      <Button variant="ghost" title={t("lifecycle.archiveAssignment")} aria-label={t("lifecycle.archiveAssignment")} onClick={() => mutations.removeAssignment.mutate(a.id)}>
+                        <Archive size={14} />
+                      </Button>
+                    )}
                   </div>
                 </div>
 
-                <div className="mb-2 grid grid-cols-4 gap-4 text-sm">
+                {/* Cancellation is an accounting event: say when, why, and what
+                    was frozen, so the earned figure is never mistaken for live
+                    progress. */}
+                {cancelled && (
+                  <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/60">
+                    {t("assignments.cancelledOn", { date: fmt.date(a.cancelledAt) })}
+                    {a.cancellationReason ? ` — ${a.cancellationReason}` : ""}
+                  </p>
+                )}
+
+                <div className="mb-2 grid grid-cols-5 gap-4 text-sm">
                   <div>
                     <p className="text-xs text-slate-400">{t("people.agreedAmount")}</p>
-                    <p className="font-medium tnum">{fmt.money(a.agreedMinor, a.currency, { compactFraction: true })}</p>
+                    {figure(a.agreedMinor)}
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">
+                      {cancelled ? t("assignments.earnedFrozen") : t("projects.teamAccrued")}
+                    </p>
+                    {figure(position?.earnedMinor)}
                   </div>
                   <div>
                     <p className="text-xs text-slate-400">{t("people.paidToDate")}</p>
-                    <p className="font-medium tnum text-emerald-600 dark:text-emerald-400">{fmt.money(account.paidMinor, a.currency, { compactFraction: true })}</p>
+                    {figure(position?.paidMinor, "text-emerald-600 dark:text-emerald-400")}
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400">{t("people.remainingAmount")}</p>
-                    <p className="font-medium tnum text-amber-600 dark:text-amber-400">{fmt.money(account.remainingMinor, a.currency, { compactFraction: true })}</p>
+                    <p className="text-xs text-slate-400">{t("team.dueNow")}</p>
+                    {figure(position?.dueMinor, "text-amber-600 dark:text-amber-400")}
                   </div>
-                  <div className="flex items-end">
-                    <RatioBar ratioBp={account.paidRatioBp} className="mb-1.5" />
+                  <div>
+                    <p className="text-xs text-slate-400">{t("projects.teamCommitted")}</p>
+                    {figure(position?.committedMinor)}
                   </div>
                 </div>
 
-                {payout.stages.length > 0 && (
+                {/* The live contract schedule is hidden once work is cancelled:
+                    its stages describe a payout that can no longer accrue. */}
+                {!cancelled && payout.stages.length > 0 && (
                   <TeamScheduleTable
                     payout={payout}
                     currency={a.currency}
                     onPay={(stage) =>
                       setPaymentModal({
                         assignment: a,
-                        amountMinor: stage.amountMinor - stage.paidOutMinor,
+                        // Never more than the lifecycle-aware amount due, whatever
+                        // the stage is worth; Rust rejects anything above it.
+                        amountMinor: Math.min(stage.amountMinor - stage.paidOutMinor, position?.dueMinor ?? 0),
                         note: stage.title || t("team.remainder"),
                       })
                     }
@@ -192,12 +264,15 @@ export function PersonDetailPage() {
           assignment={paymentModal.assignment}
           initialAmountMinor={paymentModal.amountMinor}
           initialNote={paymentModal.note}
+          dueMinor={positionOf(paymentModal.assignment)?.dueMinor}
           busy={mutations.createPersonPayment.isPending}
           error={
             mutations.createPersonPayment.isError
               ? (mutations.createPersonPayment.error as Error).message === "DUPLICATE_PERSON_PAYMENT"
                 ? t("people.duplicatePayment")
-                : (mutations.createPersonPayment.error as Error).message
+                : (mutations.createPersonPayment.error as Error).message === "PERSON_PAYMENT_EXCEEDS_DUE"
+                  ? t("people.paymentExceedsDueShort")
+                  : (mutations.createPersonPayment.error as Error).message
               : undefined
           }
           onClose={() => {
@@ -221,12 +296,29 @@ export function PersonDetailPage() {
                 <p className="text-slate-600 tnum">{fmt.date(todayIso())}</p>
               </div>
             </div>
-            {accounts.map((account) => {
-              const a = assignments.find((x) => x.id === account.assignment.id)!;
+            {assignments.map((a) => {
               const assignmentPayments = payments.filter((p) => p.assignmentId === a.id);
+              // The statement reports the same lifecycle-aware account as the
+              // screen; a printed balance that disagrees with the app is worse
+              // than no statement at all.
+              const position = positionOf(a);
+              const cancelled = a.lifecycleStatus === "CANCELLED";
+              const printMoney = (minor: number | undefined) =>
+                minor === undefined ? UNKNOWN_AMOUNT : fmt.money(minor, a.currency);
               return (
                 <div key={a.id} className="mb-6">
-                  <h2 className="mb-2 font-bold">{a.projectCode} — {a.projectName}</h2>
+                  <h2 className="mb-2 font-bold">
+                    {a.projectCode} — {a.projectName}
+                    <span className="ms-2 text-xs font-normal">
+                      ({t(`assignments.lifecycle.${a.lifecycleStatus}`)})
+                    </span>
+                  </h2>
+                  {cancelled && (
+                    <p className="mb-2 text-xs text-slate-600">
+                      {t("assignments.cancelledOn", { date: fmt.date(a.cancelledAt) })}
+                      {a.cancellationReason ? ` — ${a.cancellationReason}` : ""}
+                    </p>
+                  )}
                   <table className="w-full border-collapse">
                     <thead>
                       <tr className="bg-slate-100">
@@ -248,12 +340,18 @@ export function PersonDetailPage() {
                         <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{fmt.money(a.agreedMinor, a.currency)}</td>
                       </tr>
                       <tr className="font-semibold">
+                        <td colSpan={2} className="border border-slate-300 px-3 py-1.5">
+                          {cancelled ? t("assignments.earnedFrozen") : t("projects.teamAccrued")}
+                        </td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{printMoney(position?.earnedMinor)}</td>
+                      </tr>
+                      <tr className="font-semibold">
                         <td colSpan={2} className="border border-slate-300 px-3 py-1.5">{t("people.paidToDate")}</td>
-                        <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{fmt.money(account.paidMinor, a.currency)}</td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{printMoney(position?.paidMinor)}</td>
                       </tr>
                       <tr className="bg-slate-100 font-bold">
-                        <td colSpan={2} className="border border-slate-300 px-3 py-1.5">{t("people.remainingAmount")}</td>
-                        <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{fmt.money(account.remainingMinor, a.currency)}</td>
+                        <td colSpan={2} className="border border-slate-300 px-3 py-1.5">{t("team.dueNow")}</td>
+                        <td className="border border-slate-300 px-3 py-1.5 text-end tnum">{printMoney(position?.dueMinor)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -416,6 +514,7 @@ function PersonPaymentForm({
   assignment,
   initialAmountMinor,
   initialNote,
+  dueMinor,
   onSubmit,
   onClose,
   busy,
@@ -424,12 +523,15 @@ function PersonPaymentForm({
   assignment: AssignmentListItem;
   initialAmountMinor?: number;
   initialNote?: string;
+  /** Lifecycle-aware ceiling; Rust re-derives and enforces it regardless. */
+  dueMinor?: number;
   onSubmit: (input: PersonPaymentInput) => void;
   onClose: () => void;
   busy?: boolean;
   error?: string;
 }) {
   const { t } = useTranslation();
+  const fmt = useFormat();
   const [form, setForm] = useState({ date: todayIso(), amountMinor: initialAmountMinor ?? 0, note: initialNote ?? "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   // same-tick double-click latch: isPending flips only on the next render,
@@ -441,6 +543,10 @@ function PersonPaymentForm({
 
   function submit() {
     if (firing.current) return;
+    if (dueMinor !== undefined && form.amountMinor > dueMinor) {
+      setErrors({ amountMinor: t("people.paymentExceedsDue", { due: fmt.money(dueMinor, assignment.currency) }) });
+      return;
+    }
     const parsed = personPaymentSchema.safeParse({
       ...form,
       assignmentId: assignment.id,

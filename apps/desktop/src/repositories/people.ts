@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AssignmentInput, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
+import type { AssignmentInput, AssignmentLifecycle, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
 import { atomicCommand } from "../lib/atomic";
 import { withLock } from "../lib/mutex";
@@ -309,25 +309,50 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
   );
   if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
 
-  const r = await execute(
-    "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
-    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
-  );
-  const paymentId = r.lastInsertId ?? 0;
-
   const ctx = await selectOne<{
     project_id: number;
     currency: string;
     fx_rate_micro: number;
     person_name: string;
     person_type: string;
+    agreed_minor: number;
+    lifecycle_status: AssignmentLifecycle;
+    earned_minor_at_cancellation: number | null;
+    archived_at: string | null;
+    project_archived_at: string | null;
+    person_archived_at: string | null;
   }>(
-    `SELECT a.project_id, a.currency, a.fx_rate_micro, pe.name AS person_name, pe.type AS person_type
-     FROM project_assignments a JOIN people pe ON pe.id = a.person_id
+    `SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+            a.earned_minor_at_cancellation, a.archived_at,
+            p.archived_at AS project_archived_at,
+            pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
+     FROM project_assignments a
+     JOIN people pe ON pe.id = a.person_id
+     JOIN projects p ON p.id = a.project_id
      WHERE a.id = $1`,
     [input.assignmentId],
   );
   if (!ctx) throw new Error("ASSIGNMENT_NOT_FOUND");
+  // Same derivation and the same order of checks as the Rust command, so the
+  // double cannot accept a payment production would reject.
+  if (ctx.archived_at !== null || ctx.project_archived_at !== null || ctx.person_archived_at !== null) {
+    throw new Error("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID");
+  }
+  const earnedMinor = ctx.lifecycle_status === "CANCELLED"
+    ? Math.max(0, ctx.earned_minor_at_cancellation ?? 0)
+    : Math.max(0, await assignmentEarnedMinor(input.assignmentId));
+  const paidRow = await selectOne<{ paid: number }>(
+    "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL",
+    [input.assignmentId],
+  );
+  const dueMinor = Math.max(0, earnedMinor - (paidRow?.paid ?? 0));
+  if (input.amountMinor > dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
+
+  const r = await execute(
+    "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
+    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
+  );
+  const paymentId = r.lastInsertId ?? 0;
     const categoryName = ctx.person_type === "EMPLOYEE" ? "Salaries" : "Freelancers";
     const category = await selectOne<{ id: number }>(
       "SELECT id FROM expense_categories WHERE name_en = $1 ORDER BY id LIMIT 1",

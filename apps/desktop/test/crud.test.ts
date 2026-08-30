@@ -273,7 +273,22 @@ describe("delete: removing a person payment removes its auto-created expense", (
     const projectId = await createProject("PRJ-2026-913", project(clientId));
     const personId = await createPerson({ type: "FREELANCER", name: "Eng E", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 50_000_00, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
-    const paymentId = await createPersonPayment({ assignmentId, date: "2026-07-10", amountMinor: 20_000_00, note: null });
+    // A person payment cannot exceed the assignment's earned-and-unpaid value,
+    // and this project has collected nothing, so the fee is paid through a
+    // client certificate first. Paying it releases the assignment's share.
+    // No VAT or retention here, so the certificate's net payable equals its
+    // gross and collecting it releases exactly 10% of the contract value —
+    // and therefore 10% of the assignment's agreed fee.
+    const contractId = await createContract(contract(projectId, { vatBp: 0, retentionBp: 0 }));
+    const certId = await createCertificate(await nextCertificateSeq(contractId), {
+      contractId, number: "PC-CASCADE", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null,
+      description: null, grossMinor: 10_000_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
+    });
+    await createPayment(
+      { contractId, kind: "CERTIFICATE", number: "PAY-CASCADE", date: "2026-07-05", amountMinor: 10_000_000, method: "CASH", bank: null, reference: null, notes: null },
+      [{ certificateId: certId, amountMinor: 10_000_000 }],
+    );
+    const paymentId = await createPersonPayment({ assignmentId, date: "2026-07-10", amountMinor: 5_000_00, note: null });
 
     expect((await listExpenses()).filter((e) => e.personPaymentId === paymentId)).toHaveLength(1);
 
@@ -324,21 +339,26 @@ describe("archive: project and client preserve descendants", () => {
   it("keeps every project-owned record when the project is archived", async () => {
     const clientId = await createClient(client());
     const projectId = await createProject("PRJ-2026-920", project(clientId));
-    const contractId = await createContract(contract(projectId));
+    // No VAT or retention, so collecting the certificate below releases exactly
+    // 10% of the contract — and of the assignment fee the person is paid from.
+    const contractId = await createContract(contract(projectId, { vatBp: 0, retentionBp: 0 }));
     const seq = await nextCertificateSeq(contractId);
     const certId = await createCertificate(seq, {
       contractId, number: "PC-1", date: "2026-07-01", submissionDate: null, dueDateOverride: null,
       description: null, grossMinor: 10_000_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
     });
+    // Fully collected, so the assignment below has earned value to be paid from.
     const paymentId = await createPayment(
-      { contractId, kind: "CERTIFICATE", number: "PAY-1", date: "2026-07-05", amountMinor: 1_000_000, method: "CASH", bank: null, reference: null, notes: null },
-      [{ certificateId: certId, amountMinor: 1_000_000 }],
+      { contractId, kind: "CERTIFICATE", number: "PAY-1", date: "2026-07-05", amountMinor: 10_000_000, method: "CASH", bank: null, reference: null, notes: null },
+      [{ certificateId: certId, amountMinor: 10_000_000 }],
     );
     const stageId = await createStage({ projectId, name: "Concept", sortOrder: 0, startDate: null, endDate: null, status: "PLANNED", completionBp: 0, engineers: null, notes: null });
     await createDocument({ projectId, category: "OTHER", title: "Doc.pdf", path: "C:\\doc.pdf" });
     const personId = await createPerson({ type: "FREELANCER", name: "Eng F", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 50_000_00, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
-    const personPaymentId = await createPersonPayment({ assignmentId, date: "2026-07-10", amountMinor: 20_000_00, note: null });
+    // Limited to the assignment's earned-and-unpaid value (10% of the fee, as
+    // 10% of the contract has been collected).
+    const personPaymentId = await createPersonPayment({ assignmentId, date: "2026-07-10", amountMinor: 5_000_00, note: null });
     const catId = await firstCategoryId();
     await createExpense({ date: "2026-07-01", categoryId: catId, description: "Printing", projectId, supplier: null, amountMinor: 1_000_00, currency: "EGP", fxRateMicro: 1_000_000, attachmentPath: null });
     await createTimeEntry({ personId, projectId, stageId, date: "2026-07-15", minutes: 60, billable: true, note: null });
