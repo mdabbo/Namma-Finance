@@ -73,16 +73,25 @@ describe("payment evidence controls certificate status", () => {
     expect(rawOne<{ certificate_id: number }>(`SELECT certificate_id FROM payment_certificate_allocations WHERE payment_id=${id}`)?.certificate_id).toBe(certificateId);
   });
 
-  it("reopens when an edited certificate increases above collected cash", async () => {
+  it("rejects editing a paid certificate's financial fields and leaves it unchanged", async () => {
+    // Milestone 1 rule B: a PAID certificate has no financial editing. Reopening
+    // a paid certificate happens by voiding/reducing its payment evidence (see
+    // "reopens after payment reduction or deletion"), never by editing the
+    // certificate to outrun the cash collected against it.
     const { contractId, certificateId } = await fixture();
     await createPayment(payment(contractId), [{ certificateId, amountMinor: 10_000 }]);
+    expect((await getCertificate(certificateId))?.status).toBe("PAID");
     const cert = (await getCertificate(certificateId))!;
-    await import("../src/repositories/certificates").then(({ updateCertificate }) => updateCertificate(certificateId, {
-      contractId, number: cert.number, date: cert.date, submissionDate: cert.submissionDate,
-      dueDateOverride: cert.dueDateOverride, description: cert.description, grossMinor: 10_001,
-      discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
-    }));
-    expect((await getCertificate(certificateId))?.status).toBe("APPROVED");
+    await import("../src/repositories/certificates").then(({ updateCertificate }) =>
+      expect(updateCertificate(certificateId, {
+        contractId, number: cert.number, date: cert.date, submissionDate: cert.submissionDate,
+        dueDateOverride: cert.dueDateOverride, description: cert.description, grossMinor: 10_001,
+        discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
+      })).rejects.toThrow("PAID_CERTIFICATE_IMMUTABLE"),
+    );
+    const after = (await getCertificate(certificateId))!;
+    expect(after.status).toBe("PAID");
+    expect(after.grossMinor).toBe(10_000);
   });
 
   it("cannot hide allocated cash by reverting a certificate to draft", async () => {

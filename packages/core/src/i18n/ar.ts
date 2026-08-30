@@ -550,6 +550,7 @@ export const ar: Dictionary = {
     markSubmitted: "تحويل إلى مُقدَّم",
     markApproved: "اعتماد",
     markPaid: "تحويل إلى مدفوع",
+    correctDetails: "تصحيح البيانات",
     pdfTitle: "مستخلص أعمال",
   },
   payments: {

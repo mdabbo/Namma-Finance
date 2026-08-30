@@ -1136,6 +1136,397 @@ async fn reconcile_certificates_atomic(
     Ok(changed)
 }
 
+/// Financial and administrative fields of a certificate mutation. Money stays
+/// in integer minor units; the derived contract-revision snapshot is bound
+/// inside the transaction from the applicable approved revision, never trusted
+/// from the caller.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CertificateCommandInput {
+    contract_id: i64,
+    date: String,
+    submission_date: Option<String>,
+    due_date_override: Option<String>,
+    #[serde(default)]
+    due_date_confirmed: bool,
+    description: Option<String>,
+    gross_minor: i64,
+    discount_minor: i64,
+    manual_advance_recovery_minor: Option<i64>,
+    status: String,
+}
+
+/// The stored lifecycle-relevant columns of one certificate.
+struct CertificateLifecycleRow {
+    contract_id: i64,
+    status: String,
+    number: String,
+    date: String,
+    gross_minor: i64,
+    discount_minor: i64,
+    manual_advance_recovery_minor: Option<i64>,
+}
+
+async fn load_certificate_lifecycle(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    certificate_id: i64,
+) -> Result<CertificateLifecycleRow, String> {
+    let row = sqlx::query(
+        "SELECT contract_id,status,number,date,gross_minor,discount_minor,manual_advance_recovery_minor
+         FROM payment_certificates WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+    )
+    .bind(certificate_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "CERTIFICATE_NOT_FOUND".to_string())?;
+    Ok(CertificateLifecycleRow {
+        contract_id: row.try_get("contract_id").map_err(|e| e.to_string())?,
+        status: row.try_get("status").map_err(|e| e.to_string())?,
+        number: row.try_get("number").map_err(|e| e.to_string())?,
+        date: row.try_get("date").map_err(|e| e.to_string())?,
+        gross_minor: row.try_get("gross_minor").map_err(|e| e.to_string())?,
+        discount_minor: row.try_get("discount_minor").map_err(|e| e.to_string())?,
+        manual_advance_recovery_minor: row
+            .try_get("manual_advance_recovery_minor")
+            .map_err(|e| e.to_string())?,
+    })
+}
+
+/// The financial terms of a certificate, off which lifecycle immutability is
+/// judged. The revision snapshot is a function of `date`, so `date` is a
+/// financial field: changing it can rebind VAT/retention/advance.
+fn certificate_financials_changed(
+    stored: &CertificateLifecycleRow,
+    input: &CertificateCommandInput,
+    input_number: &str,
+) -> bool {
+    stored.gross_minor != input.gross_minor
+        || stored.discount_minor != input.discount_minor
+        || stored.manual_advance_recovery_minor != input.manual_advance_recovery_minor
+        || stored.date != input.date
+        || stored.number != input_number
+}
+
+/// The live certificate ids of a contract, for a whole-contract reconcile.
+///
+/// Advance recovery is cumulative, so any certificate mutation can shift a
+/// later certificate's payable; reconciling the entire contract — not only the
+/// edited row — is what keeps statuses honest.
+async fn contract_certificate_ids(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    contract_id: i64,
+) -> Result<Vec<i64>, String> {
+    let rows = sqlx::query(
+        "SELECT id FROM payment_certificates
+         WHERE contract_id=? AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL
+         ORDER BY seq,id",
+    )
+    .bind(contract_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|row| row.try_get("id").map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// Reject any state where a certificate's live allocations exceed its
+/// recalculated payable capacity, or where a draft carries allocations.
+///
+/// Runs after a certificate mutation is applied but before commit, so reducing
+/// an earlier certificate's payable — which lowers a later certificate's
+/// cumulative advance-recovered payable — is rolled back atomically if it would
+/// strand cash against a certificate that can no longer receive it.
+async fn assert_contract_allocation_integrity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    contract_id: i64,
+) -> Result<(), String> {
+    for payable in load_contract_payables(tx, contract_id).await? {
+        let allocated = valid_allocated_minor(tx, payable.id).await?;
+        if payable.status == "DRAFT" {
+            if allocated > 0 {
+                return Err("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT".into());
+            }
+            continue;
+        }
+        let capacity = payable.net_payable_minor.max(0);
+        if allocated > capacity {
+            return Err("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID".into());
+        }
+    }
+    Ok(())
+}
+
+/// Create a certificate, its contract-revision snapshot and its collection
+/// status in one transaction. `seq` is reserved inside the transaction so
+/// concurrent creation cannot duplicate it; the number is reserved beforehand
+/// through `reserve_next_number_atomic`.
+#[tauri::command]
+async fn create_certificate_atomic(
+    db_instances: State<'_, DbInstances>,
+    number: String,
+    input: CertificateCommandInput,
+) -> Result<i64, String> {
+    if input.status == "PAID" {
+        return Err("PAID_REQUIRES_PAYMENT".into());
+    }
+    if input.discount_minor < 0 || input.gross_minor < 0 || input.discount_minor > input.gross_minor
+    {
+        return Err("INVALID_CERTIFICATE_AMOUNTS".into());
+    }
+    if number.trim().is_empty() {
+        return Err("CERTIFICATE_NUMBER_REQUIRED".into());
+    }
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    let mut tx = begin_immediate(pool).await?;
+    let seq: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(seq),0)+1 FROM payment_certificates WHERE contract_id=? AND deleted_at IS NULL",
+    )
+    .bind(input.contract_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    let inserted = sqlx::query(
+        "INSERT INTO payment_certificates (contract_id, seq, number, date, submission_date, due_date_override, due_date_confirmed_at,
+            description, gross_minor, discount_minor, manual_advance_recovery_minor, status,
+            contract_revision_id, contract_value_minor_snapshot, vat_bp_snapshot, retention_bp_snapshot,
+            withholding_bp_snapshot, advance_minor_snapshot, advance_method_snapshot, payment_terms_days_snapshot,
+            currency_snapshot, fx_rate_micro_snapshot)
+         SELECT ?,?,?,?,?,?,CASE WHEN ?=1 THEN datetime('now') END,?,?,?,?,?,
+            r.id,r.contract_value_minor,r.vat_bp,r.retention_bp,r.withholding_bp,r.advance_minor,
+            r.advance_recovery_method,r.payment_terms_days,r.currency,r.fx_rate_micro
+         FROM contract_revisions r WHERE r.contract_id=? AND r.approved_at IS NOT NULL
+           AND (r.effective_date <= ? OR r.revision_number=1)
+         ORDER BY CASE WHEN r.effective_date <= ? THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1",
+    )
+    .bind(input.contract_id).bind(seq).bind(&number).bind(&input.date).bind(&input.submission_date)
+    .bind(&input.due_date_override).bind(i64::from(input.due_date_confirmed)).bind(&input.description)
+    .bind(input.gross_minor).bind(input.discount_minor).bind(input.manual_advance_recovery_minor).bind(&input.status)
+    .bind(input.contract_id).bind(&input.date).bind(&input.date)
+    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+    if inserted.rows_affected() != 1 {
+        return Err("NO_APPROVED_CONTRACT_REVISION".into());
+    }
+    let certificate_id = inserted.last_insert_rowid();
+    assert_contract_allocation_integrity(&mut tx, input.contract_id).await?;
+    let ids = contract_certificate_ids(&mut tx, input.contract_id).await?;
+    reconcile_certificates(&mut tx, &ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(certificate_id)
+}
+
+/// Edit a certificate. DRAFT certificates may have every field edited and their
+/// snapshot refreshed; SUBMITTED and APPROVED certificates accept only
+/// non-financial administrative corrections; PAID certificates are immutable.
+/// Status is never changed here — transitions go through
+/// `transition_certificate_atomic` — so a caller cannot assert PAID.
+#[tauri::command]
+async fn update_certificate_atomic(
+    db_instances: State<'_, DbInstances>,
+    certificate_id: i64,
+    number: String,
+    input: CertificateCommandInput,
+) -> Result<(), String> {
+    if input.status == "PAID" {
+        return Err("PAID_REQUIRES_PAYMENT".into());
+    }
+    if input.discount_minor < 0 || input.gross_minor < 0 || input.discount_minor > input.gross_minor
+    {
+        return Err("INVALID_CERTIFICATE_AMOUNTS".into());
+    }
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    let mut tx = begin_immediate(pool).await?;
+    let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    if stored.status == "PAID" {
+        return Err("PAID_CERTIFICATE_IMMUTABLE".into());
+    }
+    if stored.status == "DRAFT" {
+        // Full edit with a refreshed (or, on advance to SUBMITTED, frozen)
+        // revision snapshot. A draft edit may carry the certificate forward to
+        // SUBMITTED; APPROVED is reached only through a transition.
+        if input.status != "DRAFT" && input.status != "SUBMITTED" {
+            return Err("USE_TRANSITION_FOR_APPROVAL".into());
+        }
+        let updated = sqlx::query(
+            "WITH chosen AS (
+               SELECT r.* FROM contract_revisions r
+               WHERE r.contract_id=? AND r.approved_at IS NOT NULL
+                 AND (r.effective_date <= ? OR r.revision_number=1)
+               ORDER BY CASE WHEN r.effective_date <= ? THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1
+             )
+             UPDATE payment_certificates SET number=?, date=?, submission_date=?, due_date_override=?,
+               due_date_confirmed_at=CASE WHEN ?=1 THEN datetime('now') END,
+               description=?, gross_minor=?, discount_minor=?, manual_advance_recovery_minor=?, status=?,
+               contract_revision_id=(SELECT id FROM chosen), contract_value_minor_snapshot=(SELECT contract_value_minor FROM chosen),
+               vat_bp_snapshot=(SELECT vat_bp FROM chosen), retention_bp_snapshot=(SELECT retention_bp FROM chosen),
+               withholding_bp_snapshot=(SELECT withholding_bp FROM chosen), advance_minor_snapshot=(SELECT advance_minor FROM chosen),
+               advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
+               currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
+             WHERE id=? AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)",
+        )
+        .bind(input.contract_id).bind(&input.date).bind(&input.date)
+        .bind(&number).bind(&input.date).bind(&input.submission_date).bind(&input.due_date_override)
+        .bind(i64::from(input.due_date_confirmed)).bind(&input.description)
+        .bind(input.gross_minor).bind(input.discount_minor).bind(input.manual_advance_recovery_minor).bind(&input.status)
+        .bind(certificate_id)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            return Err("CERTIFICATE_REVISION_BIND_FAILED".into());
+        }
+    } else {
+        // SUBMITTED or APPROVED: financial terms are frozen; only non-financial
+        // administrative metadata may be corrected.
+        if certificate_financials_changed(&stored, &input, &number) {
+            return Err("CERTIFICATE_FINANCIALS_IMMUTABLE".into());
+        }
+        let updated = sqlx::query(
+            "UPDATE payment_certificates SET submission_date=?, due_date_override=?,
+               due_date_confirmed_at=CASE WHEN ?=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END,
+               description=?
+             WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+        )
+        .bind(&input.submission_date).bind(&input.due_date_override)
+        .bind(i64::from(input.due_date_confirmed)).bind(&input.description).bind(certificate_id)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            return Err("CERTIFICATE_NOT_FOUND".into());
+        }
+    }
+    assert_contract_allocation_integrity(&mut tx, stored.contract_id).await?;
+    let ids = contract_certificate_ids(&mut tx, stored.contract_id).await?;
+    reconcile_certificates(&mut tx, &ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+/// Move a certificate between workflow states. PAID is never a target — it is
+/// reached only by payment evidence through reconciliation — and a PAID
+/// certificate cannot be manually downgraded. Advancing DRAFT→SUBMITTED freezes
+/// the financial snapshot from the applicable approved revision.
+#[tauri::command]
+async fn transition_certificate_atomic(
+    db_instances: State<'_, DbInstances>,
+    certificate_id: i64,
+    target_status: String,
+    submission_date: Option<String>,
+    due_date_confirmed: Option<bool>,
+) -> Result<(), String> {
+    if target_status == "PAID" {
+        return Err("PAID_REQUIRES_PAYMENT".into());
+    }
+    if !["DRAFT", "SUBMITTED", "APPROVED"].contains(&target_status.as_str()) {
+        return Err("INVALID_CERTIFICATE_STATUS".into());
+    }
+    let due_date_confirmed = due_date_confirmed.unwrap_or(false);
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    let mut tx = begin_immediate(pool).await?;
+    let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    if stored.status == "PAID" {
+        return Err("PAID_NO_MANUAL_DOWNGRADE".into());
+    }
+    if target_status == "DRAFT" {
+        let allocated = valid_allocated_minor(&mut tx, certificate_id).await?;
+        if allocated > 0 {
+            return Err("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT".into());
+        }
+    }
+    if target_status == "SUBMITTED" && stored.status == "DRAFT" {
+        // Freeze the financial snapshot as the certificate leaves DRAFT.
+        let updated = sqlx::query(
+            "WITH chosen AS (
+               SELECT r.* FROM contract_revisions r JOIN payment_certificates pc ON pc.contract_id=r.contract_id
+               WHERE pc.id=? AND r.approved_at IS NOT NULL AND (r.effective_date <= pc.date OR r.revision_number=1)
+               ORDER BY CASE WHEN r.effective_date <= pc.date THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1
+             )
+             UPDATE payment_certificates SET status='SUBMITTED', submission_date=COALESCE(submission_date,?),
+               due_date_confirmed_at=CASE WHEN ?=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END,
+               contract_revision_id=(SELECT id FROM chosen), contract_value_minor_snapshot=(SELECT contract_value_minor FROM chosen),
+               vat_bp_snapshot=(SELECT vat_bp FROM chosen), retention_bp_snapshot=(SELECT retention_bp FROM chosen),
+               withholding_bp_snapshot=(SELECT withholding_bp FROM chosen), advance_minor_snapshot=(SELECT advance_minor FROM chosen),
+               advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
+               currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
+             WHERE id=? AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)",
+        )
+        .bind(certificate_id).bind(&submission_date).bind(i64::from(due_date_confirmed)).bind(certificate_id)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            return Err("CERTIFICATE_REVISION_BIND_FAILED".into());
+        }
+    } else {
+        let updated = sqlx::query(
+            "UPDATE payment_certificates SET status=?, submission_date=COALESCE(submission_date,?),
+               due_date_confirmed_at=CASE WHEN ?=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END
+             WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+        )
+        .bind(&target_status).bind(&submission_date).bind(i64::from(due_date_confirmed)).bind(certificate_id)
+        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if updated.rows_affected() != 1 {
+            return Err("CERTIFICATE_NOT_FOUND".into());
+        }
+    }
+    assert_contract_allocation_integrity(&mut tx, stored.contract_id).await?;
+    let ids = contract_certificate_ids(&mut tx, stored.contract_id).await?;
+    reconcile_certificates(&mut tx, &ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+/// Void a certificate. A reason is required; a certificate that still carries
+/// live allocations cannot be voided (void the payment first). Voiding removes
+/// its advance consumption, so the whole contract is reconciled afterwards.
+#[tauri::command]
+async fn void_certificate_atomic(
+    db_instances: State<'_, DbInstances>,
+    certificate_id: i64,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let void_reason = reason
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| "VOID_REASON_REQUIRED".to_string())?;
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    let mut tx = begin_immediate(pool).await?;
+    let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    let allocated = valid_allocated_minor(&mut tx, certificate_id).await?;
+    if allocated > 0 {
+        return Err("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED".into());
+    }
+    let updated = sqlx::query(
+        "UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=?
+         WHERE id=? AND voided_at IS NULL",
+    )
+    .bind(&void_reason)
+    .bind(certificate_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if updated.rows_affected() != 1 {
+        return Err("CERTIFICATE_NOT_FOUND_OR_VOIDED".into());
+    }
+    // Voiding removes this certificate's advance consumption, which can raise a
+    // later certificate's recovered payable; if that would strand cash already
+    // collected against one, the void is rejected atomically.
+    assert_contract_allocation_integrity(&mut tx, stored.contract_id).await?;
+    let ids = contract_certificate_ids(&mut tx, stored.contract_id).await?;
+    reconcile_certificates(&mut tx, &ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn create_person_payment_atomic(
     db_instances: State<'_, DbInstances>,
@@ -5930,6 +6321,10 @@ pub fn run() {
             update_payment_atomic,
             void_payment_atomic,
             reconcile_certificates_atomic,
+            create_certificate_atomic,
+            update_certificate_atomic,
+            transition_certificate_atomic,
+            void_certificate_atomic,
             create_person_payment_atomic,
             delete_person_payment_atomic,
             cancel_assignment_atomic,

@@ -548,6 +548,7 @@ export const en = {
     markSubmitted: "Mark submitted",
     markApproved: "Mark approved",
     markPaid: "Mark paid",
+    correctDetails: "Correct details",
     pdfTitle: "Payment Certificate",
   },
   payments: {

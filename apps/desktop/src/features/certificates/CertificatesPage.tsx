@@ -190,7 +190,9 @@ export function CertificatesPage() {
           <Button variant="ghost" title={t("common.exportPdf")} onClick={() => setPrinting(c)}>
             <FileDown size={15} />
           </Button>
-          <Button variant="ghost" onClick={() => setEditing(c)}>{t("common.edit")}</Button>
+          {c.status !== "PAID" && (
+            <Button variant="ghost" onClick={() => setEditing(c)}>{c.status === "DRAFT" ? t("common.edit") : t("certificates.correctDetails")}</Button>
+          )}
           <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(c)}>
             {t("lifecycle.voidCertificate")}
           </Button>

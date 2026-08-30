@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CertificateInput, CertificateStatus, PaymentCertificate } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 
 export interface CertificateRow {
   id: number;
@@ -112,9 +113,89 @@ export async function nextCertificateSeq(contractId: number): Promise<number> {
   return (row?.max_seq ?? 0) + 1;
 }
 
-export async function createCertificate(seq: number, input: CertificateInput): Promise<number> {
+export async function nextCertificateNumber(prefix = "CERT", date = new Date()): Promise<string> {
+  const { reserveNextNumber } = await import("./numbering");
+  return reserveNextNumber("CERTIFICATE", prefix, date);
+}
+
+/** The financial + administrative fields the Rust `CertificateCommandInput` carries (number is passed separately). */
+function toCertificateCommandInput(input: CertificateInput) {
+  return {
+    contractId: input.contractId,
+    date: input.date,
+    submissionDate: input.submissionDate ?? null,
+    dueDateOverride: input.dueDateOverride ?? null,
+    dueDateConfirmed: input.dueDateConfirmed ?? false,
+    description: input.description ?? null,
+    grossMinor: input.grossMinor,
+    discountMinor: input.discountMinor,
+    manualAdvanceRecoveryMinor: input.manualAdvanceRecoveryMinor ?? null,
+    status: input.status,
+  };
+}
+
+/** Live certificate ids of a contract, for the whole-contract reconcile (test double). */
+async function contractCertificateIdsDouble(contractId: number): Promise<number[]> {
+  const rows = await select<{ id: number }>(
+    `SELECT id FROM payment_certificates
+     WHERE contract_id=$1 AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL
+     ORDER BY seq,id`,
+    [contractId],
+  );
+  return rows.map((row) => row.id);
+}
+
+/** Reject over-allocation / allocated drafts across the contract (test double). */
+async function assertContractAllocationIntegrityDouble(contractId: number): Promise<void> {
+  const { loadContractPayables, validAllocatedMinor } = await import("./payments");
+  for (const payable of await loadContractPayables(contractId)) {
+    const allocated = await validAllocatedMinor(payable.id);
+    if (payable.status === "DRAFT") {
+      if (allocated > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT");
+      continue;
+    }
+    if (allocated > Math.max(0, payable.netPayableMinor)) throw new Error("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
+  }
+}
+
+async function reconcileContractDouble(contractId: number): Promise<void> {
+  const { reconcileWithinTransaction } = await import("./payments");
+  await reconcileWithinTransaction(await contractCertificateIdsDouble(contractId));
+}
+
+/**
+ * Production certificate mutations are Rust-owned BEGIN IMMEDIATE transactions
+ * (create/update/transition/void). The functions below dispatch to them and
+ * carry a behaviourally-equivalent TypeScript double for the vitest harness and
+ * the browser bridge — the double runs inside `runInTransaction`, so its
+ * mutation, allocation-integrity check and whole-contract reconcile land as one
+ * fact exactly as the Rust command does.
+ */
+/**
+ * Create a certificate. The sequence is reserved inside the atomic command, so
+ * a legacy `seq` argument is accepted for source compatibility but ignored —
+ * the database is the authority on sequence, which is what makes concurrent
+ * creation collision-free.
+ */
+export function createCertificate(seqOrInput: number | CertificateInput, maybeInput?: CertificateInput): Promise<number> {
+  const input = typeof seqOrInput === "number" ? (maybeInput as CertificateInput) : seqOrInput;
+  return atomicCommand<number>(
+    "create_certificate_atomic",
+    { number: input.number, input: toCertificateCommandInput(input) },
+    () => createCertificateDouble(input.number, input),
+  );
+}
+
+async function createCertificateDouble(number: string, input: CertificateInput): Promise<number> {
   if (input.status === "PAID") throw new Error("PAID_REQUIRES_PAYMENT");
-  const r = await execute(
+  if (input.discountMinor < 0 || input.grossMinor < 0 || input.discountMinor > input.grossMinor) throw new Error("INVALID_CERTIFICATE_AMOUNTS");
+  if (!number.trim()) throw new Error("CERTIFICATE_NUMBER_REQUIRED");
+  const seqRow = await selectOne<{ seq: number }>(
+    "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM payment_certificates WHERE contract_id=$1 AND deleted_at IS NULL",
+    [input.contractId],
+  );
+  const seq = seqRow?.seq ?? 1;
+  const inserted = await execute(
     `INSERT INTO payment_certificates (contract_id, seq, number, date, submission_date, due_date_override,due_date_confirmed_at,
         description, gross_minor, discount_minor, manual_advance_recovery_minor, status,
         contract_revision_id,contract_value_minor_snapshot,vat_bp_snapshot,retention_bp_snapshot,
@@ -126,27 +207,39 @@ export async function createCertificate(seq: number, input: CertificateInput): P
      FROM contract_revisions r WHERE r.contract_id=$1 AND r.approved_at IS NOT NULL
        AND (r.effective_date <= $4 OR r.revision_number=1)
      ORDER BY CASE WHEN r.effective_date <= $4 THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1`,
-    [input.contractId, seq, input.number, input.date, input.submissionDate ?? null,
+    [input.contractId, seq, number, input.date, input.submissionDate ?? null,
      input.dueDateOverride ?? null, input.dueDateConfirmed ? 1 : 0, input.description ?? null, input.grossMinor, input.discountMinor,
      input.manualAdvanceRecoveryMinor ?? null, input.status],
   );
-  if (r.rowsAffected !== 1) throw new Error("NO_APPROVED_CONTRACT_REVISION");
-  return r.lastInsertId ?? 0;
+  if (inserted.rowsAffected !== 1) throw new Error("NO_APPROVED_CONTRACT_REVISION");
+  const id = inserted.lastInsertId ?? 0;
+  await assertContractAllocationIntegrityDouble(input.contractId);
+  await reconcileContractDouble(input.contractId);
+  return id;
 }
 
-export async function nextCertificateNumber(prefix = "CERT", date = new Date()): Promise<string> {
-  const { reserveNextNumber } = await import("./numbering");
-  return reserveNextNumber("CERTIFICATE", prefix, date);
+export function updateCertificate(id: number, input: CertificateInput): Promise<void> {
+  return atomicCommand<void>(
+    "update_certificate_atomic",
+    { certificateId: id, number: input.number, input: toCertificateCommandInput(input) },
+    () => updateCertificateDouble(id, input.number, input),
+  );
 }
 
-export async function updateCertificate(id: number, input: CertificateInput): Promise<void> {
+async function updateCertificateDouble(id: number, number: string, input: CertificateInput): Promise<void> {
   if (input.status === "PAID") throw new Error("PAID_REQUIRES_PAYMENT");
-  const previous = await selectOne<{ status: CertificateStatus }>("SELECT status FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL", [id]);
-  if (!previous) throw new Error("CERTIFICATE_NOT_FOUND");
-  if (input.status === "DRAFT") await assertCertificateHasNoLiveAllocations(id);
-  const refreshSnapshot = input.status === "DRAFT" || (previous.status === "DRAFT" && input.status === "SUBMITTED");
-  const result = refreshSnapshot
-    ? await execute(
+  if (input.discountMinor < 0 || input.grossMinor < 0 || input.discountMinor > input.grossMinor) throw new Error("INVALID_CERTIFICATE_AMOUNTS");
+  const stored = await selectOne<{ contractId: number; status: CertificateStatus; number: string; date: string; grossMinor: number; discountMinor: number; manualAdvanceRecoveryMinor: number | null }>(
+    `SELECT contract_id AS contractId,status,number,date,gross_minor AS grossMinor,discount_minor AS discountMinor,
+            manual_advance_recovery_minor AS manualAdvanceRecoveryMinor
+     FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL AND voided_at IS NULL`,
+    [id],
+  );
+  if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  if (stored.status === "PAID") throw new Error("PAID_CERTIFICATE_IMMUTABLE");
+  if (stored.status === "DRAFT") {
+    if (input.status !== "DRAFT" && input.status !== "SUBMITTED") throw new Error("USE_TRANSITION_FOR_APPROVAL");
+    const updated = await execute(
       `WITH chosen AS (
          SELECT r.* FROM contract_revisions r
          WHERE r.contract_id=$1 AND r.approved_at IS NOT NULL
@@ -161,78 +254,125 @@ export async function updateCertificate(id: number, input: CertificateInput): Pr
          withholding_bp_snapshot=(SELECT withholding_bp FROM chosen), advance_minor_snapshot=(SELECT advance_minor FROM chosen),
          advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
          currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
-       WHERE id=$12 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
-      [input.contractId, input.number, input.date, input.submissionDate ?? null,
-       input.dueDateOverride ?? null, input.dueDateConfirmed ? 1 : 0, input.description ?? null, input.grossMinor, input.discountMinor,
-       input.manualAdvanceRecoveryMinor ?? null, input.status, id],
-    )
-    : await execute(
-      `UPDATE payment_certificates SET number=$1, date=$2, submission_date=$3, due_date_override=$4,
-          due_date_confirmed_at=CASE WHEN $5=1 THEN datetime('now') END,
-          description=$6, gross_minor=$7, discount_minor=$8, manual_advance_recovery_minor=$9, status=$10
-       WHERE id=$11 AND deleted_at IS NULL`,
-      [input.number, input.date, input.submissionDate ?? null, input.dueDateOverride ?? null,
+       WHERE id=$12 AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
+      [input.contractId, number, input.date, input.submissionDate ?? null, input.dueDateOverride ?? null,
        input.dueDateConfirmed ? 1 : 0, input.description ?? null, input.grossMinor, input.discountMinor,
        input.manualAdvanceRecoveryMinor ?? null, input.status, id],
     );
-  if (result.rowsAffected !== 1) throw new Error(refreshSnapshot ? "CERTIFICATE_REVISION_BIND_FAILED" : "CERTIFICATE_NOT_FOUND");
-  const { reconcileCertificateStatuses } = await import("./payments");
-  await reconcileCertificateStatuses([id]);
+    if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_REVISION_BIND_FAILED");
+  } else {
+    const financialsChanged =
+      stored.grossMinor !== input.grossMinor ||
+      stored.discountMinor !== input.discountMinor ||
+      (stored.manualAdvanceRecoveryMinor ?? null) !== (input.manualAdvanceRecoveryMinor ?? null) ||
+      stored.date !== input.date ||
+      stored.number !== number;
+    if (financialsChanged) throw new Error("CERTIFICATE_FINANCIALS_IMMUTABLE");
+    const updated = await execute(
+      `UPDATE payment_certificates SET submission_date=$1, due_date_override=$2,
+         due_date_confirmed_at=CASE WHEN $3=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END,
+         description=$4
+       WHERE id=$5 AND deleted_at IS NULL AND voided_at IS NULL`,
+      [input.submissionDate ?? null, input.dueDateOverride ?? null, input.dueDateConfirmed ? 1 : 0, input.description ?? null, id],
+    );
+    if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND");
+  }
+  await assertContractAllocationIntegrityDouble(stored.contractId);
+  await reconcileContractDouble(stored.contractId);
 }
 
-export async function setCertificateStatus(id: number, status: CertificateStatus, submissionDate?: string, dueDateConfirmed = false): Promise<void> {
-  if (status === "PAID") throw new Error("PAID_REQUIRES_PAYMENT");
-  if (status === "DRAFT") await assertCertificateHasNoLiveAllocations(id);
-  let result;
-  if (status === "SUBMITTED") {
-    result = await execute(
+export function transitionCertificate(id: number, targetStatus: CertificateStatus, submissionDate?: string, dueDateConfirmed = false): Promise<void> {
+  return atomicCommand<void>(
+    "transition_certificate_atomic",
+    { certificateId: id, targetStatus, submissionDate: submissionDate ?? null, dueDateConfirmed },
+    () => transitionCertificateDouble(id, targetStatus, submissionDate ?? null, dueDateConfirmed),
+  );
+}
+
+/** Retained name for existing callers; a status transition is never a PAID assignment. */
+export function setCertificateStatus(id: number, status: CertificateStatus, submissionDate?: string, dueDateConfirmed = false): Promise<void> {
+  return transitionCertificate(id, status, submissionDate, dueDateConfirmed);
+}
+
+async function transitionCertificateDouble(id: number, targetStatus: CertificateStatus, submissionDate: string | null, dueDateConfirmed: boolean): Promise<void> {
+  if (targetStatus === "PAID") throw new Error("PAID_REQUIRES_PAYMENT");
+  if (!["DRAFT", "SUBMITTED", "APPROVED"].includes(targetStatus)) throw new Error("INVALID_CERTIFICATE_STATUS");
+  const { validAllocatedMinor } = await import("./payments");
+  const stored = await selectOne<{ contractId: number; status: CertificateStatus }>(
+    "SELECT contract_id AS contractId,status FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL AND voided_at IS NULL",
+    [id],
+  );
+  if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  if (stored.status === "PAID") throw new Error("PAID_NO_MANUAL_DOWNGRADE");
+  if (targetStatus === "DRAFT" && (await validAllocatedMinor(id)) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT");
+  if (targetStatus === "SUBMITTED" && stored.status === "DRAFT") {
+    const updated = await execute(
       `WITH chosen AS (
          SELECT r.* FROM contract_revisions r JOIN payment_certificates pc ON pc.contract_id=r.contract_id
-         WHERE pc.id=$1 AND r.approved_at IS NOT NULL
-           AND (r.effective_date <= pc.date OR r.revision_number=1)
+         WHERE pc.id=$1 AND r.approved_at IS NOT NULL AND (r.effective_date <= pc.date OR r.revision_number=1)
          ORDER BY CASE WHEN r.effective_date <= pc.date THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1
        )
-       UPDATE payment_certificates SET status=$2, submission_date=COALESCE(submission_date,$3),
-         due_date_confirmed_at=CASE WHEN $4=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END,
+       UPDATE payment_certificates SET status='SUBMITTED', submission_date=COALESCE(submission_date,$2),
+         due_date_confirmed_at=CASE WHEN $3=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END,
          contract_revision_id=(SELECT id FROM chosen), contract_value_minor_snapshot=(SELECT contract_value_minor FROM chosen),
          vat_bp_snapshot=(SELECT vat_bp FROM chosen), retention_bp_snapshot=(SELECT retention_bp FROM chosen),
          withholding_bp_snapshot=(SELECT withholding_bp FROM chosen), advance_minor_snapshot=(SELECT advance_minor FROM chosen),
          advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
          currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
-       WHERE id=$1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
-      [id, status, submissionDate ?? null, dueDateConfirmed ? 1 : 0],
+       WHERE id=$4 AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
+      [id, submissionDate, dueDateConfirmed ? 1 : 0, id],
     );
+    if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_REVISION_BIND_FAILED");
   } else {
-    result = await execute("UPDATE payment_certificates SET status=$1 WHERE id=$2 AND deleted_at IS NULL", [status, id]);
+    const updated = await execute(
+      `UPDATE payment_certificates SET status=$1, submission_date=COALESCE(submission_date,$2),
+         due_date_confirmed_at=CASE WHEN $3=1 THEN COALESCE(due_date_confirmed_at,datetime('now')) ELSE due_date_confirmed_at END
+       WHERE id=$4 AND deleted_at IS NULL AND voided_at IS NULL`,
+      [targetStatus, submissionDate, dueDateConfirmed ? 1 : 0, id],
+    );
+    if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND");
   }
-  if (result.rowsAffected !== 1) throw new Error(status === "SUBMITTED" ? "CERTIFICATE_REVISION_BIND_FAILED" : "CERTIFICATE_NOT_FOUND");
-  const { reconcileCertificateStatuses } = await import("./payments");
-  await reconcileCertificateStatuses([id]);
-}
-
-async function assertCertificateHasNoLiveAllocations(id: number): Promise<void> {
-  const row = await selectOne<{ count: number }>(
-    `SELECT COUNT(*) AS count FROM payment_certificate_allocations a
-     JOIN payments pm ON pm.id=a.payment_id
-     WHERE a.certificate_id=$1 AND pm.deleted_at IS NULL`,
-    [id],
-  );
-  if ((row?.count ?? 0) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT");
+  await assertContractAllocationIntegrityDouble(stored.contractId);
+  await reconcileContractDouble(stored.contractId);
 }
 
 /**
  * Void (soft) — the certificate stops counting toward invoiced and outstanding
  * amounts but its record and audit history are kept. The schema forbids hard
  * deletion of a certificate (BEFORE DELETE raises PROTECTED_FINANCIAL_RECORD_USE_VOID),
- * so voiding is the only removal path, whatever the certificate's status.
+ * so voiding is the only removal path. A reason is required and a certificate
+ * carrying live allocations cannot be voided (void the payment first).
  */
-export async function deleteCertificate(id: number, reason?: string): Promise<void> {
-  await assertCertificateHasNoLiveAllocations(id);
-  const result = await execute(
-    "UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL",
-    [id, reason?.trim() || "Voided by user"],
+export function voidCertificate(id: number, reason?: string): Promise<void> {
+  return atomicCommand<void>(
+    "void_certificate_atomic",
+    { certificateId: id, reason: reason ?? null },
+    () => voidCertificateDouble(id, reason ?? null),
   );
-  if (result.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND_OR_VOIDED");
+}
+
+/** Retained name for existing callers; supplies a default reason when none is given. */
+export function deleteCertificate(id: number, reason?: string): Promise<void> {
+  return voidCertificate(id, reason?.trim() || "Voided by user");
+}
+
+async function voidCertificateDouble(id: number, reason: string | null): Promise<void> {
+  const voidReason = (reason ?? "").trim();
+  if (!voidReason) throw new Error("VOID_REASON_REQUIRED");
+  const { validAllocatedMinor } = await import("./payments");
+  const stored = await selectOne<{ contractId: number }>(
+    "SELECT contract_id AS contractId FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL AND voided_at IS NULL",
+    [id],
+  );
+  if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  if ((await validAllocatedMinor(id)) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED");
+  const updated = await execute(
+    "UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL",
+    [id, voidReason],
+  );
+  if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND_OR_VOIDED");
+  await assertContractAllocationIntegrityDouble(stored.contractId);
+  await reconcileContractDouble(stored.contractId);
 }
 
 export function useCertificates() {
@@ -257,10 +397,7 @@ export function useCertificateMutations() {
   };
   return {
     create: useMutation({
-      mutationFn: async (input: CertificateInput) => {
-        const seq = await nextCertificateSeq(input.contractId);
-        return createCertificate(seq, input);
-      },
+      mutationFn: (input: CertificateInput) => createCertificate(input),
       onSettled: invalidate,
     }),
     update: useMutation({

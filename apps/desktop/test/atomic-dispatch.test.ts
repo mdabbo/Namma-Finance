@@ -98,6 +98,36 @@ describe("every multi-statement write dispatches to its Rust command", () => {
     expect(invoke).toHaveBeenCalledWith("reconcile_certificates_atomic", { certificateIds: [5] });
   });
 
+  it("certificate create/update/transition/void", async () => {
+    const certificates = await import("../src/repositories/certificates");
+    const input = {
+      contractId: 3, number: "CERT-2026-0001", date: "2026-02-01", submissionDate: "2026-02-01",
+      dueDateOverride: null, description: null, grossMinor: 10_000, discountMinor: 0,
+      manualAdvanceRecoveryMinor: null, status: "DRAFT" as const,
+    };
+    const commandInput = {
+      contractId: 3, date: "2026-02-01", submissionDate: "2026-02-01", dueDateOverride: null,
+      dueDateConfirmed: false, description: null, grossMinor: 10_000, discountMinor: 0,
+      manualAdvanceRecoveryMinor: null, status: "DRAFT",
+    };
+
+    invoke.mockResolvedValue(11);
+    await certificates.createCertificate(input);
+    expect(invoke).toHaveBeenCalledWith("create_certificate_atomic", { number: "CERT-2026-0001", input: commandInput });
+
+    invoke.mockResolvedValue(undefined);
+    await certificates.updateCertificate(11, input);
+    expect(invoke).toHaveBeenCalledWith("update_certificate_atomic", { certificateId: 11, number: "CERT-2026-0001", input: commandInput });
+
+    await certificates.transitionCertificate(11, "SUBMITTED", "2026-02-02", true);
+    expect(invoke).toHaveBeenCalledWith("transition_certificate_atomic", {
+      certificateId: 11, targetStatus: "SUBMITTED", submissionDate: "2026-02-02", dueDateConfirmed: true,
+    });
+
+    await certificates.voidCertificate(11, "duplicate");
+    expect(invoke).toHaveBeenCalledWith("void_certificate_atomic", { certificateId: 11, reason: "duplicate" });
+  });
+
   it("number reservation", async () => {
     const { reserveNextNumberWithinExistingLock } = await import("../src/repositories/numbering");
     invoke.mockResolvedValue("PAY-2026-0001");

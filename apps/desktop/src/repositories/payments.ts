@@ -214,7 +214,7 @@ interface CertificatePayableRow {
  * layer; advance recovery is cumulative across billable certificates, so the
  * whole contract is walked rather than one certificate in isolation.
  */
-async function loadContractPayables(contractId: number): Promise<{ id: number; status: CertificateStatus; netPayableMinor: number; certifiedBaseMinor: number }[]> {
+export async function loadContractPayables(contractId: number): Promise<{ id: number; status: CertificateStatus; netPayableMinor: number; certifiedBaseMinor: number }[]> {
   const rows = await select<CertificatePayableRow>(
     `SELECT pc.id, pc.status, pc.gross_minor AS grossMinor, pc.discount_minor AS discountMinor,
             pc.manual_advance_recovery_minor AS manualAdvanceRecoveryMinor,
@@ -254,7 +254,7 @@ async function loadContractPayables(contractId: number): Promise<{ id: number; s
 }
 
 /** Allocations that count as collected: only those of still-live payments. */
-async function validAllocatedMinor(certificateId: number): Promise<number> {
+export async function validAllocatedMinor(certificateId: number): Promise<number> {
   const row = await selectOne<{ allocated: number }>(
     `SELECT COALESCE(SUM(a.amount_minor),0) AS allocated
      FROM payment_certificate_allocations a JOIN payments p ON p.id=a.payment_id
@@ -274,7 +274,7 @@ async function validAllocatedMinor(certificateId: number): Promise<number> {
  * through `reconcile_certificates` in Rust; both read the same rows and apply
  * the same `desiredCertificateStatus` rule, so the two agree by construction.
  */
-async function reconcileWithinTransaction(certificateIds: number[]): Promise<number> {
+export async function reconcileWithinTransaction(certificateIds: number[]): Promise<number> {
   const unique = [...new Set(certificateIds)];
   if (unique.length === 0) return 0;
   const contracts = await select<{ contractId: number }>(

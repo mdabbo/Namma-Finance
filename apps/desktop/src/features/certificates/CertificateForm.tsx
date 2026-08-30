@@ -54,6 +54,11 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
     void nextCertificateNumber(settings?.certificateNumberPrefix ?? "CERT", new Date(`${form.date}T00:00:00Z`)).then((number) => setForm((current) => current.number ? current : { ...current, number }));
   }, [initial, form.number, form.date, settings?.certificateNumberPrefix]);
 
+  // Lifecycle editing gate (Milestone 1 rule B): only a DRAFT certificate may
+  // have its financial terms edited. SUBMITTED and APPROVED accept only
+  // administrative corrections (dates, description); the backend rejects any
+  // financial change regardless, this just reflects it in the form.
+  const financialsLocked = !!initial && initial.status !== "DRAFT";
   const contract = contracts.find((c) => c.id === form.contractId);
   const terms = initial && initial.contractId === form.contractId ? {
     valueMinor: initial.contractValueMinorSnapshot ?? contract?.valueMinor ?? 0,
@@ -116,7 +121,7 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
       setErrors(errs);
       return;
     }
-    onSubmit(initial?.status === "PAID" ? { ...parsed.data, status: "APPROVED" } : parsed.data);
+    onSubmit(parsed.data);
   }
 
   return (
@@ -150,11 +155,11 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
           </Select>
         </Field>
         <Field label={t("certificates.number")} error={errors.number}>
-          <Input value={form.number} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))} className="tnum" />
+          <Input value={form.number} disabled={financialsLocked} onChange={(e) => setForm((f) => ({ ...f, number: e.target.value }))} className="tnum" />
         </Field>
 
         <Field label={t("common.date")}>
-          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} disabled={financialsLocked} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("certificates.submissionDate")}>
           <DateInput value={form.submissionDate} onChange={(e) => setForm((f) => ({ ...f, submissionDate: e.target.value }))} />
@@ -164,14 +169,14 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
         </Field>
 
         <Field label={t("certificates.gross")} error={errors.grossMinor}>
-          <MoneyInput currency={currency} valueMinor={form.grossMinor} onChange={(v) => setForm((f) => ({ ...f, grossMinor: v ?? 0 }))} />
+          <MoneyInput currency={currency} valueMinor={form.grossMinor} disabled={financialsLocked} onChange={(v) => setForm((f) => ({ ...f, grossMinor: v ?? 0 }))} />
         </Field>
         <Field label={t("certificates.discount")} error={errors.discountMinor}>
-          <MoneyInput currency={currency} valueMinor={form.discountMinor} onChange={(v) => setForm((f) => ({ ...f, discountMinor: v ?? 0 }))} />
+          <MoneyInput currency={currency} valueMinor={form.discountMinor} disabled={financialsLocked} onChange={(v) => setForm((f) => ({ ...f, discountMinor: v ?? 0 }))} />
         </Field>
         <Field label={t("common.status")}>
-          {initial?.status === "PAID" ? (
-            <Select value="PAID" disabled><option value="PAID">{t("status.PAID")}</option></Select>
+          {financialsLocked ? (
+            <Select value={form.status} disabled><option value={form.status}>{t(`status.${form.status}`)}</option></Select>
           ) : (
             <Select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as CertificateStatus }))}>
               {STATUSES.map((s) => (
@@ -186,6 +191,7 @@ export function CertificateForm({ initial, onSubmit, onClose, busy }: Certificat
             <MoneyInput
               currency={currency}
               valueMinor={form.manualAdvanceRecoveryMinor}
+              disabled={financialsLocked}
               onChange={(v) => setForm((f) => ({ ...f, manualAdvanceRecoveryMinor: v }))}
             />
           </Field>
