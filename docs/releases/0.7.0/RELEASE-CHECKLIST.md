@@ -6,7 +6,8 @@ own headings are numbered 0–9; where a reader counts the UX audit as milestone
 
 ## Source and quality
 
-- [x] Work remains on `redesign/v0.7.0`; nothing is merged to `main`.
+- [x] Work was developed on `redesign/v0.7.0` and merged to `main` only after
+      `Quality gates` was green on the released commit — see **Merge record**.
 - [x] Application, mobile, core, Cargo, Tauri, and release-manifest versions are
       synchronized at 0.7.0 (`version:check` verified: **0.7.0 (Beta), schema
       27**).
@@ -91,6 +92,22 @@ latest run before merging.
       (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge. Branch
       protection could not be read anonymously (401); confirm this in repository
       settings before relying on it to block a merge.
+
+### Merge record
+
+| | |
+| --- | --- |
+| Pull request | [#7](https://github.com/mdabbo/Namma-Finance/pull/7) — `main` ← `redesign/v0.7.0` |
+| Merge commit | `177e2aa` — *Merge pull request #7 from mdabbo/redesign/v0.7.0* |
+| Method | Merge commit (not squashed), preserving all 50 commit messages |
+| Scope | 50 commits, 244 files |
+| Gating evidence | `Quality gates` run 33389471727 on `d409a9c`, success, all four jobs |
+
+- [x] `d409a9c` verified as an ancestor of `origin/main`.
+- [ ] `Quality gates` green on the **post-merge** `main` commit `177e2aa`
+      (run #24). The merge commit is a tree no pre-merge run tested, so this is
+      the first gate against `main` as shipped. Confirm before treating `main`
+      as a known-good base.
 
 ## Redesign acceptance
 
@@ -184,12 +201,23 @@ and migrations, not against the installed `.exe`.
 recorded in `KNOWN-LIMITATIONS.md`; the database reset requirement is in
 `MIGRATION-NOTES.md` and the changelog.
 
-**Merge recommendation: READY TO MERGE.** `Quality gates` is green on
-`da440cd` across both the push and pull-request runs, with all four required
-jobs passing and none missing or skipped; PR #7 reports `mergeable_state: clean`.
+**Status: MERGED, NOT SHIPPABLE.** PR #7 merged to `main` as `177e2aa` after
+`Quality gates` passed all four required jobs on `d409a9c` across both the push
+and pull-request runs, with none missing or skipped.
 
-Merging is not the same as shipping. Before this build is distributed to anyone:
-sign the installer (it is unsigned, and while unsigned it must stay labelled
-**Beta** and must not be presented as a trusted production release), confirm a
-clean-machine install, and complete the two-PC sync acceptance test. Confirm the
-four checks are required on `main` so a future red gate actually blocks a merge.
+Merging is not shipping, and this build is not ready to distribute to anyone.
+Outstanding before any distribution:
+
+- **Sign the installer.** It is unsigned. While unsigned it must stay labelled
+  **Beta** and must not be presented as a trusted production release.
+- **Confirm a clean-machine install** starts, creates a fresh database at schema
+  27, and completes onboarding. No automated test drives the packaged binary, so
+  nothing has verified the installed application.
+- **Complete the two-PC sync acceptance test.**
+- **Confirm the four checks are required status checks on `main`**, so a future
+  red gate actually blocks a merge. This was never verified — branch protection
+  could not be read anonymously.
+- **Confirm run #24 is green** on the post-merge merge commit.
+
+Anyone pulling `main` must delete and recreate their development database; there
+is no upgrade path from the retired migration chain. See `MIGRATION-NOTES.md`.
