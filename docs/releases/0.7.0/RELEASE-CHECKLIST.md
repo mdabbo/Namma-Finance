@@ -48,24 +48,49 @@ A local pass proves nothing to anyone who was not sitting at that machine, so
 the release may not claim green gates until this block is filled in from a real
 GitHub Actions run on the released commit.
 
-**Status: NOT SATISFIED.** No GitHub Actions run has been observed for this
-tree, and no pull request has been opened. The `gh` CLI on the release machine
-is not authenticated (`gh auth status`: *not logged into any GitHub hosts*), so
-the pull request could not be created and no workflow run could be read. Until
-this block is filled in, the release must not be described as having passing
-gates.
+**Status: SATISFIED.** `Quality gates` is green on the exact released commit,
+on two independent runs — the `push` run and the `pull_request` run for PR #7 —
+with all four required jobs passing in both. No job was missing, skipped, or
+failing.
 
-- [ ] `Quality gates` workflow green on the released commit — all four jobs
+The SHA recorded below is the commit carrying the release **code**. This
+document is itself committed afterwards, so the branch head advances past it by
+a documentation-only commit; that commit changes no code under test and is
+re-verified by its own `Quality gates` run on the pull request. Check the PR's
+latest run before merging.
+
+- [x] `Quality gates` workflow green on the released commit — all four jobs
       (`TypeScript and unit tests`, `Rust quality`, `Playwright E2E`,
       `Desktop production build`).
-- [ ] Pull request number: `__________________________________________`
-- [ ] Commit SHA: `__________________________________________`
-- [ ] Workflow run URL: `__________________________________________`
-- [ ] `desktop-build-evidence` artifact downloaded; `release-evidence.txt`
-      inside it names the same commit SHA as above.
-- [ ] `playwright-report` artifact downloaded and reviewed.
-- [ ] The four checks are configured as required status checks on `main`
-      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge.
+- [x] Pull request number: **#7** —
+      https://github.com/mdabbo/Namma-Finance/pull/7 (`main` ← `redesign/v0.7.0`,
+      49 commits, 244 files, mergeable state `clean`)
+- [x] Commit SHA: `da440cd0e1ff1ee330fbea8eef8eceb09666332c`
+- [x] Workflow run URL (push):
+      https://github.com/mdabbo/Namma-Finance/actions/runs/33385807451
+- [x] Workflow run URL (pull request):
+      https://github.com/mdabbo/Namma-Finance/actions/runs/33387772581
+
+| Job | push run | PR run |
+| --- | --- | --- |
+| TypeScript and unit tests | success (120s) | success (97s) |
+| Rust quality | success (195s) | success (474s) |
+| Playwright E2E | success (554s) | success (585s) |
+| Desktop production build | success (284s) | success (547s) |
+
+- [x] Both runs uploaded all four artifacts, unexpired: `desktop-installers`
+      (4.75 MB), `desktop-build-evidence`, `playwright-report`,
+      `core-financial-coverage`.
+- [ ] `desktop-build-evidence` **downloaded** and `release-evidence.txt` inside
+      it read back to confirm it names the SHA above. Artifact download requires
+      an authenticated request (the anonymous API returns 401), so this was
+      confirmed only as far as the artifact's presence on the run for that SHA.
+- [ ] `playwright-report` downloaded and reviewed — same authentication
+      limitation.
+- [ ] The four checks are configured as **required status checks** on `main`
+      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge. Branch
+      protection could not be read anonymously (401); confirm this in repository
+      settings before relying on it to block a merge.
 
 ## Redesign acceptance
 
@@ -121,8 +146,10 @@ gates.
   that contains the hash. The authoritative pairing of installer to commit is
   the `desktop-build-evidence` artifact from CI.
 
-- [ ] Rebuild from the final **pushed** commit in CI and attach the
-      `desktop-build-evidence` artifact.
+- [x] Rebuilt from the final **pushed** commit by CI: the `Desktop production
+      build` job succeeded on `da440cd` in both runs above and uploaded
+      `desktop-installers` (4.75 MB) plus `desktop-build-evidence`. Those CI
+      artifacts — not the local build — are the ones to distribute.
 - [ ] Sign and verify the installer before any production distribution
       (`WINDOWS-CODE-SIGNING.md`). **The installer is unsigned; while unsigned it
       must stay labelled Beta and must not be presented as a trusted production
@@ -157,7 +184,12 @@ and migrations, not against the installed `.exe`.
 recorded in `KNOWN-LIMITATIONS.md`; the database reset requirement is in
 `MIGRATION-NOTES.md` and the changelog.
 
-**Merge recommendation: NOT READY.** The source gates pass locally, but the CI
-evidence block above is empty: no pull request exists and no `Quality gates` run
-has been observed for this commit. That block is the release gate, and it is
-unmet.
+**Merge recommendation: READY TO MERGE.** `Quality gates` is green on
+`da440cd` across both the push and pull-request runs, with all four required
+jobs passing and none missing or skipped; PR #7 reports `mergeable_state: clean`.
+
+Merging is not the same as shipping. Before this build is distributed to anyone:
+sign the installer (it is unsigned, and while unsigned it must stay labelled
+**Beta** and must not be presented as a trusted production release), confirm a
+clean-machine install, and complete the two-PC sync acceptance test. Confirm the
+four checks are required on `main` so a future red gate actually blocks a merge.
