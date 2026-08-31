@@ -1,4 +1,5 @@
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import { CONFLICT_PROTECTED_TABLES, NUMBER_COLLISION_TABLES } from "../lib/sync/registry";
 import { APP_VERSION } from "../generated/release";
 
@@ -16,8 +17,10 @@ export async function resolveSyncConflict(id: number, resolution: SyncConflictRe
   const conflict = await selectOne<SyncConflict & { remote_updated_at: string }>("SELECT * FROM sync_conflicts WHERE id=$1 AND status='OPEN'", [id]);
   if (!conflict || (!CONFLICT_PROTECTED_TABLES.has(conflict.table_name) && !NUMBER_COLLISION_TABLES.has(conflict.table_name))) throw new Error("SYNC_CONFLICT_NOT_FOUND");
   if (!note.trim()) throw new Error("SYNC_CONFLICT_REASON_REQUIRED");
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>(
+    "resolve_sync_conflict_atomic",
+    { conflictId: id, resolution, note },
+    async () => {
     const chosenBaseline = resolution === "KEEP_LOCAL" ? conflict.remote_json : conflict.local_json;
     await execute("INSERT INTO sync_record_state(table_name,row_uuid,payload_json,remote_updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(table_name,row_uuid) DO UPDATE SET payload_json=$3,remote_updated_at=$4", [conflict.table_name, conflict.row_uuid, chosenBaseline, conflict.remote_updated_at]);
     const target = await selectOne<{ id: number }>(`SELECT id FROM ${conflict.table_name} WHERE sync_uuid=$1`, [conflict.row_uuid]);
@@ -93,9 +96,6 @@ export async function resolveSyncConflict(id: number, resolution: SyncConflictRe
     if (resolution === "KEEP_REMOTE" || (conflict.conflict_kind === "DUPLICATE_RECORD" && conflict.table_name !== "payment_certificate_allocations")) {
       await execute("DELETE FROM sync_state WHERE key LIKE 'pull:%'");
     }
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+    },
+  );
 }

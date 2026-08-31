@@ -61,6 +61,7 @@ export async function listExpenses(): Promise<ExpenseListItem[]> {
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
      WHERE e.voided_at IS NULL AND e.archived_at IS NULL
+       AND (e.project_id IS NULL OR p.archived_at IS NULL)
      ORDER BY e.date DESC, e.id DESC`,
   );
   return rows.map(mapExpense);
@@ -73,6 +74,7 @@ export async function listExpensesByProject(projectId: number): Promise<ExpenseL
      JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN projects p ON p.id = e.project_id
      WHERE e.project_id = $1 AND e.voided_at IS NULL AND e.archived_at IS NULL
+       AND p.archived_at IS NULL
      ORDER BY e.date DESC, e.id DESC`,
     [projectId],
   );
@@ -102,8 +104,12 @@ export async function updateExpense(id: number, input: ExpenseInput): Promise<vo
   );
 }
 
-export async function deleteExpense(id: number): Promise<void> {
-  const result = await execute("UPDATE expenses SET voided_at=datetime('now'), void_reason='Voided by user' WHERE id=$1 AND voided_at IS NULL AND person_payment_id IS NULL", [id]);
+/** Void (soft): the expense stops counting toward cost but the record is kept. */
+export async function deleteExpense(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE expenses SET voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL AND person_payment_id IS NULL",
+    [id, reason?.trim() || "Voided by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("EXPENSE_NOT_FOUND_VOIDED_OR_LINKED");
 }
 
@@ -159,7 +165,10 @@ export function useExpenseMutations() {
       mutationFn: (v: { id: number; input: ExpenseInput }) => updateExpense(v.id, v.input),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteExpense, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteExpense(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
     createCategory: useMutation({
       mutationFn: (v: { nameEn: string; nameAr: string }) => createCategory(v.nameEn, v.nameAr),
       onSuccess: invalidate,

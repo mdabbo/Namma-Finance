@@ -5,6 +5,16 @@ import { switchLanguage } from "./i18n";
 export interface AppSettings {
   language: "ar" | "en";
   theme: "light" | "dark";
+  /** Office identity shown on printed documents and in onboarding. */
+  companyName: string;
+  companyAddress: string;
+  companyPhone: string;
+  /** Onboarding progress. Confirmation flags are explicit user acknowledgments. */
+  onboardingSkipped: boolean;
+  onboardingCurrencyDone: boolean;
+  onboardingNumberingDone: boolean;
+  /** JSON references of the optional demo workspace ("" = none loaded). */
+  demoWorkspace: string;
   projectCodePrefix: string;
   contractNumberPrefix: string;
   certificateNumberPrefix: string;
@@ -33,6 +43,13 @@ export interface AppSettings {
 const DEFAULTS: AppSettings = {
   language: "ar",
   theme: "light",
+  companyName: "",
+  companyAddress: "",
+  companyPhone: "",
+  onboardingSkipped: false,
+  onboardingCurrencyDone: false,
+  onboardingNumberingDone: false,
+  demoWorkspace: "",
   projectCodePrefix: "PRJ",
   contractNumberPrefix: "CON",
   certificateNumberPrefix: "CERT",
@@ -55,6 +72,13 @@ const DEFAULTS: AppSettings = {
 const KEY_MAP: Record<keyof AppSettings, string> = {
   language: "language",
   theme: "theme",
+  companyName: "company_name",
+  companyAddress: "company_address",
+  companyPhone: "company_phone",
+  onboardingSkipped: "onboarding_skipped",
+  onboardingCurrencyDone: "onboarding_currency_done",
+  onboardingNumberingDone: "onboarding_numbering_done",
+  demoWorkspace: "demo_workspace",
   projectCodePrefix: "project_code_prefix",
   contractNumberPrefix: "contract_number_prefix",
   certificateNumberPrefix: "certificate_number_prefix",
@@ -80,6 +104,13 @@ export async function loadSettings(): Promise<AppSettings> {
   return {
     language: (map.get("language") as AppSettings["language"]) || DEFAULTS.language,
     theme: (map.get("theme") as AppSettings["theme"]) || DEFAULTS.theme,
+    companyName: map.get("company_name") ?? "",
+    companyAddress: map.get("company_address") ?? "",
+    companyPhone: map.get("company_phone") ?? "",
+    onboardingSkipped: map.get("onboarding_skipped") === "true",
+    onboardingCurrencyDone: map.get("onboarding_currency_done") === "true",
+    onboardingNumberingDone: map.get("onboarding_numbering_done") === "true",
+    demoWorkspace: map.get("demo_workspace") ?? "",
     projectCodePrefix: map.get("project_code_prefix") || DEFAULTS.projectCodePrefix,
     contractNumberPrefix: map.get("contract_number_prefix") || DEFAULTS.contractNumberPrefix,
     certificateNumberPrefix: map.get("certificate_number_prefix") || DEFAULTS.certificateNumberPrefix,

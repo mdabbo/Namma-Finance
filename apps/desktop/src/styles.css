@@ -7,22 +7,74 @@
   --color-brand-50: #eff6ff;
   --color-brand-100: #dbeafe;
   --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
   --color-brand-500: #3b82f6;
   --color-brand-600: #2563eb;
   --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
   --color-brand-900: #1e3a8a;
+  --color-canvas: var(--ui-canvas);
+  --color-surface: var(--ui-surface);
+  --color-surface-subtle: var(--ui-surface-subtle);
+  --color-foreground: var(--ui-foreground);
+  --color-muted: var(--ui-muted);
+  --color-border-subtle: var(--ui-border-subtle);
+  --color-border-strong: var(--ui-border-strong);
 }
 
 :root {
   color-scheme: light;
+  --ui-canvas: #f6f8fb;
+  --ui-surface: #ffffff;
+  --ui-surface-subtle: #f8fafc;
+  --ui-foreground: #172033;
+  --ui-muted: #64748b;
+  --ui-border-subtle: #e8edf3;
+  --ui-border-strong: #cbd5e1;
+  --ui-success: #047857;
+  --ui-warning: #b45309;
+  --ui-danger: #b91c1c;
+  --ui-info: #1d4ed8;
+  --radius-control: 0.625rem;
+  --radius-panel: 0.875rem;
+  --radius-overlay: 1rem;
+  --shadow-panel: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.03);
+  --shadow-overlay: 0 24px 60px rgb(15 23 42 / 0.2);
 }
 .dark {
   color-scheme: dark;
+  --ui-canvas: #0b1120;
+  --ui-surface: #111827;
+  --ui-surface-subtle: #172033;
+  --ui-foreground: #e5e7eb;
+  --ui-muted: #94a3b8;
+  --ui-border-subtle: #253147;
+  --ui-border-strong: #475569;
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.2);
+  --shadow-overlay: 0 24px 60px rgb(0 0 0 / 0.5);
 }
 
 body {
-  @apply bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 font-sans antialiased;
+  @apply bg-canvas text-foreground font-sans antialiased;
   font-size: 14px;
+  line-height: 1.5;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  @apply bg-brand-100 text-brand-900 dark:bg-brand-900 dark:text-brand-100;
+}
+
+:focus-visible {
+  outline: 2px solid theme(--color-brand-500);
+  outline-offset: 2px;
 }
 
 /* Numbers keep tabular alignment in financial tables regardless of locale */
@@ -30,6 +82,18 @@ body {
   font-variant-numeric: tabular-nums;
   direction: ltr;
   unicode-bidi: isolate;
+}
+
+.heading-page {
+  @apply text-xl font-semibold tracking-tight text-foreground;
+}
+
+.heading-section {
+  @apply text-sm font-semibold text-foreground;
+}
+
+.text-supporting {
+  @apply text-sm text-muted;
 }
 
 ::-webkit-scrollbar {
@@ -59,5 +123,16 @@ body {
     inset: 0;
     background: white;
     color: black;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   computeContractState,
   computeDashboardKpis,
+  computeProjectCashValuation,
   computeProjectFinancials,
   computeReadyToBill,
   computeTeamPayout,
@@ -88,10 +89,26 @@ export interface MobileWorkspace {
   overdueCount: number;
 }
 
+/**
+ * The archived boundary, mirroring the desktop read model's SQL.
+ *
+ * `fetchAll` filters only the sync tombstone (`deleted_at`), so archived
+ * projects and contracts arrived here as live rows and their certificates and
+ * payments were counted as current money. Desktop excludes them in the query
+ * that feeds the read model — "archived projects leave every finance surface
+ * together" — and this screen has to agree, or the same workspace reports two
+ * different sets of figures depending on which app you open.
+ *
+ * The raw Supabase rows still carry `archived_at` and `voided_at` even though
+ * the mapped domain objects drop them, so the boundary is applied before
+ * mapping rather than after.
+ */
+const isLive = (row: Row) => row.archived_at == null && row.voided_at == null;
+
 export async function loadMobileWorkspace(client: SupabaseClient): Promise<MobileWorkspace> {
   const [
-    clientRows, projectRows, contractRows, certRows, paymentRows, allocRows,
-    categoryRows, expenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
+    clientRows, allProjectRows, allContractRows, allCertRows, allPaymentRows, allocRows,
+    _categoryRows, allExpenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
   ] = await Promise.all([
     fetchAll(client, "clients"),
     fetchAll(client, "projects"),
@@ -106,6 +123,23 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
     fetchAll(client, "person_payments"),
     fetchAll(client, "project_stages"),
   ]);
+
+  const projectRows = allProjectRows.filter(isLive);
+  const liveProjectUuids = new Set(projectRows.map((row) => row.uuid));
+  const contractRows = allContractRows.filter(
+    (row) => isLive(row) && liveProjectUuids.has(row.project_id),
+  );
+  const liveContractUuids = new Set(contractRows.map((row) => row.uuid));
+  const certRows = allCertRows.filter(
+    (row) => isLive(row) && liveContractUuids.has(row.contract_id),
+  );
+  const paymentRows = allPaymentRows.filter(
+    (row) => isLive(row) && liveContractUuids.has(row.contract_id),
+  );
+  // A project expense follows its project; office overhead has no project.
+  const expenseRows = allExpenseRows.filter(
+    (row) => isLive(row) && (row.project_id == null || liveProjectUuids.has(row.project_id)),
+  );
 
   const ids = {
     clients: new Ids(), projects: new Ids(), contracts: new Ids(), certs: new Ids(),
@@ -249,13 +283,39 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
     );
   }
 
-  const projectFinancials = projects.map((project) =>
-    computeProjectFinancials(
+  const projectFinancials = projects.map((project) => {
+    const projectContracts = contracts.filter((c) => c.projectId === project.id);
+    const contractIds = new Set(projectContracts.map((c) => c.id));
+    // Every incoming payment is valued once, at the project's rate, and the
+    // unallocated remainder is derived from the receipt rather than converted
+    // separately — so the four reported components sum to the reported total
+    // exactly. This screen previously took an optional fallback that valued
+    // collections at each certificate's FX snapshot and everything else at the
+    // project rate, so its parts did not add up to its own headline.
+    //
+    // The mobile client has no contract-revision history, so there is no
+    // per-payment rate to resolve: the project's own rate is used for all of
+    // them, which is internally consistent.
+    const billableCertificateIds = new Set(
+      projectContracts.flatMap((contract) =>
+        (contractStates.get(contract.id)?.certificates ?? [])
+          .filter((state) => state.certificate.status !== "DRAFT")
+          .map((state) => state.certificate.id),
+      ),
+    );
+    const cashValuation = computeProjectCashValuation({
+      payments: payments.filter((payment) => contractIds.has(payment.contractId)),
+      allocations,
+      billableCertificateIds,
+      resolveFx: () => ({ currency: project.currency, fxRateMicro: project.fxRateMicro }),
+    });
+    return computeProjectFinancials(
       project,
-      contracts.filter((c) => c.projectId === project.id).map((c) => contractStates.get(c.id)!),
+      projectContracts.map((c) => contractStates.get(c.id)!),
       expenses.filter((e) => e.projectId === project.id),
-    ),
-  );
+      cashValuation,
+    );
+  });
 
   const kpis = computeDashboardKpis(projectFinancials, expenses);
 

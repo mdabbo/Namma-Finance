@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FileClock, X } from "lucide-react";
 import { type AuditFilters, type AuditRecord, useAuditRecords, useEntityHistory } from "../../repositories/audit";
-import { Button, Input, Select } from "../../components/ui";
+import { Button, DateInput, Input, PageHeader, Select } from "../../components/ui";
 
 const ENTITIES = ["contract","contract_revision","variation_order","payment_certificate","payment","payment_allocation","expense","recurring_expense","person","person_payment","project_assignment","time_entry","project","currency","setting","backup"];
 const ACTIONS = ["CREATE","UPDATE","DELETE","REVISION_CREATE","STATUS_CHANGE","VOID","ARCHIVE","RESTORE","ALLOCATION_ADD","ALLOCATION_UPDATE","ALLOCATION_REMOVE","RATE_CHANGE","SETTING_CHANGE","BACKUP"];
@@ -37,7 +37,17 @@ function HistoryPanel({ record, close }: { record: AuditRecord; close: () => voi
   );
 }
 
-export function AuditPage() {
+/**
+ * The audit log as a Settings section: SettingsPage owns the heading and the
+ * one Settings navigator, so this renders the body only. Rendering it as a
+ * standalone page would leave /settings/audit with no settings navigation at
+ * all, now that the duplicated global row is gone.
+ */
+export function AuditSection() {
+  return <AuditPage embedded />;
+}
+
+export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const [filters, setFilters] = useState<AuditFilters>({});
   const [selected, setSelected] = useState<AuditRecord | null>(null);
@@ -45,10 +55,15 @@ export function AuditPage() {
   const set = (key: keyof AuditFilters, value: string) => setFilters((current) => ({ ...current, [key]: value || undefined }));
   return (
     <div>
-      <div className="mb-4 flex items-center gap-2"><FileClock className="text-brand-600" size={22} /><h1 className="text-xl font-semibold">{t("audit.title")}</h1></div>
+      {!embedded && (
+        <PageHeader
+          title={t("audit.title")}
+          meta={<FileClock className="text-brand-600" size={20} aria-hidden="true" />}
+        />
+      )}
       <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-5 dark:border-slate-800 dark:bg-slate-900">
-        <Input type="date" value={filters.dateFrom ?? ""} onChange={(e) => set("dateFrom",e.target.value)} title={t("audit.dateFrom")} />
-        <Input type="date" value={filters.dateTo ?? ""} onChange={(e) => set("dateTo",e.target.value)} title={t("audit.dateTo")} />
+        <DateInput value={filters.dateFrom ?? ""} onChange={(e) => set("dateFrom",e.target.value)} title={t("audit.dateFrom")} />
+        <DateInput value={filters.dateTo ?? ""} onChange={(e) => set("dateTo",e.target.value)} title={t("audit.dateTo")} />
         <Select value={filters.entityType ?? ""} onChange={(e) => set("entityType",e.target.value)}><option value="">{t("audit.allEntities")}</option>{ENTITIES.map((v)=><option key={v} value={v}>{v}</option>)}</Select>
         <Select value={filters.action ?? ""} onChange={(e) => set("action",e.target.value)}><option value="">{t("audit.allActions")}</option>{ACTIONS.map((v)=><option key={v} value={v}>{v}</option>)}</Select>
         <Input value={filters.userId ?? ""} onChange={(e) => set("userId",e.target.value)} placeholder={t("audit.user")} />

@@ -1,23 +1,33 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import type { ProjectStatus } from "@mep/core";
+import { currencyInfo, type ProjectStatus } from "@mep/core";
 import { useProjectMutations, useProjects, nextProjectCode, projectCascadeInfo, type ProjectListItem } from "../../repositories/projects";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings } from "../../lib/settings";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, RatioBar, Select } from "../../components/ui";
-import { useFormat } from "../../lib/format";
+import { Badge, Button, PageHeader, RatioBar, Select } from "../../components/ui";
+import { minorToInput, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
+import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { ProjectForm } from "./ProjectForm";
+
+const PROJECT_STATUSES: readonly ProjectStatus[] = ["ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"];
+const DISCIPLINES: readonly string[] = [
+  "HVAC", "PLUMBING", "FIREFIGHTING", "ELECTRICAL", "BIM",
+  "ARCHITECTURE", "STRUCTURAL", "ID", "MULTI",
+];
 
 export function ProjectsPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const base = useBaseMoney();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: projects = [], isLoading } = useProjects(includeArchived);
   const { data: financials } = useWorkspaceFinancials();
@@ -30,10 +40,38 @@ export function ProjectsPage() {
   const [creating, setCreating] = useState<string | null>(null); // next code
   const [deleting, setDeleting] = useState<{ project: ProjectListItem; details: string[] } | null>(null);
 
+  // Filter state travels with a saved view. Values are re-validated on the way
+  // back in: storage is user-writable, so a stored status must be one this page
+  // actually offers before it reaches component state.
+  const viewFilters: SavedViewFilters = {
+    status: statusFilter,
+    discipline: disciplineFilter,
+    archived: includeArchived ? "1" : "",
+    view: attentionView ?? "",
+  };
+
+  function applyViewFilters(next: SavedViewFilters) {
+    const status = next.status ?? "";
+    setStatusFilter(PROJECT_STATUSES.includes(status as ProjectStatus) ? (status as ProjectStatus) : "");
+    const discipline = next.discipline ?? "";
+    setDisciplineFilter(DISCIPLINES.includes(discipline) ? discipline : "");
+    setIncludeArchived(next.archived === "1");
+    const params = new URLSearchParams(searchParams);
+    if (next.view === "ready-to-invoice") params.set("view", next.view);
+    else params.delete("view");
+    setSearchParams(params, { replace: true });
+  }
+
   const finOf = (id: number) => financials?.projects.find((f) => f.project.id === id);
 
+  const readyProjectIds = new Set(
+    financials?.readyToCollect.map((item) => item.projectId) ?? [],
+  );
   const filtered = projects.filter(
-    (p) => (!statusFilter || p.status === statusFilter) && (!disciplineFilter || p.discipline === disciplineFilter),
+    (project) =>
+      (!statusFilter || project.status === statusFilter) &&
+      (!disciplineFilter || project.discipline === disciplineFilter) &&
+      (attentionView !== "ready-to-invoice" || readyProjectIds.has(project.id)),
   );
 
   const columns: Column<ProjectListItem>[] = [
@@ -43,15 +81,30 @@ export function ProjectsPage() {
     { key: "discipline", header: t("projects.discipline"), value: (p) => t(`discipline.${p.discipline}`) },
     {
       key: "value",
-      header: t("cash.contractValueExcludingVat"),
+      // The consolidated currency is named in the header so the export cannot
+      // be read as some other currency.
+      header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
       value: (p) => finOf(p.id)?.contractValueEgp ?? 0,
-      render: (p) => <span className="tnum">{base.format(finOf(p.id)?.contractValueEgp ?? 0)}</span>,
+      // Sorting uses exact EGP piasters; the export carries major units. A row
+      // the read model has not produced yet exports blank, never a zero a
+      // spreadsheet would sum as a real contract value.
+      exportValue: (p) =>
+        readModelExport(finOf(p.id), (fin) =>
+          minorToInput(base.convert(fin.contractValueEgp), currencyInfo(base.code).exponent)),
+      render: (p) => (
+        <span className="tnum">
+          {readModelDisplay(finOf(p.id), (fin) => base.format(fin.contractValueEgp))}
+        </span>
+      ),
       align: "end",
     },
     {
       key: "certified",
       header: t("cash.certifiedRevenue"),
       value: (p) => finOf(p.id)?.certifiedRatioBp ?? 0,
+      // Basis points sort exactly but read as nonsense in a spreadsheet.
+      exportValue: (p) =>
+        readModelExport(finOf(p.id), (fin) => (fin.certifiedRatioBp / 100).toFixed(2)),
       render: (p) => {
         const fin = finOf(p.id);
         return (
@@ -81,7 +134,6 @@ export function ProjectsPage() {
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
           <Button
             variant="ghost"
-            className="!text-red-600"
             onClick={async () => {
               const info = await projectCascadeInfo(p.id);
               setDeleting({
@@ -95,7 +147,7 @@ export function ProjectsPage() {
               });
             }}
           >
-            {t("common.delete")}
+            {t("lifecycle.archiveProject")}
           </Button>
         </div>
       ),
@@ -104,23 +156,31 @@ export function ProjectsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("projects.title")}</h1>
-        <Button
-          variant="primary"
-          onClick={async () => setCreating(await nextProjectCode(settings?.projectCodePrefix ?? "PRJ"))}
-        >
-          <Plus size={16} />
-          {t("projects.newProject")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("projects.title")}
+        actions={
+          <Button
+            variant="primary"
+            onClick={async () => setCreating(await nextProjectCode(settings?.projectCodePrefix ?? "PRJ"))}
+          >
+            <Plus size={16} aria-hidden="true" />
+            {t("projects.newProject")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
         onRowClick={(p) => { if (!p.archivedAt) navigate(`/projects/${p.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading || (attentionView === "ready-to-invoice" && !financials)}
+        emptyMessage={t("common.empty")}
+        exportName="projects"
+        viewKey="projects"
+        filters={viewFilters}
+        onApplyFilters={applyViewFilters}
+        onResetFilters={() => applyViewFilters({})}
         toolbar={
           <>
             <Select className="!w-40" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as ProjectStatus | "")}>
@@ -139,6 +199,19 @@ export function ProjectsPage() {
               <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
               {t("lifecycle.includeArchived")}
             </label>
+            {attentionView === "ready-to-invoice" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.delete("view");
+                  setSearchParams(next);
+                }}
+              >
+                {t("dashboard.filtered.ready")} · {t("common.clearFilters")}
+              </Button>
+            )}
           </>
         }
       />
@@ -161,11 +234,15 @@ export function ProjectsPage() {
       )}
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.project.name}`}
+          title={t("lifecycle.archiveProject")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          requireReason
+          message={`${t("lifecycle.confirmArchiveProject")} (${deleting.project.name})`}
           details={deleting.details}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.project.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.project.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

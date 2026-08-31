@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createHashRouter, RouterProvider } from "react-router-dom";
+import { createHashRouter, Navigate, RouterProvider, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import "./styles.css";
 import { initI18n } from "./lib/i18n";
@@ -18,12 +18,14 @@ import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { CertificatesPage } from "./features/certificates/CertificatesPage";
 import { PaymentsPage } from "./features/payments/PaymentsPage";
 import { ExpensesPage } from "./features/expenses/ExpensesPage";
+import { FinanceOverviewPage } from "./features/finance/FinanceOverviewPage";
+import { ReceivablesPage } from "./features/finance/ReceivablesPage";
 import { PeoplePage } from "./features/people/PeoplePage";
 import { PersonDetailPage } from "./features/people/PersonDetailPage";
 import { TimePage } from "./features/time/TimePage";
 import { ReportsPage } from "./features/reports/ReportsPage";
+import { CashflowView } from "./features/reports/CashflowView";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { AuditPage } from "./features/audit/AuditPage";
 import { finalizePendingRestoreAudit } from "./repositories/audit";
 import { getRuntimeReleaseInfo } from "./lib/db";
 
@@ -36,23 +38,51 @@ const router = createHashRouter([
     path: "/",
     element: <Layout />,
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: "clients", element: <ClientsPage /> },
-      { path: "clients/:id", element: <ClientDetailPage /> },
+      { index: true, element: <Navigate to="/overview" replace /> },
+      { path: "overview", element: <DashboardPage /> },
+
       { path: "projects", element: <ProjectsPage /> },
+      { path: "projects/clients", element: <ClientsPage /> },
+      { path: "projects/clients/:id", element: <ClientDetailPage /> },
       { path: "projects/:id", element: <ProjectDetailPage /> },
-      { path: "certificates", element: <CertificatesPage /> },
-      { path: "payments", element: <PaymentsPage /> },
-      { path: "expenses", element: <ExpensesPage /> },
-      { path: "people", element: <PeoplePage /> },
-      { path: "people/:id", element: <PersonDetailPage /> },
-      { path: "time", element: <TimePage /> },
-      { path: "reports", element: <ReportsPage /> },
-      { path: "audit", element: <AuditPage /> },
-      { path: "settings", element: <SettingsPage /> },
+
+      { path: "finance", element: <FinanceOverviewPage /> },
+      { path: "finance/certificates", element: <CertificatesPage /> },
+      { path: "finance/payments", element: <PaymentsPage /> },
+      { path: "finance/expenses", element: <ExpensesPage /> },
+      { path: "finance/receivables", element: <ReceivablesPage /> },
+      { path: "finance/cash-flow", element: <CashflowView /> },
+
+      { path: "team", element: <Navigate to="/team/people" replace /> },
+      { path: "team/people", element: <PeoplePage /> },
+      { path: "team/people/:id", element: <PersonDetailPage /> },
+      { path: "team/time", element: <TimePage /> },
+
+      { path: "reports", element: <Navigate to="/reports/profitability" replace /> },
+      { path: "reports/:view", element: <ReportsPage /> },
+      { path: "settings", element: <Navigate to="/settings/general" replace /> },
+      // Audit is a settings section like any other, so it renders inside
+      // SettingsPage and keeps the single Settings navigator on screen.
+      { path: "settings/:section", element: <SettingsPage /> },
+
+      // Milestone 1 compatibility: preserve every pre-redesign route.
+      { path: "clients", element: <Navigate to="/projects/clients" replace /> },
+      { path: "clients/:id", element: <LegacyDetailRedirect base="/projects/clients" /> },
+      { path: "certificates", element: <Navigate to="/finance/certificates" replace /> },
+      { path: "payments", element: <Navigate to="/finance/payments" replace /> },
+      { path: "expenses", element: <Navigate to="/finance/expenses" replace /> },
+      { path: "people", element: <Navigate to="/team/people" replace /> },
+      { path: "people/:id", element: <LegacyDetailRedirect base="/team/people" /> },
+      { path: "time", element: <Navigate to="/team/time" replace /> },
+      { path: "audit", element: <Navigate to="/settings/audit" replace /> },
     ],
   },
 ]);
+
+function LegacyDetailRedirect({ base }: { base: string }) {
+  const { id } = useParams();
+  return <Navigate to={`${base}/${id ?? ""}`} replace />;
+}
 
 /** Launch gate: the router only mounts once the app lock (if set) is passed. */
 function Root() {

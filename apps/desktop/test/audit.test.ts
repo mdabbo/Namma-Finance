@@ -9,7 +9,14 @@ import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createCertificate, setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment, deletePayment, updatePayment } from "../src/repositories/payments";
-import { finalizePendingRestoreAudit, listAuditRecords, listEntityHistory } from "../src/repositories/audit";
+import { createStage, deleteStage, updateStage } from "../src/repositories/stages";
+import {
+  finalizePendingRestoreAudit,
+  listAuditRecords,
+  listEntityHistory,
+  listProjectAuditRecords,
+  listRecentAuditRecords,
+} from "../src/repositories/audit";
 
 beforeEach(() => resetDb());
 
@@ -64,13 +71,62 @@ describe("Milestone 8 immutable audit trail", () => {
     expect(rows[0]?.afterJson).toContain('"status":"APPROVED"');
   });
 
+  it("provides a bounded recent-activity feed without background maintenance noise", async () => {
+    await execute(
+      "INSERT INTO audit_logs(device_id,action,entity_type,source) VALUES('qa-device','BACKUP','backup','BACKGROUND')",
+    );
+    await execute(
+      "INSERT INTO audit_logs(device_id,action,entity_type,source) VALUES('qa-device','CREATE','project','DESKTOP')",
+    );
+    const rows = await listRecentAuditRecords(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      action: "CREATE",
+      entityType: "project",
+      source: "DESKTOP",
+    });
+  });
+
+  it("records client and project-stage activity that changes dashboard context", async () => {
+    const clientId = await createClient({ name: "Activity Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("ACT-2026-001", { name: "Activity Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const stageId = await createStage({ projectId, name: "Concept", sortOrder: 0, startDate: null, endDate: null, status: "PLANNED", completionBp: 0, engineers: null, notes: null });
+    await updateStage(stageId, { projectId, name: "Concept", sortOrder: 0, startDate: null, endDate: null, status: "COMPLETED", completionBp: 10_000, engineers: null, notes: null });
+    await deleteStage(stageId);
+
+    expect((await listEntityHistory("client", clientId, null)).map((row) => row.action)).toEqual(["CREATE"]);
+    expect((await listEntityHistory("project_stage", stageId, null)).map((row) => row.action)).toEqual([
+      "CREATE",
+      "UPDATE",
+      "DELETE",
+    ]);
+  });
+
+  it("isolates project activity and hides financial events from engineer feeds", async () => {
+    const clientId = await createClient({ name: "Workspace Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("WORK-2026-001", { name: "Workspace Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const otherProjectId = await createProject("WORK-2026-002", { name: "Other Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const stageId = await createStage({ projectId, name: "IFC", sortOrder: 0, startDate: null, endDate: null, status: "PLANNED", completionBp: 0, engineers: null, notes: null });
+    const contractId = await createContract({ projectId, number: "WORK-C-1", title: null, valueMinor: 1_000_00, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-01-01", notes: null });
+
+    const full = await listProjectAuditRecords(projectId, 20);
+    expect(full.some((row) => row.entityType === "contract" && row.entityId === contractId)).toBe(true);
+    expect(full.some((row) => row.entityType === "project_stage" && row.entityId === stageId)).toBe(true);
+    expect(full.some((row) => row.entityType === "project" && row.entityId === otherProjectId)).toBe(false);
+
+    const operational = await listProjectAuditRecords(projectId, 20, true);
+    expect(operational.some((row) => row.entityType === "contract")).toBe(false);
+    expect(operational.every((row) => ["project", "project_stage", "time_entry"].includes(row.entityType))).toBe(true);
+  });
+
   it("keeps UUID-only timelines isolated and records the running app version", async () => {
     await execute("UPDATE currencies SET fx_rate_micro=37000000 WHERE code='USD'");
     await execute("UPDATE currencies SET fx_rate_micro=13000000 WHERE code='SAR'");
     const usd = await listEntityHistory("currency", null, "USD");
     expect(usd).toHaveLength(1);
     expect(usd[0]?.entityUuid).toBe("USD");
-    expect(usd[0]?.applicationVersion).toBe("0.6.3");
+    // Stamped from the shipping version, not a retired 0.6.x literal.
+    expect(usd[0]?.applicationVersion).toBe("0.7.0");
   });
 
   it("retains cross-device UUID identity for newly audited synced entities", async () => {
@@ -108,7 +164,7 @@ describe("Milestone 8 immutable audit trail", () => {
     await finalizePendingRestoreAudit();
     expect(raw("SELECT key FROM settings WHERE key='pending_restore_audit'")).toHaveLength(0);
     expect(raw<{ action: string; source: string; application_version: string }>("SELECT action,source,application_version FROM audit_logs WHERE action='RESTORE'")).toEqual([
-      { action: "RESTORE", source: "RESTORE", application_version: "0.6.3" },
+      { action: "RESTORE", source: "RESTORE", application_version: "0.7.0" },
     ]);
   });
 });

@@ -1,5 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
+import { assertRestrictedSql } from "./sqlGuard";
 
 let dbPromise: Promise<Database> | null = null;
 export interface RuntimeReleaseInfo {
@@ -8,7 +9,7 @@ export interface RuntimeReleaseInfo {
 }
 let runtimeReleaseInfo: RuntimeReleaseInfo | null = null;
 
-/** Single shared connection. Migrations run on the Rust side before load resolves. */
+/** Shared SQLx-backed database handle. Migrations run on the Rust side before load resolves. */
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
     dbPromise = Database.load("sqlite:mep-finance.db").then(async (db) => {
@@ -49,27 +50,31 @@ export interface ExecResult {
   rowsAffected: number;
 }
 
-/**
- * Defense in depth for the remaining single-record repository mutations.
- * Schema changes, database attachment and stacked statements are available
- * only to Rust migrations/commands, never to feature code in the WebView.
- */
-export function assertRestrictedSql(sql: string, params: unknown[]): void {
-  const normalized=sql.trim();
-  if(!normalized) throw new Error("SQL_EMPTY");
-  if(normalized.includes(";") || /--|\/\*/.test(normalized)) throw new Error("SQL_STACKED_OR_COMMENTED");
-  if(/^(ATTACH|DETACH|PRAGMA|VACUUM|CREATE|ALTER|DROP|REINDEX)\b/i.test(normalized)) throw new Error("SQL_ADMIN_COMMAND_DENIED");
-  const allowed=/^(INSERT|UPDATE|DELETE|BEGIN IMMEDIATE|COMMIT|ROLLBACK)\b/i.test(normalized) || /^WITH\s+chosen\s+AS\s*\(/i.test(normalized);
-  if(!allowed) throw new Error("SQL_MUTATION_NOT_ALLOWLISTED");
-  const indexes=[...normalized.matchAll(/\$(\d+)/g)].map((match)=>Number(match[1]));
-  if(indexes.some((index)=>index<1 || index>params.length)) throw new Error("SQL_PARAMETER_MISSING");
-}
+export { assertRestrictedSql } from "./sqlGuard";
 
 export async function execute(sql: string, params: unknown[] = []): Promise<ExecResult> {
   assertRestrictedSql(sql,params);
   const db = await getDb();
   return db.execute(sql, params);
 }
+
+/**
+ * Refused in the shipped app, by design.
+ *
+ * The WebView cannot own a transaction: `tauri-plugin-sql` releases the pooled
+ * connection between statements, so a boundary opened here would be stranded on
+ * a connection any other caller can pick up mid-transaction. Multi-statement
+ * writes go through a Rust atomic command, which holds one connection for the
+ * whole transaction.
+ *
+ * The vitest harness and the Playwright bridge replace this module wholesale
+ * and implement this against their own single connection, which is why the
+ * test doubles behind `atomicCommand` are still atomic there.
+ */
+export async function runInTransaction<T>(_fn: () => Promise<T>): Promise<T> {
+  throw new Error("TRANSACTION_REQUIRES_RUST_COMMAND");
+}
+
 
 /** Close the pool (needed before restoring a backup). */
 export async function closeDb(): Promise<void> {

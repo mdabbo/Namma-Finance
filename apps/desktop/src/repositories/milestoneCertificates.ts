@@ -1,6 +1,6 @@
 import { isMilestoneAchieved, milestoneAmounts, parseMilestones } from "@mep/core";
-import { invoke } from "@tauri-apps/api/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import { todayIso } from "../lib/format";
 import { withLock } from "../lib/mutex";
 
@@ -79,14 +79,11 @@ async function reconcileImpl(contractId?: number): Promise<number> {
     }
 
     if (drafts.length === 0) continue;
-    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-      created += await invoke<number>("create_milestone_certificates_atomic", {
-        contractId: contract.id,
-        drafts,
-      });
-    } else {
-      await execute("BEGIN IMMEDIATE");
-      try {
+    created += await atomicCommand<number>(
+      "create_milestone_certificates_atomic",
+      { contractId: contract.id, drafts },
+      async () => {
+        let inserted = 0;
         for (const draft of drafts) {
           const duplicate = await selectOne<{ id: number }>(
             "SELECT id FROM payment_certificates WHERE contract_id=$1 AND number=$2 AND deleted_at IS NULL",
@@ -101,17 +98,14 @@ async function reconcileImpl(contractId?: number): Promise<number> {
               [contract.id, seq, draft.number, draft.date, draft.description, draft.grossMinor],
             );
             certificateId = result.lastInsertId ?? 0;
-            created += 1;
+            inserted += 1;
           }
           milestones[draft.milestoneIndex]!.certificateId = certificateId;
         }
         await execute("UPDATE contracts SET milestones=$1 WHERE id=$2", [JSON.stringify(milestones), contract.id]);
-        await execute("COMMIT");
-      } catch (error) {
-        await execute("ROLLBACK");
-        throw error;
-      }
-    }
+        return inserted;
+      },
+    );
   }
   return created;
 }

@@ -1,678 +1,269 @@
 import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Pencil, Plus } from "lucide-react";
 import type { Contract } from "@mep/core";
-import { useProject } from "../../repositories/projects";
-import { useContractMutations, useContractsByProject, contractCascadeInfo, useContractRevisions } from "../../repositories/contracts";
+import { contractCascadeInfo, useContractMutations, useContractsByProject } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
-import { useAssignmentsByProject, usePeople, usePeopleMutations, usePersonPayments } from "../../repositories/people";
-import { assignmentSchema, computeAssignmentAccount, type AssignmentInput } from "@mep/core";
-import { Badge, Button, Card, EmptyState, Field, Input, Modal, RatioBar, Select, cx } from "../../components/ui";
+import { useAssignmentsByProject } from "../../repositories/people";
+import { useProject, useProjectMutations } from "../../repositories/projects";
+import { usePaymentsByProject } from "../../repositories/payments";
+import { useProjectAuditRecords, type AuditRecord } from "../../repositories/audit";
+import { Badge, Button, EmptyState, PageHeader, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { MoneyInput } from "../../components/MoneyInput";
-import { useFormat } from "../../lib/format";
-import { useBaseMoney } from "../../lib/baseCurrency";
 import { useRole } from "../../lib/roles";
-import { laborCostMinor, minutesToHours } from "@mep/core";
-import { useTimeEntriesByProject, useTimeEntryMutations } from "../../repositories/timeEntries";
 import { ContractForm } from "./ContractForm";
-import { PersonForm } from "../people/PeoplePage";
-import { StagesTab } from "./StagesTab";
+import { ProjectForm } from "./ProjectForm";
 import { DocumentsTab } from "./DocumentsTab";
-import { TimeEntryForm } from "../time/TimePage";
-
-type Tab = "overview" | "stages" | "contracts" | "certificates" | "payments" | "expenses" | "team" | "time" | "documents";
+import { parseProjectWorkspaceLocation, projectActivityDestination, projectTabsForRole, type ProjectFinanceView, type ProjectWorkspaceTab } from "./projectWorkspaceModel";
+import { ProjectSummary } from "./ProjectSummaryTab";
+import { ProjectContracts } from "./ProjectContractsTab";
+import { ProjectFinance } from "./ProjectFinanceTab";
+import { ProjectTeam, ProjectTeamForm } from "./ProjectTeamTab";
+import { ProjectTime } from "./ProjectTimeTab";
 
 export function ProjectDetailPage() {
   const { id } = useParams();
   const projectId = Number(id);
   const { t, i18n } = useTranslation();
-  const fmt = useFormat();
   const navigate = useNavigate();
+  const role = useRole();
 
   const { data: project } = useProject(projectId);
   const { data: contracts = [] } = useContractsByProject(projectId);
-  const { data: financials } = useWorkspaceFinancials();
+  const { data: financials, isPending: financialsPending } = useWorkspaceFinancials();
   const { data: expenses = [] } = useExpensesByProject(projectId);
   const { data: assignments = [] } = useAssignmentsByProject(projectId);
-  const { data: personPayments = [] } = usePersonPayments(assignments.map((a) => a.id));
+  const { data: payments = [] } = usePaymentsByProject(projectId);
+  const recentActivity = useProjectAuditRecords(projectId, 8, role === "ENGINEER");
   const contractMutations = useContractMutations();
+  const projectMutations = useProjectMutations();
 
-  const role = useRole();
-  const [tab, setTab] = useState<Tab>("overview");
-  const [contractModal, setContractModal] = useState<Contract | "new" | null>(null);
-  const [deletingContract, setDeletingContract] = useState<{ contract: Contract; details: string[] } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [contractModal, setContractModal] = useState<Contract | "new" | null>(
+    null,
+  );
+  const [editingProject, setEditingProject] = useState(false);
+  const [deletingContract, setDeletingContract] = useState<{
+    contract: Contract;
+    details: string[];
+  } | null>(null);
   const [addingMember, setAddingMember] = useState(false);
-  const base = useBaseMoney();
 
   if (!project) return <EmptyState message={t("common.loading")} />;
 
-  const fin = financials?.projects.find((f) => f.project.id === projectId);
-  const costProfile = financials?.costsByProject.get(projectId);
+  const visibleTabs = projectTabsForRole(role);
+  // The URL owns where the workspace is, so refresh, back/forward and a pasted
+  // link all land in the same place. An unknown or forbidden tab falls back.
+  const { tab: activeTab, financeView } = parseProjectWorkspaceLocation(searchParams, role);
   const BackIcon = i18n.dir() === "rtl" ? ArrowRight : ArrowLeft;
-  const currency = project.currency;
 
-  const teamCost = assignments.reduce(
-    (acc, a) => {
-      const paid = personPayments.filter((p) => p.assignmentId === a.id).reduce((s, p) => s + p.amountMinor, 0);
-      return {
-        agreed: acc.agreed + base.convertFrom(a.agreedMinor, a.currency, a.fxRateMicro),
-        paid: acc.paid + base.convertFrom(paid, a.currency, a.fxRateMicro),
-      };
-    },
-    { agreed: 0, paid: 0 },
-  );
+  function goTo(nextTab: ProjectWorkspaceTab, nextFinanceView?: ProjectFinanceView) {
+    if (!visibleTabs.includes(nextTab)) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", nextTab);
+    if (nextTab === "finance") next.set("view", nextFinanceView ?? financeView);
+    else next.delete("view");
+    // A tab change is a place the user can go back from.
+    setSearchParams(next);
+  }
 
-  // engineers see the delivery side only — no money tabs
-  const ENGINEER_TABS: Tab[] = ["stages", "documents", "time"];
-  const ALL_TABS: { key: Tab; label: string }[] = [
-    { key: "overview", label: t("projects.overview") },
-    { key: "stages", label: t("stages.title") },
-    { key: "contracts", label: t("projects.contracts") },
-    { key: "certificates", label: t("certificates.title") },
-    { key: "payments", label: t("payments.title") },
-    { key: "expenses", label: t("expenses.title") },
-    { key: "team", label: t("projects.team") },
-    { key: "time", label: t("time.title") },
-    { key: "documents", label: t("documents.title") },
-  ];
-  const TABS = role === "ENGINEER" ? ALL_TABS.filter((x) => ENGINEER_TABS.includes(x.key)) : ALL_TABS;
-  const activeTab = TABS.some((x) => x.key === tab) ? tab : TABS[0]!.key;
+  function openActivity(record: AuditRecord) {
+    const destination = projectActivityDestination(record.entityType);
+    goTo(destination.tab, destination.financeView);
+  }
 
   return (
     <div>
-      <button onClick={() => navigate("/projects")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
-        <BackIcon size={15} /> {t("projects.title")}
+      <button
+        onClick={() => navigate("/projects")}
+        className="mb-3 flex items-center gap-1 text-sm text-muted hover:text-brand-600"
+      >
+        <BackIcon size={15} aria-hidden="true" />
+        {t("projects.title")}
       </button>
 
-      <div className="mb-4 flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold">{project.name}</h1>
-            <Badge value={project.status} label={t(`status.${project.status}`)} />
+      <PageHeader
+        title={project.name}
+        meta={<Badge value={project.status} label={t(`status.${project.status}`)} />}
+        description={
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="tnum">{project.code}</span>
+            <span aria-hidden="true">·</span>
+            <span>{project.clientName}</span>
+            {project.manager && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {t("projects.manager")}: {project.manager}
+                </span>
+              </>
+            )}
+            <span aria-hidden="true">·</span>
+            <span>{t(`discipline.${project.discipline}`)}</span>
+            <Badge label={project.currency} tone="info" />
           </div>
-          <p className="mt-0.5 text-sm text-slate-500">
-            <span className="tnum">{project.code}</span> · {project.clientName} · {t(`discipline.${project.discipline}`)}
-            {project.city ? ` · ${project.city}` : ""}
-            {currency !== "EGP" ? ` · ${currency} @ ${(project.fxRateMicro / 1_000_000).toLocaleString()}` : ""}
-          </p>
-        </div>
-      </div>
+        }
+        actions={
+          role !== "ENGINEER" && (
+            <>
+              <Button onClick={() => setEditingProject(true)}>
+                <Pencil size={15} aria-hidden="true" />
+                {t("projects.editProject")}
+              </Button>
+              <Button variant="primary" onClick={() => setContractModal("new")}>
+                <Plus size={15} aria-hidden="true" />
+                {t("contracts.newContract")}
+              </Button>
+            </>
+          )
+        }
+      />
 
-      <div className="mb-4 flex gap-1 border-b border-slate-200 dark:border-slate-800">
-        {TABS.map(({ key, label }) => (
+      <div
+        className="mb-5 flex gap-1 overflow-x-auto border-b border-border-subtle"
+        role="tablist"
+        aria-label={t("projects.workspaceTabs")}
+      >
+        {visibleTabs.map((key) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            role="tab"
+            aria-selected={activeTab === key}
+            onClick={() => goTo(key)}
             className={cx(
-              "border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              activeTab ===key
+              "whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+              activeTab === key
                 ? "border-brand-600 text-brand-700 dark:text-brand-300"
-                : "border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300",
+                : "border-transparent text-muted hover:text-foreground",
             )}
           >
-            {label}
+            {t(`projects.workspace.${key}`)}
           </button>
         ))}
       </div>
 
-      {activeTab ==="overview" && (
-        <div className="grid grid-cols-4 gap-3">
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.contractValueExcludingVat")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.contractValueMinor ?? 0, currency, { compactFraction: true })}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.certifiedRevenue")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.certifiedBaseMinor ?? 0, currency, { compactFraction: true })}</p>
-            <p className="text-xs text-slate-400 tnum">{fmt.percent(fin?.certifiedRatioBp ?? 0)}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.certificateCollections")}</p>
-            <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">
-              {fmt.money(fin?.certificateCollectionsMinor ?? 0, currency, { compactFraction: true })}
-            </p>
-            <p className="text-xs text-slate-400 tnum">{fmt.percent(fin?.collectionRatioBp ?? 0)}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.outstandingReceivables")}</p>
-            <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-              {fmt.money(fin?.outstandingReceivablesMinor ?? 0, currency, { compactFraction: true })}
-            </p>
-          </Card>
-
-          <Card className="col-span-2 p-4">
-            <p className="mb-2 text-sm font-semibold">{t("dashboard.certifiedVsCollected")}</p>
-            <RatioBar ratioBp={fin?.collectionRatioBp ?? 0} secondaryBp={fin?.certifiedRatioBp ?? 0} className="!h-3" />
-            <div className="mt-2 flex justify-between text-xs text-slate-500">
-              <span>{t("cash.certificateCollections")}: <b className="tnum">{fmt.percent(fin?.collectionRatioBp ?? 0)}</b></span>
-              <span>{t("cash.certifiedRevenue")}: <b className="tnum">{fmt.percent(fin?.certifiedRatioBp ?? 0)}</b></span>
-            </div>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("costs.actualPaid")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{base.format(costProfile?.actualPaidCostEgp ?? 0)}</p>
-            <p className="text-xs text-slate-400 tnum">
-              {t("projects.teamCost")}: {fmt.money(teamCost.paid, base.code, { compactFraction: true })} / {fmt.money(teamCost.agreed, base.code, { compactFraction: true })}
-            </p>
-          </Card>
-
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.billableRevenue")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.billableRevenueMinor ?? 0, currency, { compactFraction: true })}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.invoicedAmount")}</p>
-            <p className="mt-1 text-lg font-semibold tnum">{fmt.money(fin?.invoicedAmountMinor ?? 0, currency, { compactFraction: true })}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.totalActualCashIn")}</p>
-            <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">{fmt.money(fin?.totalActualCashInMinor ?? 0, currency, { compactFraction: true })}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("cash.customerCredit")}</p>
-            <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">{fmt.money(fin?.unallocatedCustomerCreditMinor ?? 0, currency, { compactFraction: true })}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("costs.accrued")}</p>
-            <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-              {base.format(costProfile?.accruedCostEgp ?? 0)}
-            </p>
-            <p className="text-xs text-slate-400 tnum">{t("costs.committed")}: {base.format(costProfile?.committedCostEgp ?? 0)}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("costs.actualGrossProfit")}</p>
-            <p className={cx("mt-1 text-lg font-semibold tnum", (costProfile?.actualProfitEgp ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
-              {base.format(costProfile?.actualProfitEgp ?? 0)}
-            </p>
-            <p className="text-xs text-slate-400 tnum">{t("dashboard.kpiMargin")}: {fmt.percent(costProfile?.actualMarginBp ?? 0)}</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs text-slate-500">{t("costs.forecastProfitBeforeOverhead")}</p>
-            <p className={cx("mt-1 text-lg font-semibold tnum", (costProfile?.forecastProfitEgp ?? 0) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
-              {base.format(costProfile?.forecastProfitEgp ?? 0)}
-            </p>
-            <p className="text-xs text-slate-400 tnum">{t("costs.forecast")}: {base.format(costProfile?.forecastCostEgp ?? 0)}</p>
-          </Card>
-
-          {project.description && (
-            <Card className="col-span-4 p-4 text-sm text-slate-600 dark:text-slate-300">{project.description}</Card>
-          )}
-        </div>
+      {activeTab === "summary" && (
+        <ProjectSummary
+          project={project}
+          financials={financials}
+          activity={recentActivity.data ?? []}
+          showFinancials={role !== "ENGINEER"}
+          onNavigate={goTo}
+          onOpenActivity={openActivity}
+        />
       )}
 
-      {activeTab ==="contracts" && (
-        <div>
-          <div className="mb-3 flex justify-end">
-            <Button variant="primary" onClick={() => setContractModal("new")}>
-              <Plus size={16} /> {t("contracts.newContract")}
-            </Button>
-          </div>
-          {contracts.length === 0 ? (
-            <EmptyState message={t("common.empty")} />
-          ) : (
-            <div className="space-y-3">
-              {contracts.map((contract) => {
-                const state = financials?.contractStates.get(contract.id);
-                return (
-                  <Card key={contract.id} className="p-4">
-                    <div className="mb-3 flex items-start justify-between">
-                      <div>
-                        <p className="font-semibold">
-                          <span className="tnum">{contract.number}</span>
-                          {contract.title ? ` — ${contract.title}` : ""}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {t("contracts.paymentTerms")}: <span className="tnum">{contract.paymentTermsDays}</span>
-                          {contract.performanceBondBp > 0 &&
-                            ` · ${t("contracts.performanceBond")}: ${fmt.percent(contract.performanceBondBp)}`}
-                        </p>
-                      </div>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" onClick={() => setContractModal(contract)}>{t("common.edit")}</Button>
-                        <Button
-                          variant="ghost"
-                          className="!text-red-600"
-                          onClick={async () => {
-                            const info = await contractCascadeInfo(contract.id);
-                            setDeletingContract({
-                              contract,
-                              details: [`${info.certificates} ${t("certificates.title")}`, `${info.payments} ${t("payments.title")}`],
-                            });
-                          }}
-                        >
-                          {t("common.delete")}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-x-6 gap-y-2 text-sm md:grid-cols-8">
-                      {[
-                        [t("contracts.value"), fmt.money(contract.valueMinor, currency, { compactFraction: true })],
-                        [t("contracts.vatAmount"), fmt.money(state?.figures.vatMinor ?? 0, currency, { compactFraction: true })],
-                        [t("cash.contractValueIncludingVat"), fmt.money(state?.figures.contractValueIncludingVatMinor ?? 0, currency, { compactFraction: true })],
-                        [t("cash.certifiedRevenue"), fmt.money(state?.certifiedBaseMinor ?? 0, currency, { compactFraction: true })],
-                        [t("cash.currentNetPayable"), fmt.money(state?.invoicedAmountMinor ?? 0, currency, { compactFraction: true })],
-                        [t("cash.uncertifiedContractValue"), fmt.money(state?.remainingUncertifiedMinor ?? 0, currency, { compactFraction: true })],
-                        [t("cash.retentionHeld"), fmt.money(state?.retentionHeldMinor ?? 0, currency, { compactFraction: true })],
-                        [t("contracts.advanceRecovered"), `${fmt.money(state?.advanceRecoveredMinor ?? 0, currency, { compactFraction: true })} / ${fmt.money(contract.advanceMinor, currency, { compactFraction: true })}`],
-                        [t("cash.certificateCollectionRate"), fmt.percent(state?.collectionRatioBp ?? 0)],
-                      ].map(([label, value]) => (
-                        <div key={label as string}>
-                          <p className="text-xs text-slate-400">{label}</p>
-                          <p className="font-medium tnum">{value}</p>
-                        </div>
-                      ))}
-                    </div>
-                    <ContractRevisionHistory contractId={contract.id} currency={currency} />
-                  </Card>
-                );
-              })}
-            </div>
-          )}
-        </div>
+      {activeTab === "contracts" && role !== "ENGINEER" && (
+        <ProjectContracts
+          contracts={contracts}
+          financials={financials}
+          currency={project.currency}
+          onCreate={() => setContractModal("new")}
+          onEdit={setContractModal}
+          onDelete={async (contract) => {
+            const info = await contractCascadeInfo(contract.id);
+            setDeletingContract({
+              contract,
+              details: [
+                `${info.certificates} ${t("certificates.title")}`,
+                `${info.payments} ${t("payments.title")}`,
+              ],
+            });
+          }}
+        />
       )}
 
-      {activeTab ==="stages" && <StagesTab projectId={projectId} />}
-      {activeTab ==="documents" && <DocumentsTab projectId={projectId} />}
-      {activeTab ==="time" && <ProjectTime projectId={projectId} />}
-      {activeTab ==="certificates" && <ProjectCertificates projectId={projectId} currency={currency} />}
-      {activeTab ==="payments" && <ProjectPayments projectId={projectId} currency={currency} />}
-
-      {activeTab ==="expenses" && (
-        <Card className="p-4">
-          {expenses.length === 0 ? (
-            <EmptyState message={t("common.empty")} />
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-start text-xs uppercase text-slate-500 dark:border-slate-800">
-                  <th className="py-2 text-start">{t("common.date")}</th>
-                  <th className="text-start">{t("expenses.category")}</th>
-                  <th className="text-start">{t("common.description")}</th>
-                  <th className="text-end">{t("common.amount")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expenses.map((e) => (
-                  <tr key={e.id} className="border-b border-slate-100 last:border-0 dark:border-slate-800">
-                    <td className="py-2 tnum">{fmt.date(e.date)}</td>
-                    <td>{i18n.language === "ar" ? e.categoryAr : e.categoryEn}</td>
-                    <td>{e.description}</td>
-                    <td className="text-end tnum">{fmt.money(e.amountMinor, e.currency)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
+      {activeTab === "finance" && role !== "ENGINEER" && (
+        <ProjectFinance
+          projectId={projectId}
+          projectCurrency={project.currency}
+          financials={financials}
+          financialsPending={financialsPending}
+          expenses={expenses}
+          payments={payments}
+          activeView={financeView}
+          onViewChange={(view) => goTo("finance", view)}
+        />
       )}
 
-      {activeTab ==="team" && (
-        <Card className="p-4">
-          <div className="mb-3 flex justify-end">
-            <Button variant="primary" onClick={() => setAddingMember(true)}>
-              <Plus size={15} /> {t("projects.addTeamMember")}
-            </Button>
-          </div>
-          {assignments.length === 0 ? (
-            <EmptyState message={t("common.empty")} />
-          ) : (
-            <div className="space-y-2">
-              {assignments.map((a) => {
-                const account = computeAssignmentAccount(a, personPayments);
-                const payable = financials?.teamPayables.find((x) => x.assignmentId === a.id);
-                return (
-                  <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2.5 dark:border-slate-800">
-                    <div>
-                      <button className="text-sm font-medium hover:text-brand-600" onClick={() => navigate(`/people/${a.personId}`)}>
-                        {a.personName}
-                      </button>
-                      {a.scope && <p className="text-xs text-slate-400">{a.scope}</p>}
-                    </div>
-                    <div className="flex items-center gap-6 text-sm">
-                      {payable && (
-                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold tnum text-red-700 dark:bg-red-900/50 dark:text-red-300">
-                          {t("team.dueNow")}: {fmt.money(payable.dueMinor, a.currency, { compactFraction: true })}
-                        </span>
-                      )}
-                      <span className="tnum">{t("people.agreedAmount")}: {fmt.money(a.agreedMinor, a.currency, { compactFraction: true })}</span>
-                      <span className="tnum text-emerald-600 dark:text-emerald-400">{t("people.paidToDate")}: {fmt.money(account.paidMinor, a.currency, { compactFraction: true })}</span>
-                      <span className="tnum text-amber-600 dark:text-amber-400">{t("people.remainingAmount")}: {fmt.money(account.remainingMinor, a.currency, { compactFraction: true })}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
+      {activeTab === "team" && role !== "ENGINEER" && (
+        <ProjectTeam
+          assignments={assignments}
+          financials={financials}
+          financialsPending={financialsPending}
+          onAdd={() => setAddingMember(true)}
+        />
       )}
+
+      {activeTab === "time" && <ProjectTime projectId={projectId} />}
+      {activeTab === "documents" && <DocumentsTab projectId={projectId} />}
 
       {addingMember && (
         <ProjectTeamForm
           projectId={projectId}
-          currency={currency}
+          currency={project.currency}
           fxRateMicro={project.fxRateMicro}
           onClose={() => setAddingMember(false)}
+        />
+      )}
+
+      {editingProject && (
+        <ProjectForm
+          initial={project}
+          busy={projectMutations.update.isPending}
+          onClose={() => setEditingProject(false)}
+          onSubmit={(input, revision) =>
+            projectMutations.update.mutate(
+              { id: project.id, input, revision },
+              { onSuccess: () => setEditingProject(false) },
+            )
+          }
         />
       )}
 
       {contractModal !== null && (
         <ContractForm
           projectId={projectId}
-          currency={currency}
+          currency={project.currency}
           initial={contractModal === "new" ? null : contractModal}
-          busy={contractMutations.create.isPending || contractMutations.update.isPending}
+          busy={
+            contractMutations.create.isPending ||
+            contractMutations.update.isPending
+          }
           onClose={() => setContractModal(null)}
           onSubmit={(input, revision) => {
-            if (contractModal === "new") contractMutations.create.mutate(input, { onSuccess: () => setContractModal(null) });
-            else contractMutations.update.mutate({ id: contractModal.id, input, revision }, { onSuccess: () => setContractModal(null) });
+            if (contractModal === "new") {
+              contractMutations.create.mutate(input, {
+                onSuccess: () => setContractModal(null),
+              });
+            } else {
+              contractMutations.update.mutate(
+                { id: contractModal.id, input, revision },
+                { onSuccess: () => setContractModal(null) },
+              );
+            }
           }}
         />
       )}
 
       {deletingContract && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deletingContract.contract.number}`}
+          title={t("lifecycle.archiveContract")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchiveContract")} (${deletingContract.contract.number})`}
           details={deletingContract.details}
           busy={contractMutations.remove.isPending}
           onCancel={() => setDeletingContract(null)}
-          onConfirm={() => contractMutations.remove.mutate(deletingContract.contract.id, { onSuccess: () => setDeletingContract(null) })}
-        />
-      )}
-    </div>
-  );
-}
-
-function ContractRevisionHistory({ contractId, currency }: { contractId: number; currency: string }) {
-  const { t } = useTranslation();
-  const fmt = useFormat();
-  const { data: revisions = [] } = useContractRevisions(contractId);
-  if (revisions.length === 0) return null;
-  return (
-    <details className="mt-3 border-t border-slate-100 pt-2 text-xs dark:border-slate-800">
-      <summary className="cursor-pointer font-medium text-slate-500">{t("contracts.revisionHistory")} ({revisions.length})</summary>
-      <div className="mt-2 space-y-1.5">
-        {revisions.map((revision) => (
-          <div key={revision.id} className="grid grid-cols-5 gap-2 rounded bg-slate-50 px-2 py-1.5 dark:bg-slate-800/60">
-            <span>R{revision.revisionNumber}</span>
-            <span className="tnum">{fmt.date(revision.effectiveDate)}</span>
-            <span className="tnum">{fmt.money(revision.contractValueMinor, currency, { compactFraction: true })}</span>
-            <span className="tnum">VAT {fmt.percent(revision.vatBp)}</span>
-            <span className="truncate" title={revision.reason}>{revision.reason}</span>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-/**
- * Assign a person to this project from the Team tab. The picker offers
- * "New person…" which opens the quick person form; the created person is
- * selected automatically and also appears on the Team page (confirmed rule).
- */
-function ProjectTeamForm({
-  projectId,
-  currency,
-  fxRateMicro,
-  onClose,
-}: {
-  projectId: number;
-  currency: string;
-  fxRateMicro: number;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const { data: people = [] } = usePeople();
-  const mutations = usePeopleMutations();
-
-  const [personId, setPersonId] = useState(0);
-  const [creatingPerson, setCreatingPerson] = useState(false);
-  const [agreedMinor, setAgreedMinor] = useState(0);
-  const [scope, setScope] = useState("");
-  const [error, setError] = useState("");
-
-  function submit() {
-    const parsed = assignmentSchema.safeParse({
-      personId,
-      projectId,
-      agreedMinor,
-      currency,
-      fxRateMicro,
-      scope: scope || null,
-      progressNote: null,
-    } satisfies AssignmentInput);
-    if (!parsed.success) {
-      setError(t("validation.required"));
-      return;
-    }
-    mutations.createAssignment.mutate(parsed.data, { onSuccess: onClose });
-  }
-
-  return (
-    <>
-      <Modal title={t("projects.addTeamMember")} onClose={onClose}>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={t("people.selectPerson")} error={personId === 0 ? error : undefined} className="col-span-2">
-            <div className="flex gap-2">
-              <Select className="flex-1" value={personId} onChange={(e) => setPersonId(Number(e.target.value))}>
-                <option value={0}>—</option>
-                {people.filter((p) => p.isActive).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({t(`personType.${p.type}`)})
-                  </option>
-                ))}
-              </Select>
-              <Button onClick={() => setCreatingPerson(true)}>{t("people.orCreateNew")}</Button>
-            </div>
-          </Field>
-          <Field label={t("people.agreedAmount")}>
-            <MoneyInput currency={currency} valueMinor={agreedMinor} onChange={(v) => setAgreedMinor(v ?? 0)} />
-          </Field>
-          <Field label={t("common.description")}>
-            <Input value={scope} onChange={(e) => setScope(e.target.value)} />
-          </Field>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button onClick={onClose}>{t("common.cancel")}</Button>
-          <Button variant="primary" onClick={submit} disabled={personId === 0 || mutations.createAssignment.isPending}>
-            {t("common.save")}
-          </Button>
-        </div>
-      </Modal>
-      {creatingPerson && (
-        <PersonForm
-          initial={null}
-          busy={mutations.create.isPending}
-          onClose={() => setCreatingPerson(false)}
-          onSubmit={(input) =>
-            mutations.create.mutate(input, {
-              onSuccess: (newId) => {
-                setPersonId(newId);
-                setCreatingPerson(false);
-              },
+          onConfirm={() =>
+            contractMutations.remove.mutate({ id: deletingContract.contract.id }, {
+              onSuccess: () => setDeletingContract(null),
             })
           }
         />
       )}
-    </>
-  );
-}
-
-/** Read-only per-project certificate list; editing happens on the Certificates page. */
-function ProjectCertificates({ projectId, currency }: { projectId: number; currency: string }) {
-  const { t } = useTranslation();
-  const fmt = useFormat();
-  const navigate = useNavigate();
-  const { data: financials } = useWorkspaceFinancials();
-
-  const states = [...(financials?.contractStates.values() ?? [])].filter((s) => s.contract.projectId === projectId);
-  const rows = states.flatMap((s) => s.certificates.map((c) => ({ state: s, cert: c })));
-
-  if (rows.length === 0) return <EmptyState message={t("common.empty")} />;
-  return (
-    <Card className="p-4">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800">
-            <th className="py-2 text-start">{t("certificates.number")}</th>
-            <th className="text-start">{t("common.date")}</th>
-            <th className="text-end">{t("certificates.gross")}</th>
-            <th className="text-end">{t("certificates.netPayable")}</th>
-            <th className="text-end">{t("certificates.paid")}</th>
-            <th className="text-start">{t("common.status")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ cert }) => (
-            <tr
-              key={cert.certificate.id}
-              className="cursor-pointer border-b border-slate-100 last:border-0 hover:bg-brand-50/50 dark:border-slate-800 dark:hover:bg-slate-800/50"
-              onClick={() => navigate("/certificates")}
-            >
-              <td className="py-2 tnum">{cert.certificate.number}</td>
-              <td className="tnum">{fmt.date(cert.certificate.date)}</td>
-              <td className="text-end tnum">{fmt.money(cert.breakdown.grossMinor, currency)}</td>
-              <td className="text-end tnum font-medium">{fmt.money(cert.breakdown.netPayableMinor, currency)}</td>
-              <td className="text-end tnum text-emerald-600 dark:text-emerald-400">{fmt.money(cert.paidMinor, currency)}</td>
-              <td>
-                <div className="flex items-center gap-1.5">
-                  <Badge value={cert.certificate.status} label={t(`status.${cert.certificate.status}`)} />
-                  {cert.overdue && <Badge value="OVERDUE" label={t("certificates.overdue")} />}
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
-
-/** Read-only per-project payments list. */
-function ProjectPayments({ projectId, currency }: { projectId: number; currency: string }) {
-  const { t } = useTranslation();
-  const fmt = useFormat();
-  const { data: financials } = useWorkspaceFinancials();
-  const states = [...(financials?.contractStates.values() ?? [])].filter((s) => s.contract.projectId === projectId);
-
-  const totals = states.reduce(
-    (acc, s) => ({
-      due: acc.due + s.totalDueMinor,
-      paid: acc.paid + s.certificateCollectionsMinor,
-      advance: acc.advance + s.advanceReceivedMinor,
-      retention: acc.retention + s.retentionReleasedMinor,
-      cashIn: acc.cashIn + s.totalActualCashInMinor,
-      credit: acc.credit + s.unallocatedCustomerCreditMinor,
-      // what the contract will bring in over its whole life: value + VAT
-      // (retention is inside that — withheld now, released at the end)
-      lifetime: acc.lifetime + s.contract.valueMinor + s.figures.vatMinor,
-    }),
-    { due: 0, paid: 0, advance: 0, retention: 0, cashIn: 0, credit: 0, lifetime: 0 },
-  );
-  const dueNow = Math.max(0, totals.due - totals.paid);
-
-  return (
-    <div className="grid grid-cols-4 gap-3">
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.certificateCollections")}</p>
-        <p className="mt-1 text-lg font-semibold tnum text-emerald-600 dark:text-emerald-400">
-          {fmt.money(totals.paid, currency, { compactFraction: true })}
-        </p>
-      </Card>
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.lifetimeContractEntitlement")}</p>
-        <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-          {fmt.money(totals.lifetime, currency, { compactFraction: true })}
-        </p>
-        <p className="text-xs text-slate-400 tnum">
-          {t("cash.outstandingReceivables")}: {fmt.money(dueNow, currency, { compactFraction: true })}
-        </p>
-      </Card>
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.totalActualCashIn")}</p>
-        <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.cashIn, currency, { compactFraction: true })}</p>
-      </Card>
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.customerCredit")}</p>
-        <p className="mt-1 text-lg font-semibold tnum text-amber-600 dark:text-amber-400">
-          {fmt.money(totals.credit, currency, { compactFraction: true })}
-        </p>
-      </Card>
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.advanceReceived")}</p>
-        <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.advance, currency, { compactFraction: true })}</p>
-      </Card>
-      <Card className="p-4">
-        <p className="text-xs text-slate-500">{t("cash.retentionReleased")}</p>
-        <p className="mt-1 text-lg font-semibold tnum">{fmt.money(totals.retention, currency, { compactFraction: true })}</p>
-      </Card>
     </div>
-  );
-}
-
-/** Time entries logged against this project, with a project-locked log form. */
-function ProjectTime({ projectId }: { projectId: number }) {
-  const { t } = useTranslation();
-  const fmt = useFormat();
-  const { data: entries = [] } = useTimeEntriesByProject(projectId);
-  const mutations = useTimeEntryMutations();
-  const [logging, setLogging] = useState(false);
-
-  const totalMinutes = entries.reduce((s, e) => s + e.minutes, 0);
-
-  return (
-    <Card className="p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-sm text-slate-500">
-          {t("time.totalHours")}: <b className="tnum">{minutesToHours(totalMinutes)}{t("time.hoursShort")}</b>
-        </p>
-        <Button variant="primary" onClick={() => setLogging(true)}>
-          <Plus size={15} /> {t("time.newEntry")}
-        </Button>
-      </div>
-      {entries.length === 0 ? (
-        <EmptyState message={t("common.empty")} />
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-slate-800">
-              <th className="py-2 text-start">{t("common.date")}</th>
-              <th className="text-start">{t("time.person")}</th>
-              <th className="text-start">{t("time.stage")}</th>
-              <th className="text-start">{t("common.notes")}</th>
-              <th className="text-end">{t("time.hours")}</th>
-              <th className="text-end">{t("time.laborCost")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((e) => (
-              <tr key={e.id} className="group border-b border-slate-100 last:border-0 dark:border-slate-800">
-                <td className="py-1.5 tnum">{fmt.date(e.date)}</td>
-                <td>{e.personName}</td>
-                <td className="text-slate-500">{e.stageName ?? "—"}</td>
-                <td className="text-slate-500">{e.note}</td>
-                <td className="text-end tnum">{minutesToHours(e.minutes)}{t("time.hoursShort")}</td>
-                <td className="text-end tnum text-slate-500">
-                  {e.hourlyRateMinor ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {logging && (
-        <TimeEntryForm
-          initial={null}
-          lockProjectId={projectId}
-          busy={mutations.create.isPending}
-          onClose={() => setLogging(false)}
-          onSubmit={(input) => mutations.create.mutate(input, { onSuccess: () => setLogging(false) })}
-        />
-      )}
-    </Card>
   );
 }

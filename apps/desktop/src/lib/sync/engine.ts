@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { execute, select, selectOne } from "../db";
+import { atomicCommand } from "../atomic";
 import { getSyncClient } from "./client";
 import { CONFLICT_PROTECTED_TABLES, NUMBER_COLLISION_TABLES, SYNC_TABLES, type SyncTableSpec } from "./registry";
 
@@ -100,16 +101,11 @@ async function numberCollision(spec: SyncTableSpec, values: Record<string, unkno
  * marker into concurrent desktop writes. Context and mutation share a single
  * SQLite write transaction and are rolled back together on failure. */
 async function executeSyncMutation(sql: string, params: unknown[] = []): Promise<void> {
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>("execute_sync_mutation_atomic", { sql, params }, async () => {
     await execute("UPDATE audit_context SET source='SYNC' WHERE id=1");
     await execute(sql, params);
     await execute("UPDATE audit_context SET source='DESKTOP' WHERE id=1");
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 // ─── sync_state ──────────────────────────────────────────────────────────────

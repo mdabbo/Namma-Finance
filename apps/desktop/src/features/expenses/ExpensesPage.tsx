@@ -1,29 +1,48 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Paperclip, Plus } from "lucide-react";
-import { expenseSchema, type ExpenseInput } from "@mep/core";
+import { Building2, CalendarDays, FolderKanban, Paperclip, Plus, Receipt } from "lucide-react";
+import { currencyInfo, expenseSchema, type ExpenseInput } from "@mep/core";
 import { useCategories, useExpenseMutations, useExpenses, type ExpenseListItem } from "../../repositories/expenses";
 import { useProjects } from "../../repositories/projects";
 import { useCurrencyRates } from "../../repositories/currencies";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Button, Field, Input, Modal, Select } from "../../components/ui";
+import { KpiCard } from "../../components/KpiCard";
+import { Button, DateInput, Field, Input, Modal, PageHeader, Select } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
+import { expenseSectionKpis, parseFinanceScope, resetFinanceScopeParams } from "../finance/financeSectionModel";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function ExpensesPage() {
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
+  const base = useBaseMoney();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: expenses = [], isLoading } = useExpenses();
   const { data: categories = [] } = useCategories();
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = useExpenseMutations();
 
   const [categoryFilter, setCategoryFilter] = useState(0);
-  const [projectFilter, setProjectFilter] = useState<"" | "overhead" | number>("");
+  // The project-workspace shortcut lands here with ?projectId=; it seeds the
+  // regular project filter so there is exactly one filtering control.
+  const [projectFilter, setProjectFilter] = useState<"" | "overhead" | number>(
+    () => parseFinanceScope(searchParams, "expenses").projectId ?? "",
+  );
   const [editing, setEditing] = useState<ExpenseListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
   const { data: projects = [] } = useProjects();
+
+  const kpis = expenseSectionKpis(
+    financials?.allExpenses ?? [],
+    typeof projectFilter === "number" ? projectFilter : null,
+    todayIso(),
+  );
 
   const catName = (e: ExpenseListItem) => (i18n.language === "ar" ? e.categoryAr : e.categoryEn);
 
@@ -60,10 +79,12 @@ export function ExpensesPage() {
         ),
     },
     { key: "supplier", header: t("expenses.supplier"), value: (e) => e.supplier },
+    { key: "currency", header: t("common.currency"), value: (e) => e.currency, width: "90px" },
     {
       key: "amount",
       header: t("common.amount"),
       value: (e) => e.amountMinor,
+      exportValue: (e) => minorToInput(e.amountMinor, currencyInfo(e.currency).exponent),
       render: (e) => <span className="font-medium tnum">{fmt.money(e.amountMinor, e.currency)}</span>,
       align: "end",
     },
@@ -76,7 +97,7 @@ export function ExpensesPage() {
         e.personPaymentId !== null ? null : (
           <div className="flex justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
             <Button variant="ghost" onClick={() => setEditing(e)}>{t("common.edit")}</Button>
-            <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(e)}>{t("common.delete")}</Button>
+            <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(e)}>{t("lifecycle.voidExpense")}</Button>
           </div>
         ),
     },
@@ -84,18 +105,75 @@ export function ExpensesPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("expenses.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("expenses.newExpense")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("expenses.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("expenses.newExpense")}
+          </Button>
+        }
+      />
+
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.totalSpend")}
+            value={base.format(kpis.totalEgp)}
+            icon={Receipt}
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.spendMonth")}
+            value={base.format(kpis.monthEgp)}
+            icon={CalendarDays}
+          />
+          <KpiCard
+            label={t("financeSection.projectSpend")}
+            value={base.format(kpis.projectEgp)}
+            icon={FolderKanban}
+          />
+          <KpiCard
+            label={t("financeSection.overheadSpend")}
+            value={base.format(kpis.overheadEgp)}
+            icon={Building2}
+          />
+        </div>
+      )}
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(e) => e.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
+        exportName="expenses"
+        viewKey="expenses"
+        // `projectId` is the finance-wide saved-view key for project scope.
+        // Expenses keeps the scope in local state rather than the URL (its
+        // project control also offers "overhead", which is not a project id),
+        // but the key name stays the same across the finance section.
+        filters={{
+          category: categoryFilter ? String(categoryFilter) : "",
+          projectId: projectFilter === "" ? "" : String(projectFilter),
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const category = Number(next.category);
+          setCategoryFilter(
+            Number.isSafeInteger(category) && categories.some((c) => c.id === category) ? category : 0,
+          );
+          const project = next.projectId ?? "";
+          if (project === "overhead") setProjectFilter("overhead");
+          else {
+            const id = Number(project);
+            setProjectFilter(Number.isSafeInteger(id) && id > 0 ? id : "");
+          }
+        }}
+        onResetFilters={() => {
+          setCategoryFilter(0);
+          setProjectFilter("");
+          // The seeding parameter must go too, or a reset re-seeds on remount.
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
+        }}
         toolbar={
           <>
             <Select className="!w-44" value={categoryFilter} onChange={(e) => setCategoryFilter(Number(e.target.value))}>
@@ -136,10 +214,13 @@ export function ExpensesPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.description}`}
+          title={t("lifecycle.voidExpense")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidExpense")} (${deleting.description})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>
@@ -195,7 +276,7 @@ function ExpenseForm({
     <Modal title={initial ? t("common.edit") : t("expenses.newExpense")} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
         <Field label={t("common.date")}>
-          <Input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+          <DateInput value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
         </Field>
         <Field label={t("expenses.category")} error={errors.categoryId}>
           <Select value={form.categoryId} onChange={(e) => setForm((f) => ({ ...f, categoryId: Number(e.target.value) }))}>

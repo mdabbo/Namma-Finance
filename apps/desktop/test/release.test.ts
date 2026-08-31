@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const database = vi.hoisted(() => ({ appVersion: "0.6.0", schemaVersion: 23 }));
+const database = vi.hoisted(() => ({ appVersion: "0.6.0", schemaVersion: 24 }));
 vi.mock("../src/lib/db", () => ({
   getRuntimeReleaseInfo: async () => ({ ...database }),
 }));
@@ -48,15 +48,35 @@ describe("Milestone 16 release integrity", () => {
     expect(generated).toContain(`EXPECTED_SCHEMA_VERSION = ${release.schemaVersion}`);
     expect(readFileSync(join(root, "apps/mobile/src/generated/release.ts"), "utf8")).toBe(generated);
 
+    // Since the v0.7.0 rebase the migration file number is a sequence position,
+    // not the schema identity: two baseline files recreate schema 24. The
+    // manifest is therefore tied to the user_version the chain actually stamps.
     const migrationNames = readdirSync(join(root, "apps/desktop/src-tauri/migrations"))
       .filter((name) => /^\d{4}_.+\.sql$/.test(name))
       .sort();
-    const latest = migrationNames.at(-1);
-    expect(latest).toBeTruthy();
-    expect(Number(latest!.slice(0, 4))).toBe(release.schemaVersion);
-    expect(readFileSync(join(root, "apps/desktop/src-tauri/migrations", latest!), "utf8")).toMatch(
-      new RegExp(`PRAGMA\\s+user_version\\s*=\\s*${release.schemaVersion}`, "i"),
-    );
+    expect(migrationNames).toEqual([
+      "0001_baseline.sql",
+      "0002_seed_reference_data.sql",
+      "0003_assignment_lifecycle.sql",
+      "0004_cancellation_evidence_integrity.sql",
+  "0005_audit_version_baseline.sql",
+    ]);
+    const stamped = migrationNames.flatMap((name) => [
+      ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")
+        .matchAll(/PRAGMA\s+user_version\s*=\s*(\d+)/gi),
+    ].map((match) => Number(match[1])));
+    expect(stamped.at(-1)).toBe(release.schemaVersion);
+    // Whichever migration stamps last must also record the same version in
+    // app_metadata, so the pragma and the metadata row cannot disagree.
+    const lastStamping = migrationNames
+      .filter((name) =>
+        /PRAGMA\s+user_version/i.test(
+          readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8"),
+        ))
+      .at(-1);
+    expect(lastStamping).toBeTruthy();
+    expect(readFileSync(join(root, "apps/desktop/src-tauri/migrations", lastStamping!), "utf8"))
+      .toMatch(new RegExp(`schema_version['"]?\\s*,\\s*['"]${release.schemaVersion}['"]`, "i"));
   });
 
   it("returns fail-visible runtime release and database schema information", async () => {

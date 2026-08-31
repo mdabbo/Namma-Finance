@@ -146,6 +146,11 @@ describe("two-device round-trip", () => {
     newDevice("A");
     const clientId = await createClient({ name: "Reversal Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
     const projectId = await createProject("PRJ-REV-SYNC", { name: "Reversal Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    // A person payment cannot exceed earned-and-unpaid value, so the client
+    // certificate that releases the fee is collected first.
+    const revContractId = await createContract({ projectId, number: "C-REV-SYNC", title: null, valueMinor: 50_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const revCertificateId = await createCertificate(await nextCertificateSeq(revContractId), { contractId: revContractId, number: "PC-REV-SYNC", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 50_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await createPayment({ contractId: revContractId, kind: "CERTIFICATE", number: "PAY-REV-SYNC", date: "2026-07-02", amountMinor: 50_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId: revCertificateId, amountMinor: 50_000 }]);
     const personId = await createPerson({ type: "FREELANCER", name: "Reversal Person", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 50_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
     const paymentId = await createPersonPayment({ assignmentId, date: "2026-07-21", amountMinor: 10_000, note: "sync reversal" });

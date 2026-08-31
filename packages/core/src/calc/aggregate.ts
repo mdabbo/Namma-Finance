@@ -1,4 +1,5 @@
 import type { Expense, Project, ProjectAssignment, PersonPayment } from "../domain/types";
+import { isBillable } from "../domain/types";
 import { ratioBp, toEgpPiasters } from "../money/money";
 import type { ContractState } from "./contract";
 
@@ -50,10 +51,26 @@ export interface ProjectFinancials {
   overdueCertificates: number;
 }
 
+export interface ProjectCashValuationEgp {
+  certificateCollectionsEgp: number;
+  advanceReceivedEgp: number;
+  retentionReleasedEgp: number;
+  totalActualCashInEgp: number;
+  unallocatedCustomerCreditEgp: number;
+}
+
+/**
+ * Cash valuation is REQUIRED. It used to be optional, and the fallback valued
+ * certificate collections at each certificate's FX snapshot while the other
+ * cash components used the project rate — so the four components stopped
+ * summing to the headline total, which is the one thing the dashboard promises
+ * about them. Callers build it with `computeProjectCashValuation`.
+ */
 export function computeProjectFinancials(
   project: Project,
   contractStates: ContractState[],
   projectExpenses: Expense[],
+  cashValuation: ProjectCashValuationEgp,
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
   const certifiedBase = sum(contractStates.map((c) => c.certifiedBaseMinor));
@@ -69,8 +86,22 @@ export function computeProjectFinancials(
   const retentionHeld = sum(contractStates.map((c) => c.retentionHeldMinor));
 
   const toEgp = (minor: number) => toEgpPiasters(minor, project.currency, project.fxRateMicro);
+  const certificateEgp = (
+    pick: (state: ContractState["certificates"][number]) => number,
+    billableOnly: boolean,
+  ) => sum(contractStates.flatMap((contractState) =>
+    contractState.certificates
+      .filter((state) => !billableOnly || isBillable(state.certificate.status))
+      .map((state) => toEgpPiasters(
+        pick(state),
+        state.certificate.currencySnapshot ?? project.currency,
+        state.certificate.fxRateMicroSnapshot ?? project.fxRateMicro,
+      )),
+  ));
   const expensesEgp = sum(projectExpenses.map((e) => toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro)));
-  const revenueEgp = toEgp(certifiedBase);
+  const revenueEgp = certificateEgp((state) => state.breakdown.baseMinor, true);
+  const invoicedAmountEgp = certificateEgp((state) => state.breakdown.netPayableMinor, true);
+  const outstandingEgp = certificateEgp((state) => state.unpaidMinor, true);
   const profitEgp = revenueEgp - expensesEgp;
 
   return {
@@ -95,15 +126,15 @@ export function computeProjectFinancials(
     collectionRatioBp: ratioBp(totalPaid, totalDue),
     contractValueEgp: toEgp(contractValue),
     revenueEgp,
-    billableRevenueEgp: toEgp(billableRevenue),
-    invoicedAmountEgp: toEgp(invoicedAmount),
-    collectedEgp: toEgp(totalPaid),
-    certificateCollectionsEgp: toEgp(totalPaid),
-    advanceReceivedEgp: toEgp(advanceReceived),
-    retentionReleasedEgp: toEgp(retentionReleased),
-    totalActualCashInEgp: toEgp(totalActualCashIn),
-    unallocatedCustomerCreditEgp: toEgp(unallocatedCustomerCredit),
-    outstandingEgp: toEgp(totalDue - totalPaid),
+    billableRevenueEgp: certificateEgp((state) => state.breakdown.baseMinor, false),
+    invoicedAmountEgp,
+    collectedEgp: cashValuation.certificateCollectionsEgp,
+    certificateCollectionsEgp: cashValuation.certificateCollectionsEgp,
+    advanceReceivedEgp: cashValuation.advanceReceivedEgp,
+    retentionReleasedEgp: cashValuation.retentionReleasedEgp,
+    totalActualCashInEgp: cashValuation.totalActualCashInEgp,
+    unallocatedCustomerCreditEgp: cashValuation.unallocatedCustomerCreditEgp,
+    outstandingEgp,
     expensesEgp,
     profitEgp,
     marginBp: ratioBp(profitEgp, revenueEgp),

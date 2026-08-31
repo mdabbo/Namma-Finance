@@ -19,29 +19,11 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, "..", "src-tauri", "migrations");
 const MIGRATIONS = [
-  "0001_initial.sql",
-  "0002_seed.sql",
-  "0003_feedback_round1.sql",
-  "0004_phase2.sql",
-  "0005_backfill_team_expenses.sql",
-  "0006_sync_tracking.sql",
-  "0007_time_tracking.sql",
-  "0008_financial_record_lifecycle.sql",
-  "0009_contract_revisions.sql",
-  "0010_contract_revision_integrity.sql",
-  "0011_payment_allocation_integrity.sql",
-  "0012_audit_log.sql",
-  "0013_audit_remediation.sql",
-  "0014_backup_hardening.sql",
-  "0015_backup_audit_hardening.sql",
-  "0016_domain_validation.sql",
-  "0017_domain_validation_audit.sql",
-  "0018_managed_documents.sql",
-  "0019_document_cache_isolation.sql",
-  "0020_sync_conflict_safety.sql",
-  "0021_sync_conflict_remediation.sql",
-  "0022_numbering_safety.sql",
-  "0023_numbering_remediation.sql",
+  "0001_baseline.sql",
+  "0002_seed_reference_data.sql",
+  "0003_assignment_lifecycle.sql",
+  "0004_cancellation_evidence_integrity.sql",
+  "0005_audit_version_baseline.sql",
 ];
 
 let db: DatabaseSync | null = null;
@@ -86,6 +68,38 @@ export async function getDb(): Promise<DatabaseSync> {
   return requireDb();
 }
 
+/**
+ * The transaction boundary the WebView is not allowed to open for itself.
+ *
+ * In the shipped app this throws (see src/lib/db.ts) and multi-statement writes
+ * go through a Rust atomic command. Here there is exactly one synchronous
+ * connection and no other writer, so a real SQLite transaction is available and
+ * the test doubles behind `atomicCommand` are genuinely atomic — which is what
+ * makes the rollback assertions in atomicity.test.ts mean anything.
+ *
+ * Nested calls join the outer transaction rather than opening a second one,
+ * because SQLite has no nested transactions and a repository double may call
+ * another one (milestone reconciliation reserves a number, for instance).
+ */
+let transactionDepth = 0;
+
+export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (transactionDepth > 0) return fn();
+  const handle = requireDb();
+  handle.exec("BEGIN IMMEDIATE");
+  transactionDepth += 1;
+  try {
+    const result = await fn();
+    handle.exec("COMMIT");
+    return result;
+  } catch (error) {
+    handle.exec("ROLLBACK");
+    throw error;
+  } finally {
+    transactionDepth -= 1;
+  }
+}
+
 export async function closeDb(): Promise<void> {
   db?.close();
   db = null;
@@ -96,6 +110,7 @@ export async function closeDb(): Promise<void> {
 /** Fresh in-memory DB with all migrations applied. */
 export function resetDb(): void {
   db?.close();
+  transactionDepth = 0;
   db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON;");
   for (const file of MIGRATIONS) {
@@ -116,3 +131,4 @@ export function rawOne<T = Record<string, unknown>>(sql: string): T | undefined 
 export function rawExec(sql: string): void {
   requireDb().exec(sql);
 }
+

@@ -24,10 +24,14 @@ export function todayIso(): string {
 
 /** Parse a user-entered decimal string into integer minor units. Rejects NaN. */
 export function parseToMinor(text: string, exponent = 2): number | null {
+  // The stripped set includes the Arabic thousands separator and NBSP on
+  // purpose — they arrive in pasted and IME-typed amounts.
+  // eslint-disable-next-line no-irregular-whitespace
   const cleaned = text.replace(/[,\s٫٬ ]/g, "").replace("٫", ".");
   if (cleaned === "" || cleaned === "-" || cleaned === ".") return null;
   if (!/^-?\d*(\.\d*)?$/.test(cleaned)) return null;
   const [intPart = "0", fracPart = ""] = cleaned.replace("-", "").split(".");
+  if (fracPart.length > exponent) return null;
   const frac = (fracPart + "0".repeat(exponent)).slice(0, exponent);
   const sign = cleaned.startsWith("-") ? -1 : 1;
   const value = sign * (Number(intPart) * 10 ** exponent + Number(frac || "0"));

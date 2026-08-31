@@ -206,6 +206,14 @@ export interface ProjectAssignment {
   scope: string | null;
   progressNote: string | null;
   createdAt: string;
+  /** What happened to the work. Visibility is tracked separately by archivedAt. */
+  lifecycleStatus: "ACTIVE" | "COMPLETED" | "CANCELLED";
+  completedAt: string | null;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  /** Earned value frozen at cancellation; null unless CANCELLED. */
+  earnedMinorAtCancellation: number | null;
+  archivedAt: string | null;
 }
 
 export interface PersonPayment {

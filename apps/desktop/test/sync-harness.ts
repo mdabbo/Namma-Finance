@@ -23,29 +23,11 @@ import { dirname, join } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, "..", "src-tauri", "migrations");
 const MIGRATIONS = [
-  "0001_initial.sql",
-  "0002_seed.sql",
-  "0003_feedback_round1.sql",
-  "0004_phase2.sql",
-  "0005_backfill_team_expenses.sql",
-  "0006_sync_tracking.sql",
-  "0007_time_tracking.sql",
-  "0008_financial_record_lifecycle.sql",
-  "0009_contract_revisions.sql",
-  "0010_contract_revision_integrity.sql",
-  "0011_payment_allocation_integrity.sql",
-  "0012_audit_log.sql",
-  "0013_audit_remediation.sql",
-  "0014_backup_hardening.sql",
-  "0015_backup_audit_hardening.sql",
-  "0016_domain_validation.sql",
-  "0017_domain_validation_audit.sql",
-  "0018_managed_documents.sql",
-  "0019_document_cache_isolation.sql",
-  "0020_sync_conflict_safety.sql",
-  "0021_sync_conflict_remediation.sql",
-  "0022_numbering_safety.sql",
-  "0023_numbering_remediation.sql",
+  "0001_baseline.sql",
+  "0002_seed_reference_data.sql",
+  "0003_assignment_lifecycle.sql",
+  "0004_cancellation_evidence_integrity.sql",
+  "0005_audit_version_baseline.sql",
 ];
 
 export function buildMigratedDb(through: number = MIGRATIONS.length): DatabaseSync {
@@ -91,6 +73,7 @@ export function resetRig(): void {
   devices.clear();
   active = null;
   remote.clear();
+  transactionDepth = 0;
 }
 
 function requireDb(): DatabaseSync {
@@ -131,6 +114,31 @@ export async function execute(sql: string, params: unknown[] = []): Promise<Exec
 
 export async function getDb(): Promise<DatabaseSync> {
   return requireDb();
+}
+
+/**
+ * The transaction boundary the WebView is not allowed to open for itself.
+ * Refused in the shipped app (see src/lib/db.ts); real here, because each
+ * simulated device owns one synchronous connection with no other writer.
+ * Nested calls join the outer transaction — SQLite has no nested ones.
+ */
+let transactionDepth = 0;
+
+export async function runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (transactionDepth > 0) return fn();
+  const handle = requireDb();
+  handle.exec("BEGIN IMMEDIATE");
+  transactionDepth += 1;
+  try {
+    const result = await fn();
+    handle.exec("COMMIT");
+    return result;
+  } catch (error) {
+    handle.exec("ROLLBACK");
+    throw error;
+  } finally {
+    transactionDepth -= 1;
+  }
 }
 
 export async function closeDb(): Promise<void> {
@@ -309,3 +317,4 @@ export function makeFakeClient() {
     },
   };
 }
+

@@ -1,25 +1,62 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { FileDown, Plus } from "lucide-react";
-import type { CertificateStatus } from "@mep/core";
+import { AlertTriangle, FileCheck2, FileDown, Hourglass, Plus } from "lucide-react";
+import { currencyInfo, type CertificateStatus } from "@mep/core";
 import { useCertificateMutations, useCertificates, type CertificateListItem } from "../../repositories/certificates";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { KpiCard } from "../../components/KpiCard";
 import { PrintPortal } from "../../components/PrintPortal";
-import { Badge, Button, Select } from "../../components/ui";
-import { todayIso, useFormat } from "../../lib/format";
+import { Badge, Button, PageHeader, Select } from "../../components/ui";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
+import type { SavedViewFilters } from "../../lib/savedViews";
+import { readModelDisplay, readModelExport } from "../../lib/readModel";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import {
+  applyFinanceScopeParams,
+  certificateSectionKpis,
+  inProjectScope,
+  normalizeLegacyProjectParam,
+  parseFinanceScope,
+  resetFinanceScopeParams,
+} from "../finance/financeSectionModel";
+import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { usePaymentMutations } from "../../repositories/payments";
 import { PaymentForm, type PaymentDefaults } from "../payments/PaymentForm";
 import { CertificateForm } from "./CertificateForm";
 import { CertificateDocument } from "./CertificateDocument";
 
+const CERTIFICATE_STATUSES: readonly CertificateStatus[] = ["DRAFT", "SUBMITTED", "APPROVED", "PAID"];
+
 export function CertificatesPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const base = useBaseMoney();
+  const scope = parseFinanceScope(searchParams, "certificates");
+  const attentionView = scope.view;
   const { data: certificates = [], isLoading } = useCertificates();
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useCertificateMutations();
+
+  // Normalise a legacy `?project=` bookmark onto the canonical parameter once.
+  useEffect(() => {
+    const normalized = normalizeLegacyProjectParam(searchParams);
+    if (normalized) setSearchParams(normalized, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  function clearScopeParam(name: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete(name);
+    setSearchParams(next);
+  }
+
+  const scopedProject = scope.projectId !== null
+    ? financials?.projects.find((p) => p.project.id === scope.projectId)?.project ?? null
+    : null;
+  const kpis = certificateSectionKpis(financials?.projects ?? [], scope.projectId);
 
   const [statusFilter, setStatusFilter] = useState<CertificateStatus | "">("");
   const [editing, setEditing] = useState<CertificateListItem | "new" | null>(null);
@@ -39,9 +76,32 @@ export function CertificatesPage() {
   }
 
   const filtered = useMemo(
-    () => certificates.filter((c) => !statusFilter || c.status === statusFilter),
-    [certificates, statusFilter],
+    () =>
+      certificates.filter(
+        (certificate) =>
+          (!statusFilter || certificate.status === statusFilter) &&
+          inProjectScope(certificate.projectId, scope.projectId) &&
+          (attentionView !== "overdue" || stateOf(certificate)?.overdue),
+      ),
+    [certificates, financials, statusFilter, attentionView, scope.projectId],
   );
+
+  const scopeChips: FinanceScopeChip[] = [
+    ...(scopedProject
+      ? [{
+          key: "project",
+          label: `${scopedProject.code} · ${scopedProject.name}`,
+          onClear: () => clearScopeParam("projectId"),
+        }]
+      : []),
+    ...(attentionView === "overdue"
+      ? [{
+          key: "view",
+          label: t("dashboard.filtered.overdue"),
+          onClear: () => clearScopeParam("view"),
+        }]
+      : []),
+  ];
 
   const columns: Column<CertificateListItem>[] = [
     { key: "number", header: t("certificates.number"), value: (c) => c.number, render: (c) => <span className="font-medium tnum">{c.number}</span> },
@@ -52,10 +112,13 @@ export function CertificatesPage() {
       </div>
     ) },
     { key: "date", header: t("common.date"), value: (c) => c.date, render: (c) => <span className="tnum">{fmt.date(c.date)}</span> },
+    // Amounts are in the certificate's own currency, so it travels with them.
+    { key: "currency", header: t("common.currency"), value: (c) => c.currency, width: "90px" },
     {
       key: "gross",
       header: t("certificates.gross"),
       value: (c) => c.grossMinor,
+      exportValue: (c) => minorToInput(c.grossMinor, currencyInfo(c.currency).exponent),
       render: (c) => <span className="tnum">{fmt.money(c.grossMinor, c.currency)}</span>,
       align: "end",
     },
@@ -63,16 +126,34 @@ export function CertificatesPage() {
       key: "net",
       header: t("certificates.netPayable"),
       value: (c) => stateOf(c)?.breakdown.netPayableMinor ?? 0,
-      render: (c) => <span className="font-medium tnum">{fmt.money(stateOf(c)?.breakdown.netPayableMinor ?? 0, c.currency)}</span>,
+      // Net payable and unpaid come from the financial read model, which loads
+      // separately from this list. Until it arrives the figure is unknown, not
+      // zero — exporting a zero would put an unmeasured amount in a spreadsheet.
+      exportValue: (c) =>
+        readModelExport(stateOf(c), (state) =>
+          minorToInput(state.breakdown.netPayableMinor, currencyInfo(c.currency).exponent)),
+      render: (c) => (
+        <span className="font-medium tnum">
+          {readModelDisplay(stateOf(c), (state) => fmt.money(state.breakdown.netPayableMinor, c.currency))}
+        </span>
+      ),
       align: "end",
     },
     {
       key: "unpaid",
       header: t("certificates.unpaid"),
       value: (c) => stateOf(c)?.unpaidMinor ?? 0,
+      exportValue: (c) =>
+        readModelExport(stateOf(c), (state) =>
+          minorToInput(state.unpaidMinor, currencyInfo(c.currency).exponent)),
       render: (c) => {
-        const unpaid = stateOf(c)?.unpaidMinor ?? 0;
-        return <span className={`tnum ${unpaid > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>{fmt.money(unpaid, c.currency)}</span>;
+        const state = stateOf(c);
+        const owed = (state?.unpaidMinor ?? 0) > 0;
+        return (
+          <span className={`tnum ${owed ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+            {readModelDisplay(state, (row) => fmt.money(row.unpaidMinor, c.currency))}
+          </span>
+        );
       },
       align: "end",
     },
@@ -122,8 +203,12 @@ export function CertificatesPage() {
           <Button variant="ghost" title={t("common.exportPdf")} onClick={() => setPrinting(c)}>
             <FileDown size={15} />
           </Button>
-          <Button variant="ghost" onClick={() => setEditing(c)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(c)}>{t("common.delete")}</Button>
+          {c.status !== "PAID" && (
+            <Button variant="ghost" onClick={() => setEditing(c)}>{c.status === "DRAFT" ? t("common.edit") : t("certificates.correctDetails")}</Button>
+          )}
+          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(c)}>
+            {t("lifecycle.voidCertificate")}
+          </Button>
         </div>
       ),
     },
@@ -134,25 +219,73 @@ export function CertificatesPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("certificates.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("certificates.newCertificate")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("certificates.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("certificates.newCertificate")}
+          </Button>
+        }
+      />
+
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.invoiced")}
+            value={base.format(kpis.invoicedEgp)}
+            icon={FileCheck2}
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.outstanding")}
+            value={base.format(kpis.outstandingEgp)}
+            icon={Hourglass}
+            tone={kpis.outstandingEgp > 0 ? "warning" : "default"}
+          />
+          <KpiCard
+            label={t("financeSection.overdueCount")}
+            value={String(kpis.overdueCount)}
+            icon={AlertTriangle}
+            tone={kpis.overdueCount > 0 ? "negative" : "positive"}
+          />
+        </div>
+      )}
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(c) => c.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading || (attentionView === "overdue" && !financials)}
+        emptyMessage={t("common.empty")}
+        exportName="certificates"
+        viewKey="certificates"
+        // One canonical project parameter: `projectId`, the same key
+        // parseFinanceScope reads. See financeSectionModel for why.
+        filters={{
+          status: statusFilter,
+          projectId: scope.projectId === null ? "" : String(scope.projectId),
+          view: attentionView ?? "",
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const status = next.status ?? "";
+          setStatusFilter(CERTIFICATE_STATUSES.includes(status as CertificateStatus)
+            ? (status as CertificateStatus) : "");
+          setSearchParams(applyFinanceScopeParams(searchParams, "certificates", next), { replace: true });
+        }}
+        onResetFilters={() => {
+          setStatusFilter("");
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
+        }}
         toolbar={
-          <Select className="!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CertificateStatus | "")}>
-            <option value="">{t("common.status")}: {t("common.all")}</option>
-            {(["DRAFT", "SUBMITTED", "APPROVED", "PAID"] as const).map((s) => (
-              <option key={s} value={s}>{t(`status.${s}`)}</option>
-            ))}
-          </Select>
+          <>
+            <Select className="!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CertificateStatus | "")}>
+              <option value="">{t("common.status")}: {t("common.all")}</option>
+              {(["DRAFT", "SUBMITTED", "APPROVED", "PAID"] as const).map((s) => (
+                <option key={s} value={s}>{t(`status.${s}`)}</option>
+              ))}
+            </Select>
+            <FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />
+          </>
         }
       />
 
@@ -170,10 +303,13 @@ export function CertificatesPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.number}`}
+          title={t("lifecycle.voidCertificate")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidCertificate")} (${deleting.number})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
 

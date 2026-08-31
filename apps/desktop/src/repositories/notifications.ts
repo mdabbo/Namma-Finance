@@ -64,7 +64,7 @@ export function useNotifications(): NotificationItem[] {
             kind: "OVERDUE",
             title: `${cs.certificate.number} — ${project.name}`,
             detail: `${t("certificates.overdue")} · ${fmt.money(cs.unpaidMinor, project.currency, { compactFraction: true })}`,
-            to: "/certificates",
+            to: "/finance/certificates",
           });
         } else if (cs.dueDate <= soon) {
           items.push({
@@ -72,7 +72,7 @@ export function useNotifications(): NotificationItem[] {
             kind: "DUE_SOON",
             title: `${cs.certificate.number} — ${project.name}`,
             detail: `${t("notifications.dueOn", { date: fmt.date(cs.dueDate) })} · ${fmt.money(cs.unpaidMinor, project.currency, { compactFraction: true })}`,
-            to: "/certificates",
+            to: "/finance/certificates",
           });
         }
       }
@@ -104,7 +104,7 @@ export function useNotifications(): NotificationItem[] {
         kind: "TEAM_PAYABLE",
         title: item.personName,
         detail: `${item.projectCode} · ${item.dueTitles.join(" · ")} · ${fmt.money(item.dueMinor, item.currency, { compactFraction: true })}`,
-        to: `/people/${item.personId}`,
+        to: `/team/people/${item.personId}`,
       });
     }
 
@@ -120,7 +120,7 @@ export function useNotifications(): NotificationItem[] {
           kind: "RECURRING_DUE",
           title: rec.name,
           detail: `${t("notifications.dueOn", { date: fmt.date(`${today.slice(0, 7)}-${String(due).padStart(2, "0")}`) })} · ${fmt.money(rec.amountMinor, rec.currency, { compactFraction: true })}`,
-          to: "/expenses",
+          to: "/finance/expenses",
         });
       }
     }

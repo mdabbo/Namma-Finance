@@ -1,14 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Banknote, Briefcase, Building2, FileSpreadsheet, Search, Users, Wallet } from "lucide-react";
-import { useClients } from "../../repositories/clients";
-import { useProjects } from "../../repositories/projects";
-import { useCertificates } from "../../repositories/certificates";
-import { usePayments } from "../../repositories/payments";
-import { useExpenses } from "../../repositories/expenses";
-import { usePeople } from "../../repositories/people";
+import { Banknote, Briefcase, Building2, FileSpreadsheet, Search, Settings2, Users, Wallet } from "lucide-react";
+import { useClients, type ClientListItem } from "../../repositories/clients";
+import { useProjects, type ProjectListItem } from "../../repositories/projects";
+import { useCertificates, type CertificateListItem } from "../../repositories/certificates";
+import { usePayments, type PaymentListItem } from "../../repositories/payments";
+import { useExpenses, type ExpenseListItem } from "../../repositories/expenses";
+import { usePeople, type PersonListItem } from "../../repositories/people";
 import { Input } from "../../components/ui";
+import { allowedPath, searchScopeForRole, useRole, type Role } from "../../lib/roles";
+import { SECONDARY_NAVIGATION, SETTINGS_SECTIONS } from "../../app/navigation";
+
+/**
+ * Named destinations the palette can jump to. Settings sections and reports
+ * each have their own address, so they are found by name rather than by
+ * remembering which page they used to be a tab on.
+ */
+const DESTINATIONS: { to: string; labelKey: string; sectionKey: string }[] = [
+  ...SETTINGS_SECTIONS.map((section) => ({
+    to: section.id === "audit" ? "/settings/audit" : `/settings/${section.id}`,
+    labelKey: section.labelKey,
+    sectionKey: "nav.settings",
+  })),
+  ...SECONDARY_NAVIGATION.reports.map((item) => ({
+    to: item.to,
+    labelKey: item.labelKey,
+    sectionKey: "nav.reports",
+  })),
+];
 
 interface SearchHit {
   id: string;
@@ -18,7 +38,7 @@ interface SearchHit {
   to: string;
 }
 
-export function useSearchPalette() {
+export function useSearchPalette(role: Role) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -34,21 +54,69 @@ export function useSearchPalette() {
   }, []);
 
   const openSearch = useCallback(() => setOpen(true), []);
-  return { openSearch, SearchPortal: open ? <SearchPalette onClose={() => setOpen(false)} /> : null };
+  const close = useCallback(() => setOpen(false), []);
+  const SearchPortal = open
+    ? searchScopeForRole(role) === "PROJECTS_ONLY"
+      ? <ProjectSearchPalette onClose={close} />
+      : <FullSearchPalette onClose={close} />
+    : null;
+  return { openSearch, SearchPortal };
 }
 
-function SearchPalette({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
+interface SearchData {
+  clients: ClientListItem[];
+  projects: ProjectListItem[];
+  certificates: CertificateListItem[];
+  payments: PaymentListItem[];
+  expenses: ExpenseListItem[];
+  people: PersonListItem[];
+}
 
+function ProjectSearchPalette({ onClose }: { onClose: () => void }) {
+  const { data: projects = [] } = useProjects();
+  return (
+    <SearchPalette
+      onClose={onClose}
+      clients={[]}
+      projects={projects}
+      certificates={[]}
+      payments={[]}
+      expenses={[]}
+      people={[]}
+    />
+  );
+}
+
+function FullSearchPalette({ onClose }: { onClose: () => void }) {
   const { data: clients = [] } = useClients();
   const { data: projects = [] } = useProjects();
   const { data: certificates = [] } = useCertificates();
   const { data: payments = [] } = usePayments();
   const { data: expenses = [] } = useExpenses();
   const { data: people = [] } = usePeople();
+  return (
+    <SearchPalette
+      onClose={onClose}
+      clients={clients}
+      projects={projects}
+      certificates={certificates}
+      payments={payments}
+      expenses={expenses}
+      people={people}
+    />
+  );
+}
+
+function SearchPalette({ onClose, clients, projects, certificates, payments, expenses, people }: SearchData & { onClose: () => void }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
+
+  const role = useRole();
+  const destinations = useMemo(() => DESTINATIONS.filter(
+    (item) => !item.to.startsWith("/settings/") || allowedPath(role, item.to),
+  ), [role]);
 
   const hits = useMemo<SearchHit[]>(() => {
     const q = query.trim().toLowerCase();
@@ -57,9 +125,23 @@ function SearchPalette({ onClose }: { onClose: () => void }) {
       fields.some((f) => f && f.toLowerCase().includes(q));
 
     const results: SearchHit[] = [];
+    // Settings sections and reports have their own addresses now, so they are
+    // reachable by name instead of by remembering which page they sit on.
+    for (const destination of destinations) {
+      const label = t(destination.labelKey);
+      if (match(label, destination.to)) {
+        results.push({
+          id: destination.to,
+          icon: Settings2,
+          title: label,
+          subtitle: t(destination.sectionKey),
+          to: destination.to,
+        });
+      }
+    }
     for (const c of clients) {
       if (match(c.name, c.company, c.phone, c.email))
-        results.push({ id: `c${c.id}`, icon: Building2, title: c.name, subtitle: t("clients.single"), to: `/clients/${c.id}` });
+        results.push({ id: `c${c.id}`, icon: Building2, title: c.name, subtitle: t("clients.single"), to: `/projects/clients/${c.id}` });
     }
     for (const p of projects) {
       if (match(p.name, p.code, p.clientName, p.city))
@@ -67,22 +149,22 @@ function SearchPalette({ onClose }: { onClose: () => void }) {
     }
     for (const cert of certificates) {
       if (match(cert.number, cert.projectName, cert.description))
-        results.push({ id: `t${cert.id}`, icon: FileSpreadsheet, title: cert.number, subtitle: `${t("certificates.single")} — ${cert.projectName}`, to: "/certificates" });
+        results.push({ id: `t${cert.id}`, icon: FileSpreadsheet, title: cert.number, subtitle: `${t("certificates.single")} — ${cert.projectName}`, to: "/finance/certificates" });
     }
     for (const pm of payments) {
       if (match(pm.number, pm.reference, pm.projectName))
-        results.push({ id: `m${pm.id}`, icon: Banknote, title: pm.number, subtitle: `${t("payments.single")} — ${pm.projectName}`, to: "/payments" });
+        results.push({ id: `m${pm.id}`, icon: Banknote, title: pm.number, subtitle: `${t("payments.single")} — ${pm.projectName}`, to: "/finance/payments" });
     }
     for (const e of expenses) {
       if (match(e.description, e.supplier, e.projectName))
-        results.push({ id: `e${e.id}`, icon: Wallet, title: e.description, subtitle: t("expenses.single"), to: "/expenses" });
+        results.push({ id: `e${e.id}`, icon: Wallet, title: e.description, subtitle: t("expenses.single"), to: "/finance/expenses" });
     }
     for (const person of people) {
       if (match(person.name, person.specialization, person.phone))
-        results.push({ id: `f${person.id}`, icon: Users, title: person.name, subtitle: t(`personType.${person.type}`), to: `/people/${person.id}` });
+        results.push({ id: `f${person.id}`, icon: Users, title: person.name, subtitle: t(`personType.${person.type}`), to: `/team/people/${person.id}` });
     }
     return results.slice(0, 12);
-  }, [query, clients, projects, certificates, payments, expenses, people, t]);
+  }, [query, clients, projects, certificates, payments, expenses, people, destinations, t]);
 
   function go(hit: SearchHit) {
     onClose();

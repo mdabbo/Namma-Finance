@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import type { Project, ProjectInput } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 import type { RevisionMetadata } from "./contracts";
 
 export interface ProjectRow {
@@ -76,25 +76,17 @@ export async function nextProjectCode(prefix: string): Promise<string> {
 }
 
 export async function createProject(code: string, input: ProjectInput): Promise<number> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return invoke<number>("create_project_atomic", { requestedCode: code, input });
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
-  const r = await execute(
-    `INSERT INTO projects (code, name, client_id, country, city, manager, discipline, project_type,
-        status, currency, fx_rate_micro, start_date, end_date, progress_bp, description)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-    [code, input.name, input.clientId, input.country ?? null, input.city ?? null, input.manager ?? null,
-     input.discipline, input.projectType ?? null, input.status, input.currency, input.fxRateMicro,
-     input.startDate ?? null, input.endDate ?? null, input.progressBp, input.description ?? null],
-  );
-    await execute("COMMIT");
+  return atomicCommand<number>("create_project_atomic", { requestedCode: code, input }, async () => {
+    const r = await execute(
+      `INSERT INTO projects (code, name, client_id, country, city, manager, discipline, project_type,
+          status, currency, fx_rate_micro, start_date, end_date, progress_bp, description)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [code, input.name, input.clientId, input.country ?? null, input.city ?? null, input.manager ?? null,
+       input.discipline, input.projectType ?? null, input.status, input.currency, input.fxRateMicro,
+       input.startDate ?? null, input.endDate ?? null, input.progressBp, input.description ?? null],
+    );
     return r.lastInsertId ?? 0;
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export async function updateProject(id: number, input: ProjectInput, revision?: RevisionMetadata): Promise<void> {
@@ -104,12 +96,7 @@ export async function updateProject(id: number, input: ProjectInput, revision?: 
   if (!current) throw new Error("PROJECT_NOT_FOUND");
   const currencyChanged = current.currency !== input.currency || current.fxRateMicro !== input.fxRateMicro;
   if (currencyChanged && (!revision?.effectiveDate || !revision.reason.trim())) throw new Error("CONTRACT_REVISION_REQUIRED");
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("update_project_atomic", { projectId: id, input, revision: revision ?? null });
-    return;
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>("update_project_atomic", { projectId: id, input, revision: revision ?? null }, async () => {
     await execute(
     `UPDATE projects SET name=$1, client_id=$2, country=$3, city=$4, manager=$5, discipline=$6,
         project_type=$7, status=$8, currency=$9, fx_rate_micro=$10, start_date=$11, end_date=$12,
@@ -135,11 +122,7 @@ export async function updateProject(id: number, input: ProjectInput, revision?: 
         );
       }
     }
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export async function projectCascadeInfo(id: number) {
@@ -154,8 +137,12 @@ export async function projectCascadeInfo(id: number) {
   return row ?? { contracts: 0, certificates: 0, payments: 0, expenses: 0 };
 }
 
-export async function deleteProject(id: number): Promise<void> {
-  const result = await execute("UPDATE projects SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the project is hidden but its contracts and history remain. */
+export async function deleteProject(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE projects SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("PROJECT_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -185,6 +172,9 @@ export function useProjectMutations() {
       mutationFn: (v: { id: number; input: ProjectInput; revision?: RevisionMetadata }) => updateProject(v.id, v.input, v.revision),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deleteProject, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deleteProject(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
   };
 }

@@ -1,0 +1,465 @@
+{
+  "_comment": [
+    "Shared certificate-financial fixtures. Asserted by BOTH engines so they cannot drift:",
+    "  TypeScript  packages/core/tests/sharedFixtures.test.ts  (computeCertificate, desiredCertificateStatus)",
+    "  Rust        apps/desktop/src-tauri/src/lib.rs           (certificate_net_payable, derive_certificate_status)",
+    "Money is integer minor units; rates are integer basis points.",
+    "Rounding is half away from zero, matching mulDivRound / mul_div_round_i64."
+  ],
+  "netPayable": [
+    {
+      "name": "plain certificate, no deductions",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 100000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "discount applies before every rate",
+      "grossMinor": 100000,
+      "discountMinor": 20000,
+      "vatBp": 1400,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 91200,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "VAT only",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 1400,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 114000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "retention withheld",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 500,
+      "withholdingBp": 0,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 95000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "withholding tax deducted",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 300,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 97000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "VAT, retention and withholding together",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 1400,
+      "retentionBp": 500,
+      "withholdingBp": 300,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 106000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "proportional advance recovery",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 80000,
+      "expectedRecoveryMinor": 20000
+    },
+    {
+      "name": "proportional advance capped by the un-recovered remainder",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 195000,
+      "expectedNetPayableMinor": 95000,
+      "expectedRecoveryMinor": 5000
+    },
+    {
+      "name": "fully recovered advance stops deducting",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 200000,
+      "expectedNetPayableMinor": 100000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "manual advance recovery",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "MANUAL",
+      "manualRecoveryMinor": 12345,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 87655,
+      "expectedRecoveryMinor": 12345
+    },
+    {
+      "name": "manual advance recovery capped by the remainder",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "MANUAL",
+      "manualRecoveryMinor": 999999,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 190000,
+      "expectedNetPayableMinor": 90000,
+      "expectedRecoveryMinor": 10000
+    },
+    {
+      "name": "manual method with no figure recovers nothing",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "MANUAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 100000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "zero contract value cannot produce proportional recovery",
+      "grossMinor": 100000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 200000,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 0,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 100000,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "rounds half away from zero on VAT",
+      "grossMinor": 333,
+      "discountMinor": 0,
+      "vatBp": 1400,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 0,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 1000000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 380,
+      "expectedRecoveryMinor": 0
+    },
+    {
+      "name": "rounds half away from zero on proportional advance",
+      "grossMinor": 1000,
+      "discountMinor": 0,
+      "vatBp": 0,
+      "retentionBp": 0,
+      "withholdingBp": 0,
+      "advanceMinor": 3,
+      "advanceMethod": "PROPORTIONAL",
+      "manualRecoveryMinor": null,
+      "contractValueMinor": 4000,
+      "recoveredBeforeMinor": 0,
+      "expectedNetPayableMinor": 999,
+      "expectedRecoveryMinor": 1
+    }
+  ],
+  "status": [
+    {
+      "name": "draft never promoted by full collection",
+      "current": "DRAFT",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "DRAFT",
+      "baseMinor": 10000
+    },
+    {
+      "name": "draft with no collection",
+      "current": "DRAFT",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "DRAFT",
+      "baseMinor": 10000
+    },
+    {
+      "name": "collection does not bypass approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "over-collection does not bypass approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 25000,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "submitted and uncollected",
+      "current": "SUBMITTED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "SUBMITTED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved settles when covered exactly",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved settles when over-covered",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10001,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved stays open one unit short",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 9999,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "approved with no collection",
+      "current": "APPROVED",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid reopens when collection falls short",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 9999,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid reopens when evidence disappears",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 10000
+    },
+    {
+      "name": "paid stays paid while covered",
+      "current": "PAID",
+      "netPayableMinor": 10000,
+      "allocatedMinor": 10000,
+      "expected": "PAID",
+      "baseMinor": 10000
+    },
+    {
+      "name": "empty certificate claims nothing, so nothing settles",
+      "current": "APPROVED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 0
+    },
+    {
+      "name": "empty certificate marked paid reopens",
+      "current": "PAID",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "expected": "APPROVED",
+      "baseMinor": 0
+    },
+    {
+      "name": "certified work fully consumed by advance recovery is settled",
+      "current": "APPROVED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    },
+    {
+      "name": "settled-by-offset certificate stays paid",
+      "current": "PAID",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    },
+    {
+      "name": "submitted work consumed by advance still awaits approval",
+      "current": "SUBMITTED",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "SUBMITTED"
+    },
+    {
+      "name": "draft consumed by advance is still a draft",
+      "current": "DRAFT",
+      "netPayableMinor": 0,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "DRAFT"
+    },
+    {
+      "name": "retention and withholding exceeding the claim leave nothing collectible",
+      "current": "APPROVED",
+      "netPayableMinor": -2500,
+      "allocatedMinor": 0,
+      "baseMinor": 100000,
+      "expected": "PAID"
+    }
+  ],
+  "rounding": {
+    "_comment": "mulDivRound / mul_div_round_i64: rounded amount x numerator / denominator, HALF AWAY FROM ZERO. Negative cases exist because the two engines silently disagreed on them (Rust truncated toward zero, landing one minor unit high); nothing reaches them today, and this fixture is what keeps it that way.",
+    "cases": [
+      {
+        "name": "positive half rounds away from zero",
+        "amount": 5,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": 3
+      },
+      {
+        "name": "positive third truncates down",
+        "amount": 100,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": 33
+      },
+      {
+        "name": "positive two-thirds rounds up",
+        "amount": 200,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": 67
+      },
+      {
+        "name": "negative half rounds away from zero",
+        "amount": -5,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": -3
+      },
+      {
+        "name": "negative third rounds away from zero",
+        "amount": -100,
+        "numerator": 1,
+        "denominator": 3,
+        "expected": -33
+      },
+      {
+        "name": "negative exact half of one unit",
+        "amount": -1,
+        "numerator": 1,
+        "denominator": 2,
+        "expected": -1
+      },
+      {
+        "name": "negative VAT line stays symmetric with its positive twin",
+        "amount": -10000,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": -1400
+      },
+      {
+        "name": "positive VAT line",
+        "amount": 10000,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": 1400
+      },
+      {
+        "name": "zero is unsigned",
+        "amount": 0,
+        "numerator": 1400,
+        "denominator": 10000,
+        "expected": 0
+      },
+      {
+        "name": "exact division needs no rounding",
+        "amount": -400,
+        "numerator": 1,
+        "denominator": 4,
+        "expected": -100
+      }
+    ]
+  }
+}

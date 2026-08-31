@@ -35,9 +35,31 @@ export async function exportCsv(defaultName: string, rows: Record<string, unknow
   return true;
 }
 
+/**
+ * A cell a spreadsheet would evaluate rather than read.
+ *
+ * A negative NUMBER is not one of them. Quoting `-1234.50` to defend against
+ * formula injection turns every loss, negative margin and credit note into
+ * text, which a spreadsheet will not sum — so a workbook of financial results
+ * silently stops adding up in exactly the rows that matter most. A leading
+ * `-` is only dangerous when what follows is not a plain number.
+ *
+ * Shared with `buildCsv` in DataTable so table exports and report exports
+ * cannot disagree about what is safe to write.
+ */
+export const NUMERIC_CELL = /^-?\d+(\.\d+)?$/;
+
+export function isFormulaInjectionRisk(value: string): boolean {
+  if (NUMERIC_CELL.test(value)) return false;
+  // Control characters are deliberate: a payload can hide behind a leading tab
+  // or NUL and still be evaluated once the cell is opened.
+  // eslint-disable-next-line no-control-regex
+  return /^[\s\u0000-\u001f]*[=+\-@]/.test(value);
+}
+
 /** Prevent CSV/Excel formula execution when exported text is opened. */
 export function sanitizeExportCell(value: unknown): unknown {
-  return typeof value === "string" && /^[\s\u0000-\u001f]*[=+\-@]/.test(value) ? `'${value}` : value;
+  return typeof value === "string" && isFormulaInjectionRisk(value) ? `'${value}` : value;
 }
 
 export function sanitizeExportRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {

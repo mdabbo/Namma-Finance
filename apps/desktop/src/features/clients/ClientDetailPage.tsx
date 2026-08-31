@@ -8,6 +8,7 @@ import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { Badge, Card, EmptyState } from "../../components/ui";
 import { KpiCard } from "../../components/KpiCard";
+import { readModelDisplay as readModelAmount } from "../../lib/readModel";
 import { Banknote, Briefcase, Wallet } from "lucide-react";
 
 export function ClientDetailPage() {
@@ -27,7 +28,7 @@ export function ClientDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate("/clients")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
+      <button onClick={() => navigate("/projects/clients")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
         <BackIcon size={15} /> {t("clients.title")}
       </button>
 
@@ -39,14 +40,14 @@ export function ClientDetailPage() {
       </div>
 
       <div className="mb-4 grid grid-cols-4 gap-3">
-        <KpiCard label={t("cash.contractValueExcludingVat")} value={base.format(rollup?.contractValueEgp ?? 0)} icon={Briefcase} />
-        <KpiCard label={t("cash.certificateCollections")} value={base.format(rollup?.certificateCollectionsEgp ?? 0)} icon={Banknote} tone="positive" />
-        <KpiCard label={t("cash.totalActualCashIn")} value={base.format(rollup?.totalActualCashInEgp ?? 0)} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.contractValueExcludingVat")} value={readModelAmount(rollup, (r) => base.format(r.contractValueEgp))} icon={Briefcase} />
+        <KpiCard label={t("cash.certificateCollections")} value={readModelAmount(rollup, (r) => base.format(r.certificateCollectionsEgp))} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.totalActualCashIn")} value={readModelAmount(rollup, (r) => base.format(r.totalActualCashInEgp))} icon={Banknote} tone="positive" />
         <KpiCard
           label={t("cash.outstandingReceivables")}
-          value={base.format(rollup?.outstandingEgp ?? 0)}
+          value={readModelAmount(rollup, (r) => base.format(r.outstandingEgp))}
           icon={Wallet}
-          tone={(rollup?.outstandingEgp ?? 0) > 0 ? "warning" : "default"}
+          tone={rollup && rollup.outstandingEgp > 0 ? "warning" : "default"}
         />
       </div>
 
@@ -92,7 +93,7 @@ export function ClientDetailPage() {
                       <p className="text-xs text-slate-400 tnum">{p.code}</p>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="text-sm tnum">{base.format(fin?.contractValueEgp ?? 0)}</span>
+                      <span className="text-sm tnum">{readModelAmount(fin, (f) => base.format(f.contractValueEgp))}</span>
                       <Badge value={p.status} label={t(`status.${p.status}`)} />
                     </div>
                   </Link>

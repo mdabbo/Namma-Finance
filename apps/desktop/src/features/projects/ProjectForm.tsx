@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { projectSchema, type Project, type ProjectInput, CURRENCIES } from "@mep/core";
 import { useClients } from "../../repositories/clients";
 import { useCurrencyRates } from "../../repositories/currencies";
-import { Button, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { Button, DateInput, Field, Input, Modal, Select, Textarea } from "../../components/ui";
 import type { RevisionMetadata } from "../../repositories/contracts";
 
 const DISCIPLINES = ["HVAC", "PLUMBING", "FIREFIGHTING", "ELECTRICAL", "BIM", "ARCHITECTURE", "STRUCTURAL", "ID", "MULTI"] as const;
@@ -155,7 +155,7 @@ export function ProjectForm({ initial, nextCode, onSubmit, onClose, busy }: Proj
         {initial && (initial.currency !== form.currency || initial.fxRateMicro !== form.fxRateMicro) && (
           <>
             <Field label={t("contracts.revisionEffectiveDate")}>
-              <Input type="date" value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
+              <DateInput value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
             </Field>
             <Field label={t("contracts.revisionReason")} error={errors.revisionReason} className="col-span-2">
               <Input value={revisionReason} onChange={(e) => setRevisionReason(e.target.value)} placeholder={t("contracts.revisionReasonHint")} />
@@ -163,10 +163,10 @@ export function ProjectForm({ initial, nextCode, onSubmit, onClose, busy }: Proj
           </>
         )}
         <Field label={t("projects.startDate")}>
-          <Input type="date" value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
+          <DateInput value={form.startDate} onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))} />
         </Field>
         <Field label={t("projects.endDate")}>
-          <Input type="date" value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
+          <DateInput value={form.endDate} onChange={(e) => setForm((f) => ({ ...f, endDate: e.target.value }))} />
         </Field>
         <Field label={t("common.description")} className="col-span-3">
           <Textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />

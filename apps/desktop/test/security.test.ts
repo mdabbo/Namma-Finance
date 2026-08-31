@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sanitizeExportCell } from "../src/lib/export";
 import { assertRestrictedSql } from "../src/lib/db";
@@ -46,6 +46,50 @@ describe("Milestone 10 security boundaries",()=>{
     expect(()=>assertRestrictedSql("UPDATE payments SET amount_minor=$1 WHERE id=$2",[100,7])).not.toThrow();
   });
 
+  /**
+   * The WebView cannot own a transaction. `tauri-plugin-sql` releases the
+   * pooled connection between statements, so a boundary opened from here is
+   * stranded on a shared connection and the next statement from ANY caller — a
+   * list refetch, the auto-sync tick, a Rust command's own transaction — joins
+   * it and commits or rolls back with it. Serializing the runtime pool to one
+   * connection makes that certain rather than merely likely.
+   */
+  it("refuses transaction control from the WebView, in the bridge as in production",()=>{
+    for(const sql of ["BEGIN IMMEDIATE","BEGIN","COMMIT","ROLLBACK","END","SAVEPOINT s1","RELEASE s1"]){
+      expect(()=>assertRestrictedSql(sql,[])).toThrow("SQL_TRANSACTION_CONTROL_DENIED");
+    }
+  });
+
+  /**
+   * No source path opens its own transaction any more.
+   *
+   * This list was not empty when the fence was written: `resolveSyncConflict`
+   * held out longest because its reads feed later writes and it renumbers
+   * records through dynamic table names, so it needed a Rust port rather than a
+   * mechanical conversion. The escape hatch it used is gone from every module,
+   * production and bridge alike, so an empty result is the whole assertion.
+   */
+  it("leaves no source path able to open a WebView transaction",()=>{
+    const sources=globSync("src/**/*.{ts,tsx}",{cwd:root})
+      // The database modules DEFINE the boundary helpers; everything else is a
+      // caller, and callers are what this fence counts.
+      .filter((file)=>!/db(\.e2e)?\.ts$/.test(file))
+      .map((file)=>({ file, text:readFileSync(resolve(root,file),"utf8") }));
+    const offenders=sources
+      .filter(({text})=>
+        /execute\(\s*["'`]\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|END)\b/i.test(text)
+        || /unsafeWebViewTransaction/.test(text))
+      .map(({file})=>file);
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps the production database layer unable to hand out a transaction",()=>{
+    const db=readFileSync(resolve(root,"src/lib/db.ts"),"utf8");
+    // Present as a refusal, so a caller that needs a boundary is pushed to a
+    // Rust command instead of silently getting a broken one.
+    expect(db).toContain("TRANSACTION_REQUIRES_RUST_COMMAND");
+  });
+
   it("makes RLS remediation repeatable and keeps financial writes role-gated",()=>{
     const rls=readFileSync(resolve(root,"../..","docs/supabase-security-hardening.sql"),"utf8");
     expect(rls).toContain("drop policy if exists namaa_member_write");
@@ -65,5 +109,53 @@ describe("Milestone 10 security boundaries",()=>{
 
   it("computes the canonical SHA-256 used before cloud document upload",async()=>{
     expect(await sha256Hex(new TextEncoder().encode("NAMAA"))).toBe("4c1ab3d390329c05f760dbed02bbcb99b3280705fed9aabee2c2fc3acd10e853");
+  });
+});
+
+/**
+ * Milestone 8 independent-audit regression.
+ *
+ * The end-to-end suite swaps the database and app-lock modules for bridges: a
+ * plain HTTP endpoint and a lock that never consults Rust. Those must be
+ * unreachable from anything shippable. `mode` is a user-supplied flag, so
+ * gating on it alone let `vite build --mode e2e` emit a production bundle
+ * carrying both bridges — verified by grepping the emitted assets before this
+ * was fixed.
+ */
+describe("Milestone 8 end-to-end bridge containment", () => {
+  async function pluginNames(command: "serve" | "build", mode: string): Promise<string[]> {
+    const configModule = await import("../vite.config");
+    const factory = configModule.default as unknown as (
+      env: { command: "serve" | "build"; mode: string },
+    ) => Promise<{ plugins: unknown[] }>;
+    const config = await factory({ command, mode });
+    return config.plugins
+      .flat(Infinity as number)
+      .filter((plugin): plugin is { name: string } =>
+        !!plugin && typeof (plugin as { name?: unknown }).name === "string")
+      .map((plugin) => plugin.name);
+  }
+
+  it("never installs the bridge in a build, whatever mode it is given", async () => {
+    for (const mode of ["e2e", "production", "development"]) {
+      expect(await pluginNames("build", mode), `build --mode ${mode}`)
+        .not.toContain("mep-e2e-bridge");
+    }
+  });
+
+  it("installs the bridge only for the e2e dev server", async () => {
+    expect(await pluginNames("serve", "e2e")).toContain("mep-e2e-bridge");
+    expect(await pluginNames("serve", "development")).not.toContain("mep-e2e-bridge");
+  });
+
+  it("keeps the shipped database and lock modules free of bridge fallbacks", () => {
+    const db = readFileSync(resolve(root, "src/lib/db.ts"), "utf8");
+    const lock = readFileSync(resolve(root, "src/lib/lock.ts"), "utf8");
+    // The production modules must reach Rust, never an HTTP endpoint.
+    for (const source of [db, lock]) {
+      expect(source).not.toMatch(/127\.0\.0\.1|localhost|fetch\(/);
+    }
+    expect(db).toContain('from "@tauri-apps/plugin-sql"');
+    expect(lock).toContain('invoke<boolean>("app_lock_enabled")');
   });
 });

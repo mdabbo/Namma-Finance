@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { textEqualIgnoringEol } from "./text-eol.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const checkOnly = process.argv.includes("--check");
@@ -19,7 +20,9 @@ function syncText(relativePath, transform) {
   const path = resolve(root, relativePath);
   const before = readFileSync(path, "utf8");
   const after = transform(before);
-  if (before === after) return;
+  // Git's Windows checkout may materialize CRLF even when the repository blob
+  // uses LF. Release verification is about metadata content, not EOL style.
+  if (textEqualIgnoringEol(before, after)) return;
   if (checkOnly) mismatches.push(relativePath);
   else writeFileSync(path, after, "utf8");
 }

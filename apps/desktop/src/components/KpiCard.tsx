@@ -18,17 +18,17 @@ const TONES = {
 
 export function KpiCard({ label, value, icon: Icon, tone = "default", hint }: KpiCardProps) {
   return (
-    <Card className="p-4">
+    <Card variant="summary" className="p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
-          <p className="mt-1 truncate text-xl font-semibold tnum" title={value}>
+          <p className="truncate text-xs font-medium text-muted">{label}</p>
+          <p className="mt-1 truncate text-xl font-semibold tracking-tight tnum" title={value}>
             {value}
           </p>
-          {hint && <p className="mt-0.5 text-xs text-slate-400">{hint}</p>}
+          {hint && <p className="mt-1 text-xs leading-4 text-muted">{hint}</p>}
         </div>
         <div className={cx("shrink-0 rounded-lg p-2", TONES[tone])}>
-          <Icon size={18} />
+          <Icon size={18} aria-hidden="true" />
         </div>
       </div>
     </Card>

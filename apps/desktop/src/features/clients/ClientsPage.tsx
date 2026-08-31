@@ -3,13 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import type { Client } from "@mep/core";
-import { computeClientFinancials } from "@mep/core";
+import { computeClientFinancials, currencyInfo } from "@mep/core";
 import { useClientMutations, useClients, clientCascadeInfo, type ClientListItem } from "../../repositories/clients";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button } from "../../components/ui";
+import { Badge, Button, PageHeader } from "../../components/ui";
 import { useBaseMoney } from "../../lib/baseCurrency";
+import { minorToInput } from "../../lib/format";
+import type { SavedViewFilters } from "../../lib/savedViews";
+import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { ClientForm } from "./ClientForm";
 
 export function ClientsPage() {
@@ -27,6 +30,11 @@ export function ClientsPage() {
   const rollup = (clientId: number) =>
     financials ? computeClientFinancials(clientId, financials.projects) : null;
 
+  // Consolidated columns sort on exact EGP piasters and export major units of
+  // the reporting currency, which the header names.
+  const exportBase = (egpMinor: number) =>
+    minorToInput(base.convert(egpMinor), currencyInfo(base.code).exponent);
+
   const columns: Column<ClientListItem>[] = [
     { key: "name", header: t("common.name"), value: (c) => c.name, render: (c) => <span className="font-medium">{c.name}</span> },
     { key: "company", header: t("clients.company"), value: (c) => c.company },
@@ -34,32 +42,41 @@ export function ClientsPage() {
     { key: "projects", header: t("clients.projects"), value: (c) => c.projectCount, align: "end" },
     {
       key: "contracts",
-      header: t("cash.contractValueExcludingVat"),
+      header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
       value: (c) => rollup(c.id)?.contractValueEgp ?? 0,
-      render: (c) => <span className="tnum">{base.format(rollup(c.id)?.contractValueEgp ?? 0)}</span>,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.contractValueEgp)),
+      render: (c) => <span className="tnum">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.contractValueEgp))}</span>,
       align: "end",
     },
     {
       key: "certificateCollections",
-      header: t("cash.certificateCollections"),
+      header: `${t("cash.certificateCollections")} (${base.code})`,
       value: (c) => rollup(c.id)?.certificateCollectionsEgp ?? 0,
-      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.certificateCollectionsEgp ?? 0)}</span>,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.certificateCollectionsEgp)),
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.certificateCollectionsEgp))}</span>,
       align: "end",
     },
     {
       key: "totalCashIn",
-      header: t("cash.totalActualCashIn"),
+      header: `${t("cash.totalActualCashIn")} (${base.code})`,
       value: (c) => rollup(c.id)?.totalActualCashInEgp ?? 0,
-      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{base.format(rollup(c.id)?.totalActualCashInEgp ?? 0)}</span>,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.totalActualCashInEgp)),
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.totalActualCashInEgp))}</span>,
       align: "end",
     },
     {
       key: "outstanding",
-      header: t("cash.outstandingReceivables"),
+      header: `${t("cash.outstandingReceivables")} (${base.code})`,
       value: (c) => rollup(c.id)?.outstandingEgp ?? 0,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.outstandingEgp)),
       render: (c) => {
-        const v = rollup(c.id)?.outstandingEgp ?? 0;
-        return <span className={`tnum ${v > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>{base.format(v)}</span>;
+        const fin = rollup(c.id);
+        const owed = (fin?.outstandingEgp ?? 0) > 0;
+        return (
+          <span className={`tnum ${owed ? "text-amber-600 dark:text-amber-400" : ""}`}>
+            {readModelDisplay(fin, (row) => base.format(row.outstandingEgp))}
+          </span>
+        );
       },
       align: "end",
     },
@@ -75,7 +92,6 @@ export function ClientsPage() {
           </Button>
           <Button
             variant="ghost"
-            className="!text-red-600"
             onClick={async () => {
               const info = await clientCascadeInfo(c.id);
               const details = [
@@ -87,7 +103,7 @@ export function ClientsPage() {
               setDeleting({ client: c, details });
             }}
           >
-            {t("common.delete")}
+            {t("lifecycle.archiveClient")}
           </Button>
         </div>
       ),
@@ -96,13 +112,15 @@ export function ClientsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("clients.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} />
-          {t("clients.newClient")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("clients.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" />
+            {t("clients.newClient")}
+          </Button>
+        }
+      />
 
       <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
         <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
@@ -113,9 +131,15 @@ export function ClientsPage() {
         rows={clients}
         columns={columns}
         rowKey={(c) => c.id}
-        onRowClick={(c) => { if (!c.archivedAt) navigate(`/clients/${c.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        onRowClick={(c) => { if (!c.archivedAt) navigate(`/projects/clients/${c.id}`); }}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
+        exportName="clients"
+        viewKey="clients"
+        filters={{ archived: includeArchived ? "1" : "" }}
+        onApplyFilters={(next: SavedViewFilters) => setIncludeArchived(next.archived === "1")}
+        onResetFilters={() => setIncludeArchived(false)}
       />
 
       {editing !== null && (
@@ -132,11 +156,14 @@ export function ClientsPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.client.name}`}
+          title={t("lifecycle.archiveClient")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchiveClient")} (${deleting.client.name})`}
           details={deleting.details}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.client.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={() => mutations.remove.mutate({ id: deleting.client.id }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

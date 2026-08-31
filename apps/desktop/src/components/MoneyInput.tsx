@@ -1,19 +1,33 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type InputHTMLAttributes } from "react";
 import { currencyInfo } from "@mep/core";
 import { minorToInput, parseToMinor } from "../lib/format";
 import { Input, cx } from "./ui";
 
-interface MoneyInputProps {
+interface MoneyInputProps
+  extends Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onChange" | "inputMode"> {
   valueMinor: number | null;
   onChange: (minor: number | null) => void;
   currency?: string;
-  className?: string;
-  placeholder?: string;
-  disabled?: boolean;
+}
+
+/** Distinguishes a deliberate clear from input that cannot represent minor units. */
+export function parseMoneyInputEdit(raw: string, exponent: number): number | null | undefined {
+  if (raw.trim() === "") return null;
+  return parseToMinor(raw, exponent) ?? undefined;
 }
 
 /** Text field that edits integer minor units as a human decimal amount. */
-export function MoneyInput({ valueMinor, onChange, currency = "EGP", className, placeholder, disabled }: MoneyInputProps) {
+export function MoneyInput({
+  valueMinor,
+  onChange,
+  currency = "EGP",
+  className,
+  placeholder,
+  disabled,
+  "aria-invalid": ariaInvalid,
+  onBlur,
+  ...inputProps
+}: MoneyInputProps) {
   const exponent = currencyInfo(currency).exponent;
   const [text, setText] = useState(() => minorToInput(valueMinor, exponent));
   const [invalid, setInvalid] = useState(false);
@@ -33,22 +47,39 @@ export function MoneyInput({ valueMinor, onChange, currency = "EGP", className, 
         dir="ltr"
         value={text}
         disabled={disabled}
+        aria-invalid={ariaInvalid ?? invalid}
         placeholder={placeholder ?? "0.00"}
-        className={cx("pe-14 text-end tnum", invalid && "!border-red-400")}
+        className="pe-14 text-end tnum"
         onChange={(e) => {
           const raw = e.target.value;
-          setText(raw);
-          if (raw.trim() === "") {
+          const parsed = parseMoneyInputEdit(raw, exponent);
+          if (parsed === null) {
+            setText(raw);
             setInvalid(false);
             onChange(null);
             return;
           }
-          const minor = parseToMinor(raw, exponent);
-          setInvalid(minor === null);
-          if (minor !== null) onChange(minor);
+          if (parsed === undefined) {
+            // Never let the displayed amount drift from the integer minor
+            // units held by the parent form. Invalid or over-precision input
+            // is rejected instead of being silently truncated.
+            setInvalid(true);
+            return;
+          }
+          setText(raw);
+          setInvalid(false);
+          onChange(parsed);
         }}
+        onBlur={(event) => {
+          setInvalid(false);
+          setText(minorToInput(valueMinor, exponent));
+          onBlur?.(event);
+        }}
+        {...inputProps}
       />
-      <span className="pointer-events-none absolute end-3 top-1.5 text-xs font-medium text-slate-400">{currency}</span>
+      <span className="pointer-events-none absolute inset-y-0 end-3 flex items-center text-xs font-medium text-muted">
+        {currency}
+      </span>
     </div>
   );
 }

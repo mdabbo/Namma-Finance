@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import type { AssignmentInput, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
+import type { AssignmentInput, AssignmentLifecycle, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
+import { withLock } from "../lib/mutex";
 
 interface PersonRow {
   id: number;
@@ -73,8 +74,12 @@ export async function updatePerson(id: number, input: PersonInput): Promise<void
   );
 }
 
-export async function deletePerson(id: number): Promise<void> {
-  const result = await execute("UPDATE people SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
+/** Archive (soft): the person is hidden but their assignments and payments remain. */
+export async function deletePerson(id: number, reason?: string): Promise<void> {
+  const result = await execute(
+    "UPDATE people SET archived_at=datetime('now'), archive_reason=$2 WHERE id=$1 AND archived_at IS NULL",
+    [id, reason?.trim() || "Archived by user"],
+  );
   if (result.rowsAffected !== 1) throw new Error("PERSON_NOT_FOUND_OR_ARCHIVED");
 }
 
@@ -90,15 +95,24 @@ interface AssignmentRow {
   scope: string | null;
   progress_note: string | null;
   created_at: string;
+  lifecycle_status: "ACTIVE" | "COMPLETED" | "CANCELLED";
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  earned_minor_at_cancellation: number | null;
+  archived_at: string | null;
   project_name?: string;
   project_code?: string;
   person_name?: string;
+  person_archived_at?: string | null;
 }
 
 export interface AssignmentListItem extends ProjectAssignment {
   projectName: string;
   projectCode: string;
   personName: string;
+  /** Archiving the person also silences the assignment's alerts. */
+  personArchived: boolean;
 }
 
 function mapAssignment(r: AssignmentRow): AssignmentListItem {
@@ -112,14 +126,22 @@ function mapAssignment(r: AssignmentRow): AssignmentListItem {
     scope: r.scope,
     progressNote: r.progress_note,
     createdAt: r.created_at,
+    lifecycleStatus: r.lifecycle_status,
+    completedAt: r.completed_at,
+    cancelledAt: r.cancelled_at,
+    cancellationReason: r.cancellation_reason,
+    earnedMinorAtCancellation: r.earned_minor_at_cancellation,
+    archivedAt: r.archived_at,
     projectName: r.project_name ?? "",
     projectCode: r.project_code ?? "",
     personName: r.person_name ?? "",
+    personArchived: (r.person_archived_at ?? null) !== null,
   };
 }
 
 const ASSIGNMENT_SQL = `
-  SELECT a.*, p.name AS project_name, p.code AS project_code, pe.name AS person_name
+  SELECT a.*, p.name AS project_name, p.code AS project_code, pe.name AS person_name,
+         pe.archived_at AS person_archived_at
   FROM project_assignments a
   JOIN projects p ON p.id = a.project_id
   JOIN people pe ON pe.id = a.person_id`;
@@ -167,6 +189,89 @@ export async function updateAssignment(id: number, input: AssignmentInput): Prom
   );
 }
 
+/**
+ * Mark the agreed scope finished. Unpaid earned value stays payable, because
+ * finishing the work does not mean the client has paid for it yet.
+ */
+export async function completeAssignment(id: number): Promise<void> {
+  const result = await execute(
+    `UPDATE project_assignments SET lifecycle_status='COMPLETED', completed_at=datetime('now')
+     WHERE id=$1 AND lifecycle_status='ACTIVE'`,
+    [id],
+  );
+  if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_NOT_ACTIVE");
+}
+
+/**
+ * Call off the remaining scope. Earned value is frozen at this moment so
+ * certificates the client pays later cannot accrue to work that stopped, and
+ * the unearned remainder leaves the project's committed cost. A reason is
+ * required: removing a commitment is an accounting decision.
+ */
+export function cancelAssignment(id: number, reason: string): Promise<void> {
+  // The frozen figure is DERIVED by `cancel_assignment_atomic`, from stored
+  // evidence, inside the transaction that writes it — nothing is sent from here
+  // for Rust to trust. It used to be computed in this process and passed as an
+  // argument that Rust could only bound-check, so a wrong value could look
+  // plausible and migration 0004 would then make it final.
+  //
+  // The lock still serialises this against payments and collections in the same
+  // process, which keeps the read model consistent for whatever the UI shows
+  // next.
+  return withLock(() => cancelAssignmentUnlocked(id, reason));
+}
+
+async function cancelAssignmentUnlocked(id: number, reason: string): Promise<void> {
+  const trimmed = reason.trim();
+  if (!trimmed) throw new Error("CANCELLATION_REASON_REQUIRED");
+  await atomicCommand<void>(
+    "cancel_assignment_atomic",
+    { assignmentId: id, reason: trimmed },
+    async () => {
+      const assignment = await selectOne<{ agreedMinor: number; lifecycleStatus: string; projectArchivedAt: string | null }>(
+        `SELECT a.agreed_minor AS agreedMinor, a.lifecycle_status AS lifecycleStatus,
+                p.archived_at AS projectArchivedAt
+         FROM project_assignments a JOIN projects p ON p.id=a.project_id WHERE a.id=$1`,
+        [id],
+      );
+      if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+      if (assignment.lifecycleStatus === "CANCELLED") throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+      if (assignment.projectArchivedAt !== null) throw new Error("PROJECT_ARCHIVED");
+      // The double derives it the same way the command does, from the same
+      // evidence — `computeTeamPayout` is the reference the Rust port mirrors.
+      const earnedMinor = await assignmentEarnedMinor(id);
+      if (earnedMinor < 0 || earnedMinor > assignment.agreedMinor) throw new Error("FROZEN_EARNED_OUT_OF_RANGE");
+      const result = await execute(
+        `UPDATE project_assignments SET lifecycle_status='CANCELLED', cancelled_at=datetime('now'),
+           cancellation_reason=$1, earned_minor_at_cancellation=$2
+         WHERE id=$3 AND lifecycle_status<>'CANCELLED'`,
+        [trimmed, earnedMinor, id],
+      );
+      if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_ALREADY_CANCELLED");
+    },
+  );
+}
+
+/** Fee released to this assignment by client certificates paid so far. */
+async function assignmentEarnedMinor(id: number): Promise<number> {
+  const assignment = await selectOne<{ projectId: number; agreedMinor: number }>(
+    "SELECT project_id AS projectId, agreed_minor AS agreedMinor FROM project_assignments WHERE id=$1",
+    [id],
+  );
+  if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+  const paid = await selectOne<{ paid: number }>(
+    "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL",
+    [id],
+  );
+  const { loadWorkspaceFinancials } = await import("./financials");
+  const workspace = await loadWorkspaceFinancials();
+  const states = [...workspace.contractStates.values()].filter(
+    (state) => state.contract.projectId === assignment.projectId,
+  );
+  const { computeTeamPayout } = await import("@mep/core");
+  return computeTeamPayout(assignment.agreedMinor, states, paid?.paid ?? 0).releasedMinor;
+}
+
 export async function deleteAssignment(id: number): Promise<void> {
   const result = await execute("UPDATE project_assignments SET archived_at=datetime('now'), archive_reason='Archived by user' WHERE id=$1 AND archived_at IS NULL", [id]);
   if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_NOT_FOUND_OR_ARCHIVED");
@@ -194,11 +299,7 @@ export async function listPersonPayments(assignmentIds: number[]): Promise<Perso
  * revenue − expenses — always includes team costs.
  */
 export async function createPersonPayment(input: PersonPaymentInput): Promise<number> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return invoke<number>("create_person_payment_atomic", { input });
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  return atomicCommand<number>("create_person_payment_atomic", { input }, async () => {
   // guard against accidental double-recording (double-click, repeated "Pay"):
   // an EXACT twin — same assignment, date, amount and note — is rejected;
   // change the date or note to record a genuine second payment
@@ -208,25 +309,50 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
   );
   if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
 
-  const r = await execute(
-    "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
-    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
-  );
-  const paymentId = r.lastInsertId ?? 0;
-
   const ctx = await selectOne<{
     project_id: number;
     currency: string;
     fx_rate_micro: number;
     person_name: string;
     person_type: string;
+    agreed_minor: number;
+    lifecycle_status: AssignmentLifecycle;
+    earned_minor_at_cancellation: number | null;
+    archived_at: string | null;
+    project_archived_at: string | null;
+    person_archived_at: string | null;
   }>(
-    `SELECT a.project_id, a.currency, a.fx_rate_micro, pe.name AS person_name, pe.type AS person_type
-     FROM project_assignments a JOIN people pe ON pe.id = a.person_id
+    `SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+            a.earned_minor_at_cancellation, a.archived_at,
+            p.archived_at AS project_archived_at,
+            pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
+     FROM project_assignments a
+     JOIN people pe ON pe.id = a.person_id
+     JOIN projects p ON p.id = a.project_id
      WHERE a.id = $1`,
     [input.assignmentId],
   );
   if (!ctx) throw new Error("ASSIGNMENT_NOT_FOUND");
+  // Same derivation and the same order of checks as the Rust command, so the
+  // double cannot accept a payment production would reject.
+  if (ctx.archived_at !== null || ctx.project_archived_at !== null || ctx.person_archived_at !== null) {
+    throw new Error("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID");
+  }
+  const earnedMinor = ctx.lifecycle_status === "CANCELLED"
+    ? Math.max(0, ctx.earned_minor_at_cancellation ?? 0)
+    : Math.max(0, await assignmentEarnedMinor(input.assignmentId));
+  const paidRow = await selectOne<{ paid: number }>(
+    "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL",
+    [input.assignmentId],
+  );
+  const dueMinor = Math.max(0, earnedMinor - (paidRow?.paid ?? 0));
+  if (input.amountMinor > dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
+
+  const r = await execute(
+    "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
+    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
+  );
+  const paymentId = r.lastInsertId ?? 0;
     const categoryName = ctx.person_type === "EMPLOYEE" ? "Salaries" : "Freelancers";
     const category = await selectOne<{ id: number }>(
       "SELECT id FROM expense_categories WHERE name_en = $1 ORDER BY id LIMIT 1",
@@ -241,22 +367,13 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
         [input.date, fallback.id, input.note ? `${ctx.person_name} — ${input.note}` : ctx.person_name,
          ctx.project_id, ctx.person_name, input.amountMinor, ctx.currency, ctx.fx_rate_micro, paymentId],
       );
-    await execute("COMMIT");
     return paymentId;
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 /** Reverse a team payment without destroying either financial record. */
 export async function deletePersonPayment(id: number): Promise<void> {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    await invoke("delete_person_payment_atomic", { paymentId: id });
-    return;
-  }
-  await execute("BEGIN IMMEDIATE");
-  try {
+  await atomicCommand<void>("delete_person_payment_atomic", { paymentId: id }, async () => {
     const result = await execute("UPDATE person_payments SET voided_at=datetime('now'), void_reason='Reversed by user' WHERE id=$1 AND voided_at IS NULL", [id]);
     if (result.rowsAffected !== 1) throw new Error("PERSON_PAYMENT_NOT_FOUND");
     const reversal = await execute(
@@ -274,11 +391,7 @@ export async function deletePersonPayment(id: number): Promise<void> {
        SELECT date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,attachment_path,$1,datetime('now'),'Reversal record',id FROM expenses WHERE id=$2`,
       [reversalId, originalExpense.id],
     );
-    await execute("COMMIT");
-  } catch (error) {
-    await execute("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function usePeople(includeArchived = false) {
@@ -317,13 +430,21 @@ export function usePeopleMutations() {
       mutationFn: (v: { id: number; input: PersonInput }) => updatePerson(v.id, v.input),
       onSuccess: invalidate,
     }),
-    remove: useMutation({ mutationFn: deletePerson, onSuccess: invalidate }),
+    remove: useMutation({
+      mutationFn: (v: { id: number; reason?: string }) => deletePerson(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
     createAssignment: useMutation({ mutationFn: createAssignment, onSuccess: invalidate }),
     updateAssignment: useMutation({
       mutationFn: (v: { id: number; input: AssignmentInput }) => updateAssignment(v.id, v.input),
       onSuccess: invalidate,
     }),
     removeAssignment: useMutation({ mutationFn: deleteAssignment, onSuccess: invalidate }),
+    completeAssignment: useMutation({ mutationFn: completeAssignment, onSuccess: invalidate }),
+    cancelAssignment: useMutation({
+      mutationFn: (v: { id: number; reason: string }) => cancelAssignment(v.id, v.reason),
+      onSuccess: invalidate,
+    }),
     createPersonPayment: useMutation({ mutationFn: createPersonPayment, onSuccess: invalidate }),
     removePersonPayment: useMutation({ mutationFn: deletePersonPayment, onSuccess: invalidate }),
   };

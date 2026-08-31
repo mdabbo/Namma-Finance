@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FileUp, Check } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { invoke } from "@tauri-apps/api/core";
+import { atomicCommand } from "../../lib/atomic";
 import { parseWorkbook } from "../../lib/export";
 import { parseToMinor } from "../../lib/format";
 import { selectOne, execute } from "../../lib/db";
@@ -170,25 +170,25 @@ export function ImportWizard() {
     let imported = 0;
     const settings = await loadSettings();
 
-    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-      const validRows = parsedRows.filter((row) => row.errors.length === 0).map((row) => row.values);
-      try {
-        imported = await invoke<number>("import_rows_atomic", {
-          entity,
-          rows: validRows,
-          projectCodePrefix: settings.projectCodePrefix,
-        });
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-      await qc.invalidateQueries();
-      setResult({ imported, errors });
-      setRunning(false);
-      return;
-    }
-
-    await execute("BEGIN IMMEDIATE");
+    const validRows = parsedRows.filter((row) => row.errors.length === 0).map((row) => row.values);
     try {
+      imported = await atomicCommand<number>(
+        "import_rows_atomic",
+        { entity, rows: validRows, projectCodePrefix: settings.projectCodePrefix },
+        () => importRowsWithinTransaction(),
+      );
+    } catch (error) {
+      imported = 0;
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+    await qc.invalidateQueries();
+    setResult({ imported, errors });
+    setRunning(false);
+    return;
+
+    async function importRowsWithinTransaction(): Promise<number> {
+    let count = 0;
+    const importedCertificates: number[] = [];
     for (let i = 0; i < parsedRows.length; i++) {
       const { values, errors: rowErrors } = parsedRows[i]!;
       if (rowErrors.length > 0) continue;
@@ -230,11 +230,12 @@ export function ImportWizard() {
           if (requestedStatus === "PAID") throw new Error(t("importer.paidRequiresPayment"));
           const status = CERT_STATUSES.includes(requestedStatus) ? requestedStatus : "APPROVED";
           const seq = await nextCertificateSeq(contract.id);
-          await execute(
+          const inserted = await execute(
             `INSERT INTO payment_certificates (contract_id, seq, number, date, submission_date, gross_minor, discount_minor, status)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
             [contract.id, seq, values.number, values.date, values.submissionDate ?? values.date, values.gross, values.discount ?? 0, status],
           );
+          if (inserted.lastInsertId) importedCertificates.push(inserted.lastInsertId);
         } else if (entity === "payments") {
           const contract = await selectOne<{ id: number }>("SELECT id FROM contracts WHERE number = $1", [values.contractNumber]);
           if (!contract) throw new Error(`contract ${values.contractNumber}?`);
@@ -246,22 +247,20 @@ export function ImportWizard() {
             [contract.id, values.number, values.date, values.amount, method, values.reference],
           );
         }
-        imported += 1;
+        count += 1;
       } catch (err) {
         throw new Error(`Row ${i + 2}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-      await execute("COMMIT");
-    } catch (error) {
-      await execute("ROLLBACK");
-      imported = 0;
-      errors.push(error instanceof Error ? error.message : String(error));
+    // Matches the Rust command: an import creates no allocations, so the only
+    // status this can settle is a certificate whose payable is already fully
+    // consumed. Scoped to the rows just inserted, inside the same transaction.
+    if (importedCertificates.length > 0) {
+      const { reconcileCertificateStatuses } = await import("../../repositories/payments");
+      await reconcileCertificateStatuses(importedCertificates);
     }
-    const { reconcileCertificateStatuses } = await import("../../repositories/payments");
-    await reconcileCertificateStatuses();
-    await qc.invalidateQueries();
-    setResult({ imported, errors });
-    setRunning(false);
+    return count;
+    }
   }
 
   return (

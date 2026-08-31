@@ -5,6 +5,7 @@ import {
   certificateDueDate,
   computeAging,
   computeProfitability,
+  currencyInfo,
   isBillable,
   laborCostMinor,
   minutesToHours,
@@ -19,7 +20,7 @@ import { listAllAssignments, listAllPersonPayments, usePeople } from "../../repo
 import { listTimeEntries } from "../../repositories/timeEntries";
 import { useSettings } from "../../lib/settings";
 import { useBaseMoney } from "../../lib/baseCurrency";
-import { todayIso, useFormat } from "../../lib/format";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { exportCsv, exportXlsx } from "../../lib/export";
 import { Button, Card, EmptyState, Select } from "../../components/ui";
 import { PrintPortal } from "../../components/PrintPortal";
@@ -27,6 +28,9 @@ import { PrintPortal } from "../../components/PrintPortal";
 type ReportKey =
   | "projects" | "clients" | "certificates" | "payments" | "expenses"
   | "people" | "time" | "profitability" | "aging" | "annual";
+
+/** Print wants formatted money; a workbook wants a number it can sum. */
+type RowMode = "print" | "export";
 
 const REPORTS: ReportKey[] = ["projects", "clients", "certificates", "payments", "expenses", "people", "time", "profitability", "aging", "annual"];
 
@@ -46,9 +50,34 @@ export function ReportsCenter() {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [printing, setPrinting] = useState<{ title: string; rows: Record<string, unknown>[] } | null>(null);
 
-  const money = (egp: number) => base.format(egp);
+  /**
+   * A report row is built once and used two ways, which pull in opposite
+   * directions.
+   *
+   * On a printed page a figure should read the way the app reads it —
+   * localized, grouped, with the currency implied by the header. In a workbook
+   * it must be a NUMBER. Writing "١٬٢٣٤٫٥٠" or even "1,234.50" into a cell
+   * produces text: the column will not sum, will not chart, and will not sort
+   * numerically, so a financial workbook silently stops adding up. Negative
+   * figures are worse — losses and negative margins are exactly the rows a
+   * reader most wants to total.
+   *
+   * So exports carry major units of the reporting currency as a plain number
+   * (the header already names the currency) and printing carries the formatted
+   * string. Same rows, one flag.
+   */
+  const moneyFor = (mode: RowMode) => (egp: number) =>
+    mode === "print" ? base.format(egp) : Number(minorToInput(base.convert(egp), currencyInfo(base.code).exponent));
 
-  async function buildRows(key: ReportKey): Promise<Record<string, unknown>[]> {
+  /** The same rule for amounts reported in their own source currency. */
+  const sourceMoneyFor = (mode: RowMode) => (amountMinor: number, currency: string) =>
+    mode === "print"
+      ? fmt.money(amountMinor, currency)
+      : Number(minorToInput(amountMinor, currencyInfo(currency).exponent));
+
+  async function buildRows(key: ReportKey, mode: RowMode = "print"): Promise<Record<string, unknown>[]> {
+    const money = moneyFor(mode);
+    const sourceMoney = sourceMoneyFor(mode);
     if (!financials) return [];
     switch (key) {
       case "projects":
@@ -94,10 +123,10 @@ export function ReportsCenter() {
             [t("clients.single")]: cert.clientName,
             [t("common.date")]: cert.date,
             [t("common.status")]: t(`status.${cert.status}`),
-            [t("certificates.gross")]: fmt.money(cert.grossMinor, cert.currency),
-            [t("certificates.netPayable")]: fmt.money(cs?.breakdown.netPayableMinor ?? 0, cert.currency),
-            [t("certificates.paid")]: fmt.money(cs?.paidMinor ?? 0, cert.currency),
-            [t("certificates.unpaid")]: fmt.money(cs?.unpaidMinor ?? 0, cert.currency),
+            [t("certificates.gross")]: sourceMoney(cert.grossMinor, cert.currency),
+            [t("certificates.netPayable")]: sourceMoney(cs?.breakdown.netPayableMinor ?? 0, cert.currency),
+            [t("certificates.paid")]: sourceMoney(cs?.paidMinor ?? 0, cert.currency),
+            [t("certificates.unpaid")]: sourceMoney(cs?.unpaidMinor ?? 0, cert.currency),
           };
         });
       case "payments":
@@ -109,7 +138,7 @@ export function ReportsCenter() {
           [t("common.date")]: p.date,
           [t("payments.method")]: t(`method.${p.method}`),
           [t("common.status")]: p.deletedAt ? t("lifecycle.void") : t("status.PAID"),
-          [t("common.amount")]: fmt.money(p.amountMinor, p.currency),
+          [t("common.amount")]: sourceMoney(p.amountMinor, p.currency),
         }));
       case "expenses":
         return expenses.map((e) => ({
@@ -118,7 +147,7 @@ export function ReportsCenter() {
           [t("common.description")]: e.description,
           [t("expenses.project")]: e.projectName ?? t("common.overhead"),
           [t("expenses.supplier")]: e.supplier ?? "",
-          [t("common.amount")]: fmt.money(e.amountMinor, e.currency),
+          [t("common.amount")]: sourceMoney(e.amountMinor, e.currency),
         }));
       case "people": {
         const assignments = await listAllAssignments();
@@ -134,9 +163,9 @@ export function ReportsCenter() {
             [t("payments.kind")]: t(`personType.${person.type}`),
             [t("people.specialization")]: person.specialization ?? "",
             [t("people.assignments")]: own.length,
-            [t("people.agreedAmount")]: fmt.money(agreed, person.currency),
-            [t("people.paidToDate")]: fmt.money(paid, person.currency),
-            [t("people.remainingAmount")]: fmt.money(agreed - paid, person.currency),
+            [t("people.agreedAmount")]: sourceMoney(agreed, person.currency),
+            [t("people.paidToDate")]: sourceMoney(paid, person.currency),
+            [t("people.remainingAmount")]: sourceMoney(agreed - paid, person.currency),
           };
         });
       }
@@ -151,7 +180,7 @@ export function ReportsCenter() {
           [t("time.hours")]: minutesToHours(e.minutes),
           [t("time.billable")]: e.billable ? t("time.billable") : t("time.nonBillable"),
           [t("time.laborCost")]: e.hourlyRateMinor
-            ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency)
+            ? sourceMoney(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency)
             : t("reports.noRate"),
         }));
       }
@@ -236,7 +265,7 @@ export function ReportsCenter() {
   }
 
   async function run(key: ReportKey, format: "pdf" | "xlsx" | "csv") {
-    const rows = await buildRows(key);
+    const rows = await buildRows(key, format === "pdf" ? "print" : "export");
     const title = t(`reports.report${key.charAt(0).toUpperCase()}${key.slice(1)}`) + (key === "annual" ? ` ${year}` : "");
     if (rows.length === 0) return;
     if (format === "pdf") setPrinting({ title, rows });

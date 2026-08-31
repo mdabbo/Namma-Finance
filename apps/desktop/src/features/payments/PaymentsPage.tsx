@@ -1,25 +1,93 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { CalendarDays, Coins, Plus, Wallet } from "lucide-react";
+import { currencyInfo } from "@mep/core";
 import { usePaymentMutations, usePayments, type PaymentListItem } from "../../repositories/payments";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, Select } from "../../components/ui";
-import { useFormat } from "../../lib/format";
+import { KpiCard } from "../../components/KpiCard";
+import { Badge, Button, PageHeader, Select } from "../../components/ui";
+import { minorToInput, todayIso, useFormat } from "../../lib/format";
+import { useBaseMoney } from "../../lib/baseCurrency";
+import type { SavedViewFilters } from "../../lib/savedViews";
+import {
+  applyFinanceScopeParams,
+  inProjectScope,
+  normalizeLegacyProjectParam,
+  parseFinanceScope,
+  paymentSectionKpis,
+  resetFinanceScopeParams,
+} from "../finance/financeSectionModel";
+import { FinanceScopeChips, type FinanceScopeChip } from "../finance/FinanceScopeChips";
 import { PaymentForm } from "./PaymentForm";
+
+const PAYMENT_KINDS: readonly string[] = ["CERTIFICATE", "ADVANCE", "RETENTION_RELEASE"];
 
 export function PaymentsPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const base = useBaseMoney();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const scope = parseFinanceScope(searchParams, "payments");
+  const attentionView = scope.view;
   const [includeVoided, setIncludeVoided] = useState(false);
   const { data: payments = [], isLoading } = usePayments(includeVoided);
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = usePaymentMutations();
 
   const [kindFilter, setKindFilter] = useState("");
   const [editing, setEditing] = useState<PaymentListItem | "new" | null>(null);
   const [deleting, setDeleting] = useState<PaymentListItem | null>(null);
 
-  const filtered = payments.filter((p) => !kindFilter || p.kind === kindFilter);
+  // An old bookmark carrying `?project=` is rewritten onto the canonical
+  // parameter once, replacing the entry so Back does not return to the legacy
+  // URL and re-trigger the rewrite.
+  useEffect(() => {
+    const normalized = normalizeLegacyProjectParam(searchParams);
+    if (normalized) setSearchParams(normalized, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  function clearScopeParam(name: string) {
+    const next = new URLSearchParams(searchParams);
+    next.delete(name);
+    setSearchParams(next);
+  }
+
+  const scopedProject = scope.projectId !== null
+    ? financials?.projects.find((p) => p.project.id === scope.projectId)?.project ?? null
+    : null;
+  const kpis = paymentSectionKpis({
+    projects: financials?.projects ?? [],
+    cashIn: financials?.cashIn ?? [],
+    projectId: scope.projectId,
+    todayIso: todayIso(),
+  });
+
+  const filtered = payments.filter(
+    (payment) =>
+      (!kindFilter || payment.kind === kindFilter) &&
+      inProjectScope(payment.projectId, scope.projectId) &&
+      (attentionView !== "unallocated" || payment.unallocatedMinor > 0),
+  );
+
+  const scopeChips: FinanceScopeChip[] = [
+    ...(scopedProject
+      ? [{
+          key: "project",
+          label: `${scopedProject.code} · ${scopedProject.name}`,
+          onClear: () => clearScopeParam("projectId"),
+        }]
+      : []),
+    ...(attentionView === "unallocated"
+      ? [{
+          key: "view",
+          label: t("dashboard.filtered.unallocated"),
+          onClear: () => clearScopeParam("view"),
+        }]
+      : []),
+  ];
 
   const columns: Column<PaymentListItem>[] = [
     { key: "number", header: t("payments.number"), value: (p) => p.number, render: (p) => <span className="font-medium tnum">{p.number}</span> },
@@ -37,10 +105,13 @@ export function PaymentsPage() {
     { key: "kind", header: t("payments.kind"), value: (p) => p.kind, render: (p) => <Badge value={p.kind === "ADVANCE" ? "SUBMITTED" : p.kind === "RETENTION_RELEASE" ? "APPROVED" : "PAID"} label={t(`paymentKind.${p.kind}`)} /> },
     { key: "date", header: t("common.date"), value: (p) => p.date, render: (p) => <span className="tnum">{fmt.date(p.date)}</span> },
     { key: "method", header: t("payments.method"), value: (p) => t(`method.${p.method}`) },
+    // Receipts are in the contract's currency, so it travels with the amounts.
+    { key: "currency", header: t("common.currency"), value: (p) => p.currency, width: "90px" },
     {
       key: "amount",
       header: t("common.amount"),
       value: (p) => p.amountMinor,
+      exportValue: (p) => minorToInput(p.amountMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="font-medium tnum text-emerald-600 dark:text-emerald-400">{fmt.money(p.amountMinor, p.currency)}</span>,
       align: "end",
     },
@@ -48,6 +119,7 @@ export function PaymentsPage() {
       key: "unallocated",
       header: t("payments.customerCredit"),
       value: (p) => p.unallocatedMinor,
+      exportValue: (p) => minorToInput(p.unallocatedMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum text-amber-600 dark:text-amber-400">{fmt.money(p.unallocatedMinor, p.currency)}</span>,
       align: "end",
     },
@@ -56,10 +128,10 @@ export function PaymentsPage() {
       header: "",
       sortable: false,
       width: "120px",
-      render: (p) => p.deletedAt ? <Badge value="CANCELLED" label={t("lifecycle.void")} /> : (
+      render: (p) => p.deletedAt ? <Badge value="CANCELLED" label={t("lifecycle.voided")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("common.delete")}</Button>
+          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("lifecycle.voidPayment")}</Button>
         </div>
       ),
     },
@@ -67,18 +139,68 @@ export function PaymentsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("payments.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("payments.newPayment")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("payments.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("payments.newPayment")}
+          </Button>
+        }
+      />
+
+      {financials && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
+          <KpiCard
+            label={t("financeSection.cashIn")}
+            value={base.format(kpis.totalCashInEgp)}
+            icon={Wallet}
+            tone="positive"
+            hint={t("dashboard.reportingCurrency", { currency: base.code })}
+          />
+          <KpiCard
+            label={t("financeSection.cashInMonth")}
+            value={base.format(kpis.monthCashInEgp)}
+            icon={CalendarDays}
+          />
+          <KpiCard
+            label={t("financeSection.customerCredit")}
+            value={base.format(kpis.unallocatedCreditEgp)}
+            icon={Coins}
+            tone={kpis.unallocatedCreditEgp > 0 ? "warning" : "default"}
+          />
+        </div>
+      )}
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        loading={isLoading}
+        emptyMessage={t("common.empty")}
+        exportName="payments"
+        viewKey="payments"
+        // `projectId` is the one URL parameter for project scope — the same one
+        // parseFinanceScope reads and the dashboard and project links write.
+        // Saved views used to store and restore `project`, which nothing read:
+        // the view reported "applied" while the list stayed unscoped, and reset
+        // deleted a parameter that was never set while leaving the real one.
+        filters={{
+          kind: kindFilter,
+          projectId: scope.projectId === null ? "" : String(scope.projectId),
+          voided: includeVoided ? "1" : "",
+          view: scope.view ?? "",
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const kind = next.kind ?? "";
+          setKindFilter(PAYMENT_KINDS.includes(kind) ? kind : "");
+          setIncludeVoided(next.voided === "1");
+          setSearchParams(applyFinanceScopeParams(searchParams, "payments", next), { replace: true });
+        }}
+        onResetFilters={() => {
+          setKindFilter("");
+          setIncludeVoided(false);
+          setSearchParams(resetFinanceScopeParams(searchParams), { replace: true });
+        }}
         toolbar={<>
           <Select className="!w-48" value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
             <option value="">{t("payments.kind")}: {t("common.all")}</option>
@@ -90,6 +212,7 @@ export function PaymentsPage() {
             <input type="checkbox" checked={includeVoided} onChange={(e) => setIncludeVoided(e.target.checked)} />
             {t("lifecycle.includeVoided")}
           </label>
+          <FinanceScopeChips chips={scopeChips} clearLabel={t("common.clearFilters")} />
         </>}
       />
 
@@ -107,10 +230,13 @@ export function PaymentsPage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.number}`}
+          title={t("lifecycle.voidPayment")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidPayment")} (${deleting.number})`}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>

@@ -8,6 +8,8 @@ import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createPerson, createAssignment, createPersonPayment, deletePersonPayment } from "../src/repositories/people";
 import { reconcileMilestoneCertificates } from "../src/repositories/milestoneCertificates";
+import { createCertificate, nextCertificateSeq } from "../src/repositories/certificates";
+import { createPayment } from "../src/repositories/payments";
 import { createDocument } from "../src/repositories/documents";
 
 beforeEach(() => resetDb());
@@ -15,6 +17,31 @@ beforeEach(() => resetDb());
 async function projectFixture(code = "PRJ-2026-ATOMIC") {
   const clientId = await createClient({ name: code, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
   const projectId = await createProject(code, { name: code, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+  return { clientId, projectId };
+}
+
+/**
+ * A project whose contract is fully collected, so assignments on it have
+ * earned value. A person payment is capped at the assignment's earned-and-
+ * unpaid amount, so a rollback test needs the payment to be legitimate right
+ * up to the point where the injected failure fires.
+ */
+async function collectedProjectFixture(code: string) {
+  const { clientId, projectId } = await projectFixture(code);
+  const contractId = await createContract({
+    projectId, number: `C-${code}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0,
+    withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0,
+    performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null,
+    valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null,
+  });
+  const certificateId = await createCertificate(await nextCertificateSeq(contractId), {
+    contractId, number: `PC-${code}`, date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null,
+    description: null, grossMinor: 100_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED",
+  });
+  await createPayment(
+    { contractId, kind: "CERTIFICATE", number: `PAY-${code}`, date: "2026-07-02", amountMinor: 100_000, method: "CASH", bank: null, reference: null, notes: null },
+    [{ certificateId, amountMinor: 100_000 }],
+  );
   return { clientId, projectId };
 }
 
@@ -26,7 +53,7 @@ describe("Milestone 2 transaction boundaries", () => {
     expect(raw("SELECT id FROM documents")).toHaveLength(0);
   });
   it("rolls back person payment when linked expense creation fails", async () => {
-    const { projectId } = await projectFixture();
+    const { projectId } = await collectedProjectFixture("PRJ-2026-ATOMIC");
     const personId = await createPerson({ type: "FREELANCER", name: "Atomic Person", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 20_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
     rawExec("CREATE TRIGGER fail_linked_expense BEFORE INSERT ON expenses BEGIN SELECT RAISE(ABORT, 'injected expense failure'); END;");
@@ -38,7 +65,7 @@ describe("Milestone 2 transaction boundaries", () => {
   });
 
   it("rolls back person payment when no expense category exists", async () => {
-    const { projectId } = await projectFixture("PRJ-2026-NOCATEGORY");
+    const { projectId } = await collectedProjectFixture("PRJ-2026-NOCATEGORY");
     const personId = await createPerson({ type: "FREELANCER", name: "No Category", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
     const assignmentId = await createAssignment({ personId, projectId, agreedMinor: 20_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
     rawExec("DELETE FROM expense_categories");

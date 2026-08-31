@@ -1,21 +1,33 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, DatabaseBackup, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, UsersRound } from "lucide-react";
+import { Building2, CloudUpload, DatabaseBackup, FlaskConical, Hash, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, Trash2, UsersRound, Wrench } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
 import { getSyncClient } from "../../lib/sync/client";
-import { disableLock, isLockEnabled, setLockPassword } from "../../lib/lock";
+import { disableLock, isLockEnabled, lockErrorMessageKey, setLockPassword } from "../../lib/lock";
 import { useCurrencyMutations, useCurrencyRates } from "../../repositories/currencies";
 import { useCategories, useExpenseMutations } from "../../repositories/expenses";
 import { useBackupMutations, useBackups } from "../../repositories/backups";
+import { parseDemoWorkspace, useDemoWorkspaceMutations } from "../../repositories/demo";
 import { invalidateSyncClient, useLastSyncReport, useSyncMutations, useSyncSession } from "../../repositories/sync";
-import { Button, Card, Field, Input, Select, cx } from "../../components/ui";
+import { Button, Card, Field, Input, PageHeader, Select, cx } from "../../components/ui";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
 import { listOpenSyncConflicts, resolveSyncConflict, type SyncConflictResolution } from "../../repositories/syncConflicts";
 import { loadReleaseInfo } from "../../lib/release";
+import {
+  SETTINGS_SECTIONS,
+  canOpenSettingsSection,
+  firstSettingsSectionForRole,
+  settingsNavigationGroups,
+  settingsSectionPath,
+} from "../../app/navigation";
+import { AuditSection } from "../audit/AuditPage";
+import { ImportWizard } from "../reports/ImportWizard";
+import { PaymentIntegrityView } from "../reports/PaymentIntegrityView";
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -33,14 +45,86 @@ export function SettingsPage() {
   const [newCategory, setNewCategory] = useState({ nameAr: "", nameEn: "" });
   const [confirmRestore, setConfirmRestore] = useState(false);
   const role = useRole();
-  // engineers: personal preferences only
-  const full = role !== "ENGINEER";
+  const params = useParams<{ section: string }>();
+  const groups = settingsNavigationGroups(role);
+  const section = params.section ?? firstSettingsSectionForRole(role);
+
+  // The URL is authoritative, so it is checked against the same role list that
+  // builds the menu: a hand-typed or bookmarked section an engineer may not
+  // open lands on their first permitted section instead of rendering it.
+  const fallback = settingsSectionPath(firstSettingsSectionForRole(role));
+  if (!params.section) return <Navigate to={fallback} replace />;
+  if (!canOpenSettingsSection(role, section)) return <Navigate to={fallback} replace />;
+
+  const activeLabel = SETTINGS_SECTIONS.find((item) => item.id === section)?.labelKey;
 
   return (
-    <div className="max-w-4xl">
-      <h1 className="mb-4 text-xl font-semibold">{t("settings.title")}</h1>
+    // A vertical sidebar beside the content: the only Settings navigation in
+    // the app, and the one place its sections are listed. It stacks above the
+    // content on narrow viewports so 1366×768 keeps both usable.
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <nav
+        aria-label={t("settings.sectionNavigation")}
+        className="w-full shrink-0 lg:sticky lg:top-4 lg:w-56"
+      >
+        <ul className="space-y-4">
+          {groups.map((group) => (
+            <li key={group.id}>
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                {t(group.labelKey)}
+              </p>
+              <ul className="space-y-0.5">
+                {group.sections.map((item) => (
+                  <li key={item.id}>
+                    <NavLink
+                      to={settingsSectionPath(item.id)}
+                      className={({ isActive }) => cx(
+                        "block rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
+                        isActive
+                          ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
+                      )}
+                    >
+                      {t(item.labelKey)}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </nav>
 
-      <div className="space-y-4">
+      <div className="min-w-0 flex-1">
+      <PageHeader title={activeLabel ? t(activeLabel) : t("settings.title")} />
+
+      <div className="max-w-4xl space-y-4">
+        {section === "company" && (
+          <Card className="p-5">
+            <SectionTitle icon={<Building2 size={16} />} title={t("settings.companyProfile")} />
+            <div className="grid grid-cols-3 gap-4">
+              {([
+                ["companyName", "settings.companyName"],
+                ["companyAddress", "settings.companyAddress"],
+                ["companyPhone", "settings.companyPhone"],
+              ] as const).map(([key, labelKey]) => (
+                <Field key={key} label={t(labelKey)}>
+                  <Input
+                    defaultValue={settings?.[key] ?? ""}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value !== settings?.[key]) updateSetting.mutate({ key, value });
+                    }}
+                  />
+                </Field>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-400">{t("settings.companyProfileNote")}</p>
+          </Card>
+        )}
+
+        {section === "general" && (
         <Card className="p-5">
           <SectionTitle icon={<Languages size={16} />} title={t("settings.general")} />
           <div className="grid grid-cols-3 gap-4">
@@ -62,6 +146,15 @@ export function SettingsPage() {
                 <option value="dark">{t("settings.dark")}</option>
               </Select>
             </Field>
+          </div>
+        </Card>
+        )}
+
+        {section === "numbering" && (
+        <Card className="p-5">
+          <SectionTitle icon={<Hash size={16} />} title={t("settings.numberingTitle")} />
+          <p className="mb-3 text-xs text-slate-400">{t("settings.numberingNote")}</p>
+          <div className="grid grid-cols-3 gap-4">
             <Field label={t("settings.projectCodePrefix")}>
               <Input
                 defaultValue={settings?.projectCodePrefix ?? "PRJ"}
@@ -85,20 +178,28 @@ export function SettingsPage() {
                 />
               </Field>
             ))}
-            <Field label={t("settings.baseCurrency")}>
-              <Select
-                value={settings?.baseCurrency ?? "EGP"}
-                onChange={(e) => updateSetting.mutate({ key: "baseCurrency", value: e.target.value as "EGP" | "SAR" | "USD" })}
-              >
-                <option value="EGP">EGP</option>
-                <option value="SAR">SAR</option>
-                <option value="USD">USD</option>
-              </Select>
-              <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
-            </Field>
           </div>
         </Card>
+        )}
 
+        {section === "finance" && (
+        <Card className="p-5">
+          <SectionTitle icon={<Coins size={16} />} title={t("settings.baseCurrency")} />
+          <Field label={t("settings.baseCurrency")} className="max-w-xs">
+            <Select
+              value={settings?.baseCurrency ?? "EGP"}
+              onChange={(e) => updateSetting.mutate({ key: "baseCurrency", value: e.target.value as "EGP" | "SAR" | "USD" })}
+            >
+              <option value="EGP">EGP</option>
+              <option value="SAR">SAR</option>
+              <option value="USD">USD</option>
+            </Select>
+            <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
+          </Field>
+        </Card>
+        )}
+
+        {section === "advanced" && (
         <Card className="p-5">
           <SectionTitle icon={<Info size={16} />} title={t("settings.releaseInfo")} />
           <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
@@ -112,8 +213,9 @@ export function SettingsPage() {
             </p>
           )}
         </Card>
+        )}
 
-        {full && (
+        {section === "finance" && (
         <Card className="p-5">
           <SectionTitle icon={<Coins size={16} />} title={t("settings.currencies")} />
           <div className="mb-4 flex items-center gap-3">
@@ -157,7 +259,7 @@ export function SettingsPage() {
         </Card>
         )}
 
-        {full && (
+        {section === "categories" && (
         <Card className="p-5">
           <SectionTitle icon={<Tags size={16} />} title={t("settings.expenseCategories")} />
           <div className="space-y-2">
@@ -222,13 +324,17 @@ export function SettingsPage() {
 
         )}
 
-        <SecuritySection />
+        {section === "security" && <SecuritySection />}
 
-        <SyncSection />
+        {section === "sync" && <SyncSection />}
 
-        {role === "ADMIN" && <UsersSection />}
+        {section === "data-tools" && <DataToolsSection />}
 
-        {full && (
+        {section === "audit" && <AuditSection />}
+
+        {section === "security" && role === "ADMIN" && <UsersSection />}
+
+        {section === "backup" && (
         <Card className="p-5">
           <SectionTitle icon={<DatabaseBackup size={16} />} title={t("settings.backup")} />
           <p className="mb-3 text-xs text-slate-400">{t("settings.dailyBackupNote")}</p>
@@ -292,6 +398,32 @@ export function SettingsPage() {
       )}
       {/* keep i18n import referenced for language-sensitive rerender */}
       <span className="hidden">{i18n.language}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Data Tools: one-off technical operations.
+ *
+ * These were tabs in Reports, which put a bulk importer and a legacy-payment
+ * review beside the numbers the office reads every week. They are occasional
+ * administration, so they live in Settings and stay out of the reporting
+ * surface. The demo workspace belongs here for the same reason.
+ */
+function DataToolsSection() {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-4">
+      <Card className="p-5">
+        <SectionTitle icon={<Wrench size={16} />} title={t("importer.title")} />
+        <ImportWizard />
+      </Card>
+      <Card className="p-5">
+        <SectionTitle icon={<Wrench size={16} />} title={t("reports.paymentIntegrity")} />
+        <PaymentIntegrityView />
+      </Card>
+      <DemoDataSection />
     </div>
   );
 }
@@ -340,8 +472,8 @@ function SecuritySection() {
         setMessage({ ok: true, text: t("lock.saved") });
       }
       reset();
-    } catch {
-      setMessage({ ok: false, text: t("lock.wrong") });
+    } catch (error) {
+      setMessage({ ok: false, text: t(`lock.${lockErrorMessageKey(error)}`) });
     }
   }
 
@@ -409,7 +541,12 @@ function UsersSection() {
         .eq("user_id", v.userId);
       if (uError) throw new Error(uError.message);
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["user-roles"] }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["user-roles"] }),
+        qc.invalidateQueries({ queryKey: ["role"] }),
+      ]);
+    },
   });
 
   return (
@@ -440,6 +577,51 @@ function UsersSection() {
 }
 
 /** Phase 3: Supabase cloud sync — connection, sign-in, manual & auto sync. */
+/**
+ * Demo data outlives the onboarding panel: once it exists the workspace has
+ * financial activity and the dashboard leaves its empty state, so removal has
+ * to live somewhere permanent or the sample records could never be withdrawn.
+ */
+function DemoDataSection() {
+  const { t } = useTranslation();
+  const { data: settings } = useSettings();
+  const demo = useDemoWorkspaceMutations();
+  const [confirming, setConfirming] = useState(false);
+  if (!parseDemoWorkspace(settings?.demoWorkspace ?? "")) return null;
+  return (
+    <Card className="p-5">
+      <SectionTitle icon={<FlaskConical size={16} />} title={t("settings.demoData")} />
+      <p className="mb-3 text-xs text-slate-400">{t("settings.demoDataNote")}</p>
+      <Button
+        className="!text-red-600"
+        disabled={demo.remove.isPending}
+        onClick={() => setConfirming(true)}
+      >
+        <Trash2 size={14} aria-hidden="true" />
+        {t("onboarding.removeDemo")}
+      </Button>
+      {demo.remove.error && (
+        <p className="mt-3 text-xs text-red-600" dir="ltr">
+          {demo.remove.error instanceof Error ? demo.remove.error.message : String(demo.remove.error)}
+        </p>
+      )}
+      {/* Demo records are ordinary rows the office may have edited into real
+          work, so withdrawing them is confirmed like every other destructive
+          action rather than firing on a single click. */}
+      {confirming && (
+        <ConfirmDialog
+          title={t("settings.demoData")}
+          message={t("settings.demoDataConfirm")}
+          confirmLabel={t("common.confirm")}
+          busy={demo.remove.isPending}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => demo.remove.mutate(undefined, { onSettled: () => setConfirming(false) })}
+        />
+      )}
+    </Card>
+  );
+}
+
 function SyncSection() {
   const { t } = useTranslation();
   const role = useRole();

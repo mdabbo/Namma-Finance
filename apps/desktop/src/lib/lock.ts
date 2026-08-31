@@ -20,3 +20,17 @@ export async function verifyLockPassword(password: string): Promise<boolean> {
 export async function disableLock(password: string): Promise<void> {
   await invoke("disable_app_lock", { password });
 }
+
+export type LockErrorMessageKey = "wrong" | "mismatch" | "retry" | "databaseBusy" | "failed";
+
+/** Keep credential failures distinct from storage/runtime failures. */
+export function lockErrorMessageKey(error: unknown): LockErrorMessageKey {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/LOCK_PASSWORD_INVALID|CURRENT_PASSWORD_REQUIRED/i.test(message)) return "wrong";
+  if (/LOCK_PASSWORD_LENGTH_INVALID/i.test(message)) return "mismatch";
+  if (/LOCK_RETRY_AFTER/i.test(message)) return "retry";
+  if (/database is locked|\bcode:\s*5\b|APP_DATABASE_UNAVAILABLE|RUNTIME_DATABASE_UNAVAILABLE/i.test(message)) {
+    return "databaseBusy";
+  }
+  return "failed";
+}

@@ -1,38 +1,57 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
-import { personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
+import { currencyInfo, personSchema, type Person, type PersonInput, CURRENCIES } from "@mep/core";
 import { usePeople, usePeopleMutations, type PersonListItem } from "../../repositories/people";
+import { useWorkspaceFinancials } from "../../repositories/financials";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { Badge, Button, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { Badge, Button, Field, Input, Modal, PageHeader, Select, Textarea } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
-import { useFormat } from "../../lib/format";
+import { minorToInput, useFormat } from "../../lib/format";
+import type { SavedViewFilters } from "../../lib/savedViews";
+
+const PERSON_TYPES: readonly string[] = ["EMPLOYEE", "FREELANCER"];
 
 export function PeoplePage() {
   const { t } = useTranslation();
   const fmt = useFormat();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionView = searchParams.get("view");
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: people = [], isLoading } = usePeople(includeArchived);
+  const { data: financials } = useWorkspaceFinancials();
   const mutations = usePeopleMutations();
 
   const [typeFilter, setTypeFilter] = useState("");
   const [editing, setEditing] = useState<Person | "new" | null>(null);
   const [deleting, setDeleting] = useState<PersonListItem | null>(null);
 
-  const filtered = people.filter((p) => !typeFilter || p.type === typeFilter);
+  const duePersonIds = new Set(
+    financials?.teamPayables.map((item) => item.personId) ?? [],
+  );
+  const filtered = people.filter(
+    (person) =>
+      (!typeFilter || person.type === typeFilter) &&
+      (attentionView !== "payments-due" || duePersonIds.has(person.id)),
+  );
 
   const columns: Column<PersonListItem>[] = [
     { key: "name", header: t("common.name"), value: (p) => p.name, render: (p) => <span className="font-medium">{p.name}</span> },
     { key: "type", header: t("payments.kind"), value: (p) => p.type, render: (p) => <Badge value={p.type === "EMPLOYEE" ? "APPROVED" : "SUBMITTED"} label={t(`personType.${p.type}`)} /> },
     { key: "specialization", header: t("people.specialization"), value: (p) => p.specialization },
     { key: "phone", header: t("common.phone"), value: (p) => p.phone, render: (p) => <span className="tnum">{p.phone}</span> },
+    // Rates are held in each person's own currency, so the currency travels
+    // with them in the export instead of being implied.
+    { key: "currency", header: t("common.currency"), value: (p) => p.currency, width: "90px" },
     {
       key: "monthly",
       header: t("people.monthlyRate"),
       value: (p) => p.monthlyRateMinor ?? 0,
+      exportValue: (p) =>
+        p.monthlyRateMinor == null ? "" : minorToInput(p.monthlyRateMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum">{p.monthlyRateMinor != null ? fmt.money(p.monthlyRateMinor, p.currency, { compactFraction: true }) : "—"}</span>,
       align: "end",
     },
@@ -40,6 +59,8 @@ export function PeoplePage() {
       key: "hourly",
       header: t("people.hourlyRate"),
       value: (p) => p.hourlyRateMinor ?? 0,
+      exportValue: (p) =>
+        p.hourlyRateMinor == null ? "" : minorToInput(p.hourlyRateMinor, currencyInfo(p.currency).exponent),
       render: (p) => <span className="tnum">{p.hourlyRateMinor != null ? fmt.money(p.hourlyRateMinor, p.currency) : "—"}</span>,
       align: "end",
     },
@@ -57,7 +78,7 @@ export function PeoplePage() {
       render: (p) => p.archivedAt ? <Badge value="CANCELLED" label={t("lifecycle.archived")} /> : (
         <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" onClick={() => setEditing(p)}>{t("common.edit")}</Button>
-          <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(p)}>{t("common.delete")}</Button>
+          <Button variant="ghost" onClick={() => setDeleting(p)}>{t("lifecycle.archivePerson")}</Button>
         </div>
       ),
     },
@@ -65,20 +86,46 @@ export function PeoplePage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t("people.title")}</h1>
-        <Button variant="primary" onClick={() => setEditing("new")}>
-          <Plus size={16} /> {t("people.newPerson")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("people.title")}
+        actions={
+          <Button variant="primary" onClick={() => setEditing("new")}>
+            <Plus size={16} aria-hidden="true" /> {t("people.newPerson")}
+          </Button>
+        }
+      />
 
       <DataTable
         rows={filtered}
         columns={columns}
         rowKey={(p) => p.id}
-        onRowClick={(p) => { if (!p.archivedAt) navigate(`/people/${p.id}`); }}
-        emptyMessage={isLoading ? t("common.loading") : t("common.empty")}
+        onRowClick={(p) => { if (!p.archivedAt) navigate(`/team/people/${p.id}`); }}
+        loading={isLoading || (attentionView === "payments-due" && !financials)}
+        emptyMessage={t("common.empty")}
         initialSort={{ key: "name", dir: "asc" }}
+        exportName="people"
+        viewKey="people"
+        filters={{
+          type: typeFilter,
+          archived: includeArchived ? "1" : "",
+          view: attentionView ?? "",
+        }}
+        onApplyFilters={(next: SavedViewFilters) => {
+          const type = next.type ?? "";
+          setTypeFilter(PERSON_TYPES.includes(type) ? type : "");
+          setIncludeArchived(next.archived === "1");
+          const params = new URLSearchParams(searchParams);
+          if (next.view === "payments-due") params.set("view", next.view);
+          else params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
+        onResetFilters={() => {
+          setTypeFilter("");
+          setIncludeArchived(false);
+          const params = new URLSearchParams(searchParams);
+          params.delete("view");
+          setSearchParams(params, { replace: true });
+        }}
         toolbar={<>
           <Select className="!w-40" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
             <option value="">{t("common.all")}</option>
@@ -89,6 +136,19 @@ export function PeoplePage() {
             <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
             {t("lifecycle.includeArchived")}
           </label>
+          {attentionView === "payments-due" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams);
+                next.delete("view");
+                setSearchParams(next);
+              }}
+            >
+              {t("dashboard.filtered.team")} · {t("common.clearFilters")}
+            </Button>
+          )}
         </>}
       />
 
@@ -106,11 +166,14 @@ export function PeoplePage() {
 
       {deleting && (
         <ConfirmDialog
-          message={`${t("common.confirmDeleteMessage")} ${deleting.name}`}
+          title={t("lifecycle.archivePerson")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchivePerson")} (${deleting.name})`}
           details={[t("people.assignments"), t("people.payments")]}
           busy={mutations.remove.isPending}
           onCancel={() => setDeleting(null)}
-          onConfirm={() => mutations.remove.mutate(deleting.id, { onSuccess: () => setDeleting(null) })}
+          onConfirm={() => mutations.remove.mutate({ id: deleting.id }, { onSuccess: () => setDeleting(null) })}
         />
       )}
     </div>
