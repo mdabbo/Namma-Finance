@@ -32,7 +32,9 @@ This build is **Beta**. It is not represented as production-ready.
   app-lock modules bridged, because a browser cannot reach Tauri's Rust layer.
   Application-lock password verification (Argon2, attempt throttling) is
   therefore covered by the Rust suite and unit tests, not by the UI suite.
-- No automated test drives the packaged Tauri binary itself.
+- **No automated test drives the packaged Tauri binary itself.** The installer
+  is verified by inspection and manual launch; no test in this repository
+  asserts the behaviour of the built `.exe`.
 - The project-activity Playwright check skips when the demo workspace produces
   no activity rows, so it is weaker evidence than the other UI tests.
 - Arabic CSV output carries a UTF-8 BOM and is asserted by unit test; it has not
@@ -40,13 +42,22 @@ This build is **Beta**. It is not represented as production-ready.
 
 ## Financial model
 
-- A cancelled assignment's earned figure is derived in TypeScript and frozen
-  under the application-wide financial lock, not inside a Rust transaction. The
-  lock serialises it against every other financial mutation and migration 0005's
-  predecessor makes the stored result immutable, but a concurrent writer outside
-  this process (a sync pull) is not serialised by it.
-- The application-wide lock is process-local. Backend row-level security remains
-  the authority for anything reaching the cloud.
+- An archived contract or project is **read-only** for certificates: create,
+  edit, transition and void are all refused with
+  `ARCHIVED_CONTRACT_IS_READ_ONLY`. Correcting a certificate under an archived
+  contract means restoring the contract first, which is itself audited.
+
+- The application-wide financial lock is process-local. Backend row-level
+  security remains the authority for anything reaching the cloud. The figures
+  that must not be computed outside a transaction no longer rely on it: a
+  cancelled assignment's earned figure is derived from stored evidence **inside
+  the Rust transaction that freezes it** (`cancel_assignment_atomic`), and the
+  certificate lifecycle commands do the same, so a concurrent writer cannot
+  separate the read that decides a figure from the write that stores it.
+- Rows arriving through `execute_sync_mutation_atomic` are validated for
+  allocation integrity but do not pass the certificate lifecycle gate, so a peer
+  running an older build could push a financial change to a submitted
+  certificate.
 - Consolidated columns convert at the reporting currency's current rate, so a
   consolidated total is a today-value view, not a historical restatement.
   Per-record columns keep their own historical rate.

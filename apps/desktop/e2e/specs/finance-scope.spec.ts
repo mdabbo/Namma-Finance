@@ -41,6 +41,27 @@ async function projectWith(table: "payment_certificates" | "payments"): Promise<
 
 const projectCell = (page: Page) => page.locator("tbody tr td:nth-child(2)");
 
+/**
+ * The row count once the list has stopped changing.
+ *
+ * A bare `.count()` races the render. Under parallel load the demo
+ * workspace's rows can still be arriving when the baseline is taken, so it
+ * comes back short and every later `toHaveCount(baseline)` then fails against
+ * the settled list — the list is correct and the baseline is not. Waiting for
+ * two equal consecutive reads makes the baseline the settled count.
+ */
+async function stableRowCount(page: Page): Promise<number> {
+  const rows = page.locator("tbody tr");
+  let previous = -1;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const current = await rows.count();
+    if (current === previous) return current;
+    previous = current;
+    await page.waitForTimeout(100);
+  }
+  return previous;
+}
+
 test("saves a project-scoped Payments view, restores it, and keeps projectId in the URL", async ({ page }) => {
   await loadDemo(page);
   const project = await projectWith("payments");
@@ -48,7 +69,7 @@ test("saves a project-scoped Payments view, restores it, and keeps projectId in 
   // (1) Save a Payments view scoped to a project.
   await page.goto(`/#/finance/payments?projectId=${project.id}`);
   await expect(page.getByRole("button", { name: "Save view" })).toBeVisible();
-  const scopedRows = await page.locator("tbody tr").count();
+  const scopedRows = await stableRowCount(page);
   expect(scopedRows).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Save view" }).click();
@@ -59,7 +80,7 @@ test("saves a project-scoped Payments view, restores it, and keeps projectId in 
   // (2) Change the project scope away from the saved one.
   await page.goto("/#/finance/payments");
   await expect(page.getByTestId("active-view-state")).toHaveText("Changed since saved");
-  const unscopedRows = await page.locator("tbody tr").count();
+  const unscopedRows = await stableRowCount(page);
   expect(unscopedRows).toBeGreaterThanOrEqual(scopedRows);
 
   // …then restore the view.
@@ -84,7 +105,7 @@ test("restores a project-scoped Certificates view onto projectId", async ({ page
   const project = await projectWith("payment_certificates");
 
   await page.goto(`/#/finance/certificates?projectId=${project.id}`);
-  const scopedRows = await page.locator("tbody tr").count();
+  const scopedRows = await stableRowCount(page);
   expect(scopedRows).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Save view" }).click();
@@ -108,7 +129,7 @@ test("restores a project-scoped Receivables view onto projectId", async ({ page 
 
   await page.goto(`/#/finance/receivables?projectId=${project.id}`);
   await expect(page.getByRole("button", { name: "Save view" })).toBeVisible();
-  const scopedRows = await page.locator("tbody tr").count();
+  const scopedRows = await stableRowCount(page);
 
   await page.getByRole("button", { name: "Save view" }).click();
   await page.getByLabel("View name").fill("Scoped receivables");
@@ -144,7 +165,7 @@ test("resetting filters removes projectId from the URL", async ({ page }) => {
 test("a corrupt projectId leaves the page usable and unfiltered", async ({ page }) => {
   await loadDemo(page);
   await page.goto("/#/finance/payments");
-  const allRows = await page.locator("tbody tr").count();
+  const allRows = await stableRowCount(page);
   expect(allRows).toBeGreaterThan(0);
 
   for (const corrupt of ["abc", "-1", "0", "9999999999999999999", "1;DROP TABLE payments"]) {

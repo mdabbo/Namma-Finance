@@ -2,7 +2,7 @@
 
 All notable changes to NAMAA Finance are documented here. Versions follow Semantic Versioning.
 
-## [0.7.0] - 2026-07-29
+## [0.7.0] - 2026-08-31
 
 Interface redesign, development-database rebase, and post-redesign audit
 remediation. The migration chain that builds the schema was replaced and then
@@ -38,7 +38,7 @@ deleted and recreated** — see below.
 - **Demo workspace**: optional, clearly marked sample data created through the
   real repositories — so numbering, audit evidence, and payment-driven
   certificate statuses are genuine — removable from Settings.
-- **Playwright UI suite**: 99 tests across 1366×768, 1440×900, and 1920×1080
+- **Playwright UI suite**: 148 tests across 1366×768, 1440×900, and 1920×1080
   covering the full client-to-payment cycle, expenses, team, time, navigation,
   language and theme switching, onboarding, saved views and CSV export,
   project-workspace routing, and eight visual regression states. The suite runs
@@ -218,8 +218,9 @@ deleted and recreated** — see below.
 - **Explicit assignment lifecycle** (ACTIVE / COMPLETED / CANCELLED) separate
   from archiving, which is visibility only. Cancelling drops the unearned
   remainder of the commitment while preserving earned and paid history. The
-  frozen earned figure is derived under the global financial lock and is
-  immutable once written, so it cannot be rewritten without evidence.
+  frozen earned figure is derived from stored evidence inside the Rust
+  transaction that writes it, and is immutable once written, so it cannot be
+  rewritten without evidence.
 - **Accurate lifecycle wording.** The interface no longer says "Delete" for
   operations that archive or void — the schema forbids deleting any primary
   record. Each dialog states the real effect, and payment, expense and
@@ -236,6 +237,62 @@ deleted and recreated** — see below.
   section at a time with role access enforced per section.
 - Money the financial read model has not produced yet is reported as unknown
   rather than as zero, on screen and in CSV exports.
+
+#### Release hardening
+
+Six milestones ran after the redesign, each followed by an independent audit
+pass whose confirmed defects were fixed with regression coverage before the
+next milestone began.
+
+- **Certificate lifecycle and reconciliation are atomic.** Creating, editing,
+  transitioning and voiding a certificate are Rust-owned transactions that
+  reserve the sequence, bind the applicable approved contract revision, assert
+  contract-wide allocation integrity and reconcile the whole contract before
+  commit. Advance recovery is cumulative, so any one certificate's change can
+  shift a later certificate's payable; reconciling only the edited row left
+  statuses that stored evidence did not support. Financial terms are frozen once
+  a certificate leaves DRAFT, PAID certificates are immutable, and PAID is
+  reachable only through payment evidence — never by assertion.
+- **The schema-27 audit migration no longer aborts.** It carried an
+  `UPDATE audit_logs` that the append-only trigger refused, so the migration
+  failed and left `user_version` pinned at 26 — the database neither upgraded
+  nor cleanly rejected. The migration now stamps `audit_context` and the
+  insert trigger only, touching no historical row, and a schema-26 database
+  holding finalized 0.6.x-stamped rows upgrades cleanly.
+- **Person Detail, team statements and person payments use the audited
+  assignment lifecycle.** A cancelled assignment reports its frozen earned
+  figure rather than a live recomputation, an archived assignment cannot be paid
+  further, and the payable ceiling is derived in Rust inside the transaction so
+  a payment cannot exceed what evidence supports.
+- **Finance saved views restore project scope.** `parseFinanceScope` reads
+  `?projectId=`, but saved views wrote and cleared `?project=`, a key nothing
+  read — so restoring a project-scoped view reported "View applied" over an
+  unscoped list, and "Reset filters" removed a parameter that had never been set
+  while leaving the real scope in the URL. `projectId` is now the single
+  canonical parameter, with legacy bookmarks rewritten once on arrival.
+- **Settings navigation is no longer duplicated.** Its sections were rendered
+  twice — by the global secondary navigation and again inside the page — putting
+  two consecutive rows of the same eleven destinations on screen. Settings now
+  has one navigator: a grouped sidebar, with menu visibility and route
+  authorization sharing a single source of truth, and Audit embedded as a
+  section rather than routed standalone.
+- **A certificate cannot be bound to another contract's terms.** The edit path
+  located the row by id but bound the revision snapshot with the caller's
+  contract id, so a caller could graft a foreign contract's value, VAT,
+  retention, withholding, advance, payment terms, currency and historical FX
+  rate onto a certificate that stayed filed under its own contract. The stored
+  contract is now the only truth. Separately, every certificate read path
+  excludes archived contracts and projects but no write path did, so a
+  certificate written against an archived contract was invisible to listing,
+  reconciliation and the allocation-integrity check; archived is now read-only
+  for certificates, as it already was for payments.
+- **Release metadata is checked against the migrations.** `version:check` synced
+  the Rust schema constant from the release manifest but never looked at the
+  migration that stamps `PRAGMA user_version`, so bumping the schema version
+  without adding the matching migration produced a green gate on a build that
+  would refuse to open every database. A release-script test now asserts the
+  manifest, all four package versions, Tauri, Cargo, the generated constants,
+  the Rust constant and the newest migration all agree.
 
 ### Fixed
 

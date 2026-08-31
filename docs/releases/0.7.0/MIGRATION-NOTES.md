@@ -35,10 +35,14 @@ loudly rather than applying a baseline over populated tables.
 Delete or move `%APPDATA%\com.mepfinance.app\mep-finance.db` and start the app;
 a clean database is created automatically.
 
-Backups taken before this release report `schema_version` 24 exactly like a
-rebased database, so the version number cannot separate them. Restore validation
-therefore checks the recorded migration lineage and refuses a pre-rebase backup
-with `BACKUP_PREDATES_DATABASE_REBASE` **before any file is touched**. To read
+A pre-rebase backup reports `schema_version` 24 — the same identity the
+baseline recreates — so the version number alone cannot separate a pre-rebase
+database from a freshly rebased one before the forward migrations run. (A
+current 0.7.0 database reports 27, but a backup is restored *before* anything
+carries it forward, so the number is not a safe discriminator.) Restore
+validation therefore checks the recorded migration lineage and refuses a
+pre-rebase backup with `BACKUP_PREDATES_DATABASE_REBASE` **before any file is
+touched**. To read
 such a backup, check out `pre-db-rebase-v0.6.7` and run that build.
 
 The complete pre-rebase source and all 24 migration files are preserved at the

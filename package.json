@@ -4,7 +4,7 @@
   "version": "0.7.0",
   "description": "Project Financial Management System for an MEP engineering design office",
   "scripts": {
-    "test": "node --test scripts/text-eol.test.mjs && pnpm -r test",
+    "test": "node --test scripts/text-eol.test.mjs scripts/sync-version.test.mjs && pnpm -r test",
     "test:coverage": "pnpm --filter @mep/core test:coverage",
     "typecheck": "pnpm -r typecheck",
     "version:sync": "node scripts/sync-version.mjs",
