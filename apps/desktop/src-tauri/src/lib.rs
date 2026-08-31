@@ -326,6 +326,47 @@ struct PersonPaymentCommandInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SyncedAssignmentInput {
+    local_id: Option<i64>,
+    sync_uuid: String,
+    updated_at: String,
+    person_id: i64,
+    project_id: i64,
+    agreed_minor: i64,
+    currency: String,
+    fx_rate_micro: i64,
+    scope: Option<String>,
+    progress_note: Option<String>,
+    created_at: Option<String>,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    lifecycle_status: String,
+    completed_at: Option<String>,
+    cancelled_at: Option<String>,
+    cancellation_reason: Option<String>,
+    earned_minor_at_cancellation: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncedPersonPaymentInput {
+    local_id: Option<i64>,
+    sync_uuid: String,
+    updated_at: String,
+    assignment_id: i64,
+    date: String,
+    amount_minor: i64,
+    note: Option<String>,
+    created_at: Option<String>,
+    voided_at: Option<String>,
+    voided_by: Option<String>,
+    void_reason: Option<String>,
+    reversal_of_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MilestoneDraftCommandInput {
     milestone_index: usize,
     number: String,
@@ -2376,6 +2417,298 @@ async fn create_person_payment_atomic(
     create_person_payment_transaction(pool, input).await
 }
 
+fn validate_synced_assignment_input(input: &SyncedAssignmentInput) -> Result<(), String> {
+    if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
+        return Err("SYNC_ASSIGNMENT_IDENTITY_REQUIRED".into());
+    }
+    if input.agreed_minor < 0 || input.currency.trim().is_empty() || input.fx_rate_micro <= 0 {
+        return Err("INVALID_ASSIGNMENT_INPUT".into());
+    }
+    match input.lifecycle_status.as_str() {
+        "ACTIVE" => {
+            if input.completed_at.is_some()
+                || input.cancelled_at.is_some()
+                || input.cancellation_reason.is_some()
+                || input.earned_minor_at_cancellation.is_some()
+            {
+                return Err("ACTIVE_ASSIGNMENT_HAS_LIFECYCLE_EVIDENCE".into());
+            }
+        }
+        "COMPLETED" => {
+            if input.completed_at.is_none() {
+                return Err("COMPLETED_ASSIGNMENT_REQUIRES_DATE".into());
+            }
+            if input.cancelled_at.is_some()
+                || input.cancellation_reason.is_some()
+                || input.earned_minor_at_cancellation.is_some()
+            {
+                return Err("COMPLETED_ASSIGNMENT_HAS_CANCELLATION_EVIDENCE".into());
+            }
+        }
+        "CANCELLED" => {
+            if input.cancelled_at.is_none()
+                || input
+                    .cancellation_reason
+                    .as_deref()
+                    .is_none_or(|reason| reason.trim().is_empty())
+                || input.earned_minor_at_cancellation.is_none()
+            {
+                return Err("CANCELLED_ASSIGNMENT_REQUIRES_EVIDENCE".into());
+            }
+        }
+        _ => return Err("INVALID_ASSIGNMENT_LIFECYCLE".into()),
+    }
+    Ok(())
+}
+
+async fn assignment_released_minor_as_of(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    project_id: i64,
+    agreed_minor: i64,
+    cutoff_date: &str,
+) -> Result<i64, String> {
+    let contracts = sqlx::query(
+        "SELECT c.id, c.value_minor, c.valuation_mode, c.milestones
+         FROM contracts c JOIN projects p ON p.id=c.project_id
+         WHERE c.project_id=? AND c.archived_at IS NULL AND p.archived_at IS NULL
+         ORDER BY c.id",
+    )
+    .bind(project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut stages: Vec<PayoutStage> = Vec::new();
+    for contract in contracts {
+        let contract_id: i64 = contract.try_get("id").map_err(|e| e.to_string())?;
+        let value_minor: i64 = contract.try_get("value_minor").map_err(|e| e.to_string())?;
+        let valuation_mode: String = contract
+            .try_get("valuation_mode")
+            .map_err(|e| e.to_string())?;
+        let milestones_json: Option<String> =
+            contract.try_get("milestones").map_err(|e| e.to_string())?;
+        let payables = load_contract_payables(tx, contract_id).await?;
+        let mut paid_by_certificate = std::collections::HashMap::new();
+        let rows = sqlx::query(
+            "SELECT a.certificate_id, COALESCE(SUM(a.amount_minor),0) AS paid
+             FROM payment_certificate_allocations a
+             JOIN payments p ON p.id=a.payment_id
+             WHERE p.kind='CERTIFICATE' AND p.deleted_at IS NULL AND p.voided_at IS NULL
+               AND p.date <= ?
+             GROUP BY a.certificate_id",
+        )
+        .bind(cutoff_date)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        for row in rows {
+            paid_by_certificate.insert(
+                row.try_get::<i64, _>("certificate_id")
+                    .map_err(|e| e.to_string())?,
+                row.try_get::<i64, _>("paid").map_err(|e| e.to_string())?,
+            );
+        }
+        let status_by_id: std::collections::HashMap<i64, String> = payables
+            .iter()
+            .map(|payable| {
+                let paid = paid_by_certificate.get(&payable.id).copied().unwrap_or(0);
+                let status = if paid >= payable.net_payable_minor.max(0) {
+                    "PAID"
+                } else {
+                    "APPROVED"
+                };
+                (payable.id, status.to_string())
+            })
+            .collect();
+
+        let milestones = if valuation_mode == "MILESTONES" {
+            parse_milestones(milestones_json.as_deref())?
+        } else {
+            Vec::new()
+        };
+
+        if !milestones.is_empty() {
+            let percents: Vec<i64> = milestones.iter().map(|(percent, _)| *percent).collect();
+            let amounts = milestone_amounts(value_minor, &percents)?;
+            for (index, (_, certificate_id)) in milestones.iter().enumerate() {
+                stages.push(PayoutStage {
+                    weight_minor: amounts.get(index).copied().unwrap_or(0),
+                    certificate_status: certificate_id
+                        .and_then(|id| status_by_id.get(&id).cloned()),
+                });
+            }
+        } else {
+            let mut scheduled = 0_i64;
+            for payable in &payables {
+                stages.push(PayoutStage {
+                    weight_minor: payable.certified_base_minor,
+                    certificate_status: status_by_id.get(&payable.id).cloned(),
+                });
+                scheduled = scheduled.saturating_add(payable.certified_base_minor);
+            }
+            if value_minor > scheduled {
+                stages.push(PayoutStage {
+                    weight_minor: value_minor - scheduled,
+                    certificate_status: None,
+                });
+            }
+        }
+    }
+
+    let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
+    let amounts = allocate_largest_remainder(agreed_minor, &weights)?;
+    let mut released = 0_i64;
+    for (index, stage) in stages.iter().enumerate() {
+        if stage.certificate_status.as_deref() == Some("PAID") {
+            released = released.saturating_add(amounts.get(index).copied().unwrap_or(0));
+        }
+    }
+    Ok(released)
+}
+
+async fn apply_synced_assignment_transaction(
+    pool: &sqlx::SqlitePool,
+    input: SyncedAssignmentInput,
+) -> Result<(), String> {
+    validate_synced_assignment_input(&input)?;
+    let mut tx = begin_immediate(pool).await?;
+    let parent = sqlx::query(
+        "SELECT p.archived_at AS project_archived_at, pe.archived_at AS person_archived_at
+         FROM projects p, people pe
+         WHERE p.id=? AND pe.id=?",
+    )
+    .bind(input.project_id)
+    .bind(input.person_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "ASSIGNMENT_PARENT_NOT_FOUND".to_string())?;
+    let project_archived: Option<String> = parent
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
+    if project_archived.is_some() && input.archived_at.is_none() {
+        return Err("PROJECT_ARCHIVED".into());
+    }
+
+    let derived_cancelled_earned = if input.lifecycle_status == "CANCELLED" {
+        let cancelled_at = input.cancelled_at.as_deref().unwrap_or_default();
+        let cutoff = cancelled_at.get(0..10).unwrap_or(cancelled_at);
+        let earned =
+            assignment_released_minor_as_of(&mut tx, input.project_id, input.agreed_minor, cutoff)
+                .await?;
+        if input.earned_minor_at_cancellation != Some(earned) {
+            return Err("SYNC_CANCELLATION_EARNED_MISMATCH".into());
+        }
+        Some(earned)
+    } else {
+        None
+    };
+
+    if let Some(id) = input.local_id {
+        let stored = sqlx::query(
+            "SELECT person_id,project_id,lifecycle_status,cancelled_at,cancellation_reason,
+                    earned_minor_at_cancellation
+             FROM project_assignments WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
+        let stored_person: i64 = stored.try_get("person_id").map_err(|e| e.to_string())?;
+        let stored_project: i64 = stored.try_get("project_id").map_err(|e| e.to_string())?;
+        if stored_person != input.person_id || stored_project != input.project_id {
+            return Err("ASSIGNMENT_PARENT_IMMUTABLE".into());
+        }
+        let stored_lifecycle: String = stored
+            .try_get("lifecycle_status")
+            .map_err(|e| e.to_string())?;
+        if stored_lifecycle == "CANCELLED" {
+            let stored_cancelled_at: Option<String> =
+                stored.try_get("cancelled_at").map_err(|e| e.to_string())?;
+            let stored_reason: Option<String> = stored
+                .try_get("cancellation_reason")
+                .map_err(|e| e.to_string())?;
+            let stored_earned: Option<i64> = stored
+                .try_get("earned_minor_at_cancellation")
+                .map_err(|e| e.to_string())?;
+            if input.lifecycle_status != "CANCELLED"
+                || input.cancelled_at != stored_cancelled_at
+                || input.cancellation_reason != stored_reason
+                || input.earned_minor_at_cancellation != stored_earned
+            {
+                return Err("CANCELLATION_EVIDENCE_IS_FINAL".into());
+            }
+        }
+        sqlx::query(
+            "UPDATE project_assignments SET agreed_minor=?, currency=?, fx_rate_micro=?,
+               scope=?, progress_note=?, archived_at=?, archived_by=?, archive_reason=?,
+               lifecycle_status=?, completed_at=?, cancelled_at=?, cancellation_reason=?,
+               earned_minor_at_cancellation=?, sync_uuid=?, updated_at=?
+             WHERE id=?",
+        )
+        .bind(input.agreed_minor)
+        .bind(&input.currency)
+        .bind(input.fx_rate_micro)
+        .bind(&input.scope)
+        .bind(&input.progress_note)
+        .bind(&input.archived_at)
+        .bind(&input.archived_by)
+        .bind(&input.archive_reason)
+        .bind(&input.lifecycle_status)
+        .bind(&input.completed_at)
+        .bind(&input.cancelled_at)
+        .bind(input.cancellation_reason.as_deref().map(str::trim))
+        .bind(derived_cancelled_earned)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
+        sqlx::query(
+            "INSERT INTO project_assignments (
+               person_id,project_id,agreed_minor,currency,fx_rate_micro,scope,progress_note,
+               created_at,archived_at,archived_by,archive_reason,lifecycle_status,completed_at,
+               cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at
+             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(input.person_id)
+        .bind(input.project_id)
+        .bind(input.agreed_minor)
+        .bind(&input.currency)
+        .bind(input.fx_rate_micro)
+        .bind(&input.scope)
+        .bind(&input.progress_note)
+        .bind(created_at)
+        .bind(&input.archived_at)
+        .bind(&input.archived_by)
+        .bind(&input.archive_reason)
+        .bind(&input.lifecycle_status)
+        .bind(&input.completed_at)
+        .bind(&input.cancelled_at)
+        .bind(input.cancellation_reason.as_deref().map(str::trim))
+        .bind(derived_cancelled_earned)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn apply_synced_assignment_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: SyncedAssignmentInput,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    apply_synced_assignment_transaction(&pool, input).await
+}
+
 /// The payment itself, so the lifecycle and due-limit rules can be asserted
 /// directly by `cargo test` rather than only through the command wrapper.
 async fn create_person_payment_transaction(
@@ -2494,6 +2827,298 @@ async fn create_person_payment_transaction(
         .execute(&mut *tx).await.map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(payment_id)
+}
+
+async fn linked_expense_category_id(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    person_type: &str,
+) -> Result<i64, String> {
+    let category_name = if person_type == "EMPLOYEE" {
+        "Salaries"
+    } else {
+        "Freelancers"
+    };
+    sqlx::query_scalar(
+        "SELECT id FROM expense_categories
+         ORDER BY CASE WHEN name_en=? THEN 0 ELSE 1 END, sort_order, id LIMIT 1",
+    )
+    .bind(category_name)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "no expense category configured".to_string())
+}
+
+async fn assignment_person_payment_due(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    assignment_id: i64,
+    exclude_payment_id: Option<i64>,
+) -> Result<(i64, i64, String, String, String, i64, i64), String> {
+    let context = sqlx::query(
+        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+                a.earned_minor_at_cancellation, a.archived_at, p.archived_at AS project_archived_at,
+                pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
+         FROM project_assignments a
+         JOIN people pe ON pe.id=a.person_id
+         JOIN projects p ON p.id=a.project_id
+         WHERE a.id=?",
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
+    let assignment_archived_at: Option<String> =
+        context.try_get("archived_at").map_err(|e| e.to_string())?;
+    let project_archived_at: Option<String> = context
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
+    let person_archived_at: Option<String> = context
+        .try_get("person_archived_at")
+        .map_err(|e| e.to_string())?;
+    if assignment_archived_at.is_some()
+        || project_archived_at.is_some()
+        || person_archived_at.is_some()
+    {
+        return Err("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID".into());
+    }
+    let project_id: i64 = context.try_get("project_id").map_err(|e| e.to_string())?;
+    let agreed_minor: i64 = context.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let lifecycle: String = context
+        .try_get("lifecycle_status")
+        .map_err(|e| e.to_string())?;
+    let frozen_earned: Option<i64> = context
+        .try_get("earned_minor_at_cancellation")
+        .map_err(|e| e.to_string())?;
+    let earned_minor = if lifecycle == "CANCELLED" {
+        frozen_earned.unwrap_or(0).max(0)
+    } else {
+        assignment_released_minor(tx, project_id, agreed_minor)
+            .await?
+            .max(0)
+    };
+    let paid_minor: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount_minor),0) FROM person_payments
+         WHERE assignment_id=? AND voided_at IS NULL AND (? IS NULL OR id<>?)",
+    )
+    .bind(assignment_id)
+    .bind(exclude_payment_id)
+    .bind(exclude_payment_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    let due_minor = (earned_minor - paid_minor).max(0);
+    Ok((
+        due_minor,
+        project_id,
+        context.try_get("currency").map_err(|e| e.to_string())?,
+        context.try_get("person_name").map_err(|e| e.to_string())?,
+        context.try_get("person_type").map_err(|e| e.to_string())?,
+        context
+            .try_get("fx_rate_micro")
+            .map_err(|e| e.to_string())?,
+        agreed_minor,
+    ))
+}
+
+async fn apply_synced_person_payment_transaction(
+    pool: &sqlx::SqlitePool,
+    input: SyncedPersonPaymentInput,
+) -> Result<i64, String> {
+    if input.amount_minor <= 0 || input.date.trim().is_empty() {
+        return Err("invalid person payment".into());
+    }
+    if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
+        return Err("SYNC_PERSON_PAYMENT_IDENTITY_REQUIRED".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    let existing = if let Some(id) = input.local_id {
+        sqlx::query(
+            "SELECT assignment_id,date,amount_minor,note,voided_at,reversal_of_id
+             FROM person_payments WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    if input.local_id.is_some() && existing.is_none() {
+        return Err("PERSON_PAYMENT_NOT_FOUND".into());
+    }
+
+    let is_voided = input.voided_at.is_some();
+    if let Some(row) = &existing {
+        let stored_assignment: i64 = row.try_get("assignment_id").map_err(|e| e.to_string())?;
+        let stored_date: String = row.try_get("date").map_err(|e| e.to_string())?;
+        let stored_amount: i64 = row.try_get("amount_minor").map_err(|e| e.to_string())?;
+        let stored_note: Option<String> = row.try_get("note").map_err(|e| e.to_string())?;
+        let stored_voided: Option<String> = row.try_get("voided_at").map_err(|e| e.to_string())?;
+        let stored_reversal: Option<i64> =
+            row.try_get("reversal_of_id").map_err(|e| e.to_string())?;
+        if stored_voided.is_some() && !is_voided {
+            return Err("VOIDED_PERSON_PAYMENT_CANNOT_BE_RESTORED_BY_SYNC".into());
+        }
+        if stored_assignment != input.assignment_id
+            || stored_date != input.date
+            || stored_amount != input.amount_minor
+            || stored_note != input.note
+            || stored_reversal != input.reversal_of_id
+        {
+            return Err("PERSON_PAYMENT_IMMUTABLE_BY_SYNC".into());
+        }
+        if is_voided {
+            let reason = input
+                .void_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("Remote person payment voided");
+            let payment_id = input.local_id.unwrap();
+            sqlx::query(
+                "UPDATE person_payments SET voided_at=?, voided_by=?, void_reason=?,
+                   sync_uuid=?, updated_at=?
+                 WHERE id=? AND voided_at IS NULL",
+            )
+            .bind(&input.voided_at)
+            .bind(&input.voided_by)
+            .bind(reason)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(payment_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            sqlx::query(
+                "UPDATE expenses SET voided_at=?, void_reason='Reversed with person payment',
+                   updated_at=?
+                 WHERE person_payment_id=? AND voided_at IS NULL",
+            )
+            .bind(&input.voided_at)
+            .bind(&input.updated_at)
+            .bind(payment_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            sqlx::query("UPDATE person_payments SET sync_uuid=?, updated_at=? WHERE id=?")
+                .bind(&input.sync_uuid)
+                .bind(&input.updated_at)
+                .bind(input.local_id.unwrap())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return Ok(input.local_id.unwrap());
+    }
+
+    if !is_voided {
+        let twin: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND voided_at IS NULL LIMIT 1",
+        )
+        .bind(input.assignment_id)
+        .bind(&input.date)
+        .bind(input.amount_minor)
+        .bind(&input.note)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if twin.is_some() {
+            return Err("DUPLICATE_PERSON_PAYMENT".into());
+        }
+        let (due_minor, project_id, currency, person_name, person_type, fx_rate_micro, _) =
+            assignment_person_payment_due(&mut tx, input.assignment_id, None).await?;
+        if input.amount_minor > due_minor {
+            return Err("PERSON_PAYMENT_EXCEEDS_DUE".into());
+        }
+        let category_id = linked_expense_category_id(&mut tx, &person_type).await?;
+        let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
+        let payment = sqlx::query(
+            "INSERT INTO person_payments
+               (assignment_id,date,amount_minor,note,created_at,reversal_of_id,sync_uuid,updated_at)
+             VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .bind(input.assignment_id)
+        .bind(&input.date)
+        .bind(input.amount_minor)
+        .bind(&input.note)
+        .bind(created_at)
+        .bind(input.reversal_of_id)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        let payment_id = payment.last_insert_rowid();
+        let description = input
+            .note
+            .as_ref()
+            .map(|n| format!("{person_name} — {n}"))
+            .unwrap_or_else(|| person_name.clone());
+        sqlx::query(
+            "INSERT INTO expenses
+               (date,category_id,description,project_id,supplier,amount_minor,currency,
+                fx_rate_micro,person_payment_id,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(&input.date)
+        .bind(category_id)
+        .bind(description)
+        .bind(project_id)
+        .bind(&person_name)
+        .bind(input.amount_minor)
+        .bind(currency)
+        .bind(fx_rate_micro)
+        .bind(payment_id)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        return Ok(payment_id);
+    }
+
+    sqlx::query_scalar::<_, i64>("SELECT id FROM project_assignments WHERE id=?")
+        .bind(input.assignment_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
+    let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
+    let payment = sqlx::query(
+        "INSERT INTO person_payments
+           (assignment_id,date,amount_minor,note,created_at,voided_at,voided_by,void_reason,
+            reversal_of_id,sync_uuid,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(input.assignment_id)
+    .bind(&input.date)
+    .bind(input.amount_minor)
+    .bind(&input.note)
+    .bind(created_at)
+    .bind(&input.voided_at)
+    .bind(&input.voided_by)
+    .bind(&input.void_reason)
+    .bind(input.reversal_of_id)
+    .bind(&input.sync_uuid)
+    .bind(&input.updated_at)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    let payment_id = payment.last_insert_rowid();
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(payment_id)
+}
+
+#[tauri::command]
+async fn apply_synced_person_payment_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: SyncedPersonPaymentInput,
+) -> Result<i64, String> {
+    let pool = application_database_pool(&db_instances).await?;
+    apply_synced_person_payment_transaction(&pool, input).await
 }
 
 /// Largest-remainder allocation, the counterpart of `allocate` in @mep/core.
@@ -6876,6 +7501,169 @@ mod financial_transaction_tests {
     }
 
     #[test]
+    fn synced_assignment_cancellation_derives_and_checks_frozen_earnings() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 100_000).await;
+            let first = add_certificate(&pool, 1, "PC-SYNC-1", 40_000, "APPROVED").await;
+            let second = add_certificate(&pool, 2, "PC-SYNC-2", 60_000, "APPROVED").await;
+            insert_payment_transaction(
+                &pool,
+                cash_payment(1, "SYNC-BEFORE", 40_000),
+                vec![AllocationCommandInput {
+                    certificate_id: first,
+                    amount_minor: 40_000,
+                }],
+            )
+            .await
+            .unwrap();
+            insert_payment_transaction(
+                &pool,
+                PaymentCommandInput {
+                    date: "2026-07-11".into(),
+                    ..cash_payment(1, "SYNC-AFTER", 60_000)
+                },
+                vec![AllocationCommandInput {
+                    certificate_id: second,
+                    amount_minor: 60_000,
+                }],
+            )
+            .await
+            .unwrap();
+
+            apply_synced_assignment_transaction(
+                &pool,
+                SyncedAssignmentInput {
+                    local_id: Some(assignment),
+                    sync_uuid: "44444444-4444-4444-8444-444444444444".into(),
+                    updated_at: "2099-06-01T00:00:00.000Z".into(),
+                    person_id: 1,
+                    project_id: 1,
+                    agreed_minor: 100_000,
+                    currency: "EGP".into(),
+                    fx_rate_micro: 1_000_000,
+                    scope: None,
+                    progress_note: None,
+                    created_at: None,
+                    archived_at: None,
+                    archived_by: None,
+                    archive_reason: None,
+                    lifecycle_status: "CANCELLED".into(),
+                    completed_at: None,
+                    cancelled_at: Some("2026-07-10T00:00:00.000Z".into()),
+                    cancellation_reason: Some("Remote cancellation".into()),
+                    earned_minor_at_cancellation: Some(40_000),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                assignment_row(&pool, assignment).await,
+                ("CANCELLED".into(), Some(40_000))
+            );
+
+            let rejected = apply_synced_assignment_transaction(
+                &pool,
+                SyncedAssignmentInput {
+                    local_id: Some(assignment),
+                    sync_uuid: "44444444-4444-4444-8444-444444444444".into(),
+                    updated_at: "2099-06-02T00:00:00.000Z".into(),
+                    person_id: 1,
+                    project_id: 1,
+                    agreed_minor: 100_000,
+                    currency: "EGP".into(),
+                    fx_rate_micro: 1_000_000,
+                    scope: None,
+                    progress_note: None,
+                    created_at: None,
+                    archived_at: None,
+                    archived_by: None,
+                    archive_reason: None,
+                    lifecycle_status: "CANCELLED".into(),
+                    completed_at: None,
+                    cancelled_at: Some("2026-07-10T00:00:00.000Z".into()),
+                    cancellation_reason: Some("Remote rewrite".into()),
+                    earned_minor_at_cancellation: Some(40_000),
+                },
+            )
+            .await;
+            assert_eq!(rejected.unwrap_err(), "CANCELLATION_EVIDENCE_IS_FINAL");
+        });
+    }
+
+    #[test]
+    fn synced_person_payment_creates_linked_expense_and_respects_due() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let (assignment, _) = payout_fixture(&pool, 40_000).await;
+            let certificate = add_certificate(&pool, 1, "PC-TEAM-SYNC", 40_000, "APPROVED").await;
+            insert_payment_transaction(
+                &pool,
+                cash_payment(1, "TEAM-COLLECT", 40_000),
+                vec![AllocationCommandInput {
+                    certificate_id: certificate,
+                    amount_minor: 40_000,
+                }],
+            )
+            .await
+            .unwrap();
+
+            let payment_id = apply_synced_person_payment_transaction(
+                &pool,
+                SyncedPersonPaymentInput {
+                    local_id: None,
+                    sync_uuid: "55555555-5555-4555-8555-555555555555".into(),
+                    updated_at: "2099-06-03T00:00:00.000Z".into(),
+                    assignment_id: assignment,
+                    date: "2026-07-05".into(),
+                    amount_minor: 10_000,
+                    note: Some("remote team payout".into()),
+                    created_at: Some("2099-06-03T00:00:00.000Z".into()),
+                    voided_at: None,
+                    voided_by: None,
+                    void_reason: None,
+                    reversal_of_id: None,
+                },
+            )
+            .await
+            .unwrap();
+            let linked: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM expenses WHERE person_payment_id=? AND voided_at IS NULL",
+            )
+            .bind(payment_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(linked, 1);
+
+            let over = apply_synced_person_payment_transaction(
+                &pool,
+                SyncedPersonPaymentInput {
+                    local_id: None,
+                    sync_uuid: "55555555-5555-4555-8555-555555555556".into(),
+                    updated_at: "2099-06-04T00:00:00.000Z".into(),
+                    assignment_id: assignment,
+                    date: "2026-07-06".into(),
+                    amount_minor: 30_001,
+                    note: Some("too much".into()),
+                    created_at: None,
+                    voided_at: None,
+                    voided_by: None,
+                    void_reason: None,
+                    reversal_of_id: None,
+                },
+            )
+            .await;
+            assert_eq!(over.unwrap_err(), "PERSON_PAYMENT_EXCEEDS_DUE");
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM person_payments")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1);
+        });
+    }
+
+    #[test]
     fn cancellation_is_refused_twice_and_needs_a_reason() {
         tauri::async_runtime::block_on(async {
             let pool = migrated_pool().await;
@@ -7984,6 +8772,8 @@ pub fn run() {
             apply_synced_certificate_atomic,
             transition_certificate_atomic,
             void_certificate_atomic,
+            apply_synced_assignment_atomic,
+            apply_synced_person_payment_atomic,
             create_person_payment_atomic,
             delete_person_payment_atomic,
             cancel_assignment_atomic,

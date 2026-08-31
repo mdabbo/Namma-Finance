@@ -90,15 +90,6 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     ],
   },
   {
-    name: "project_assignments",
-    columns: ["person_id", "project_id", "agreed_minor", "currency", "fx_rate_micro", "scope",
-      "progress_note", "created_at", "archived_at", "archived_by", "archive_reason"],
-    fks: [
-      { column: "person_id", parent: "people" },
-      { column: "project_id", parent: "projects" },
-    ],
-  },
-  {
     name: "payment_certificates",
     columns: ["contract_id", "seq", "number", "date", "submission_date", "due_date_override", "due_date_confirmed_at", "description",
       "gross_minor", "discount_minor", "manual_advance_recovery_minor", "status", "deleted_at", "created_at",
@@ -129,6 +120,17 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     fks: [
       { column: "payment_id", parent: "payments" },
       { column: "certificate_id", parent: "payment_certificates" },
+    ],
+  },
+  {
+    name: "project_assignments",
+    columns: ["person_id", "project_id", "agreed_minor", "currency", "fx_rate_micro", "scope",
+      "progress_note", "created_at", "archived_at", "archived_by", "archive_reason",
+      "lifecycle_status", "completed_at", "cancelled_at", "cancellation_reason",
+      "earned_minor_at_cancellation"],
+    fks: [
+      { column: "person_id", parent: "people" },
+      { column: "project_id", parent: "projects" },
     ],
   },
   {

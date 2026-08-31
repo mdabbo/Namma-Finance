@@ -569,6 +569,119 @@ describe("domain-aware payment and allocation sync", () => {
   });
 });
 
+describe("domain-aware assignment and person-payment sync", () => {
+  async function teamSyncFixture(prefix = "TEAM-SYNC") {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const firstCertificateId = await createCertificate(await nextCertificateSeq(contractId), { contractId, number: `PC-${prefix}-1`, date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 40_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    const secondCertificateId = await createCertificate(await nextCertificateSeq(contractId), { contractId, number: `PC-${prefix}-2`, date: "2026-07-11", submissionDate: "2026-07-11", dueDateOverride: null, description: null, grossMinor: 60_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await createPayment({ contractId, kind: "CERTIFICATE", number: `PAY-${prefix}-1`, date: "2026-07-02", amountMinor: 40_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId: firstCertificateId, amountMinor: 40_000 }]);
+    const personId = await createPerson({ type: "FREELANCER", name: `${prefix} Person`, specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
+    await createAssignment({ personId, projectId, agreedMinor: 100_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { contractId, secondCertificateId };
+  }
+
+  it("derives synced cancellation earnings from payment evidence and ignores later collections", async () => {
+    const { contractId, secondCertificateId } = await teamSyncFixture("TEAM-CANCEL");
+    const assignment = remoteRows("project_assignments")[0]!;
+    Object.assign(assignment, {
+      lifecycle_status: "CANCELLED",
+      cancelled_at: "2026-07-10T00:00:00.000Z",
+      cancellation_reason: "Remote cancellation",
+      earned_minor_at_cancellation: 40_000,
+      updated_at: "2099-06-01T00:00:00.000Z",
+    });
+    useDevice("A");
+    await createPayment({ contractId, kind: "CERTIFICATE", number: "PAY-TEAM-CANCEL-LATE", date: "2026-07-11", amountMinor: 60_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId: secondCertificateId, amountMinor: 60_000 }]);
+    await sync("A");
+
+    await sync("B");
+
+    const pulled = rawOneOn<{ lifecycle_status: string; earned_minor_at_cancellation: number }>(
+      "B",
+      "SELECT lifecycle_status,earned_minor_at_cancellation FROM project_assignments",
+    )!;
+    expect(pulled.lifecycle_status).toBe("CANCELLED");
+    expect(pulled.earned_minor_at_cancellation).toBe(40_000);
+  });
+
+  it("rejects a synced cancellation with an unearned frozen amount", async () => {
+    await teamSyncFixture("TEAM-BAD-CANCEL");
+    const assignment = remoteRows("project_assignments")[0]!;
+    Object.assign(assignment, {
+      lifecycle_status: "CANCELLED",
+      cancelled_at: "2026-07-10T00:00:00.000Z",
+      cancellation_reason: "Inflated",
+      earned_minor_at_cancellation: 99_999,
+      updated_at: "2099-06-02T00:00:00.000Z",
+    });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("SYNC_CANCELLATION_EARNED_MISMATCH");
+    expect(rawOneOn<{ lifecycle_status: string }>("B", "SELECT lifecycle_status FROM project_assignments")!.lifecycle_status).toBe("ACTIVE");
+  });
+
+  it("creates the linked expense when a valid person payment is pulled", async () => {
+    await teamSyncFixture("TEAM-PAY");
+    const assignmentUuid = remoteRows("project_assignments")[0]!.uuid;
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "66666666-6666-4666-8666-666666666661",
+      assignment_id: assignmentUuid,
+      date: "2026-07-05",
+      amount_minor: 10_000,
+      note: "remote team payout",
+      created_at: "2099-06-03T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-06-03T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    await sync("B");
+
+    const payment = rawOneOn<{ id: number; amount_minor: number }>("B", "SELECT id,amount_minor FROM person_payments WHERE voided_at IS NULL")!;
+    expect(payment.amount_minor).toBe(10_000);
+    expect(rawOn("B", `SELECT id FROM expenses WHERE person_payment_id=${payment.id} AND voided_at IS NULL`)).toHaveLength(1);
+  });
+
+  it("rejects a synced person payment above lifecycle-aware due", async () => {
+    await teamSyncFixture("TEAM-OVERPAY");
+    const assignmentUuid = remoteRows("project_assignments")[0]!.uuid;
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "66666666-6666-4666-8666-666666666662",
+      assignment_id: assignmentUuid,
+      date: "2026-07-05",
+      amount_minor: 40_001,
+      note: "too much",
+      created_at: "2099-06-04T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-06-04T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("PERSON_PAYMENT_EXCEEDS_DUE");
+    expect(rawOn("B", "SELECT id FROM person_payments")).toHaveLength(0);
+    expect(rawOn("B", "SELECT id FROM expenses WHERE person_payment_id IS NOT NULL")).toHaveLength(0);
+  });
+});
+
 describe("time entries sync", () => {
   it("round-trip a time entry with person/project/stage FK translation", async () => {
     newDevice("A");
