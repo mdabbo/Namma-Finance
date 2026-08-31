@@ -1,4 +1,4 @@
-# Database rebase — v0.7.0 (Milestone 7)
+# Database rebase — v0.7.0
 
 ## What changed
 

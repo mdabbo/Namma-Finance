@@ -4,7 +4,8 @@ The figures below are **local** measurements taken on Windows with
 `pnpm install --frozen-lockfile`, `pnpm version:check`, `pnpm lint`,
 `pnpm typecheck`, `pnpm test`, `pnpm test:coverage`,
 `cargo fmt/clippy/test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and
-`pnpm --filter @mep/desktop test:e2e`.
+`pnpm --filter @mep/desktop test:e2e`, followed by
+`pnpm --filter @mep/desktop exec tauri build`.
 
 > **A local run is not release evidence.** The authoritative record is the
 > `Quality gates` GitHub Actions run on the released commit; record its URL and
@@ -13,7 +14,7 @@ The figures below are **local** measurements taken on Windows with
 > coverage report, the Playwright HTML report, traces, and a
 > `release-evidence.txt` naming the exact commit. Nothing in this file may be
 > cited as proof that CI passed — at the time of writing, the CI block in
-> `RELEASE-CHECKLIST.md` is still empty.
+> `RELEASE-CHECKLIST.md` is pending a new pull-request run.
 
 Measured on the final Milestone 6 tree of `redesign/v0.7.0` — the commit
 carrying `docs(release): finalize v0.7.0 beta evidence`.
@@ -32,6 +33,7 @@ carrying `docs(release): finalize v0.7.0 beta evidence`.
 | `cargo clippy --all-targets -- -D warnings` | clean |
 | Rust tests | **49 passed**, 0 failed |
 | Playwright UI tests | **148 passed**, 0 failed, 2 skipped (3 viewports) |
+| Tauri production build | pass — `NAMAA Finance_0.7.0_x64-setup.exe` produced |
 
 The two skipped Playwright tests are viewport-scoped visual baselines that run
 only on the viewport they were captured for.
