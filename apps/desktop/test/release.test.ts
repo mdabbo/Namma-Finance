@@ -17,7 +17,7 @@ const release = JSON.parse(readFileSync(join(root, "release/release.json"), "utf
   schemaVersion: number;
 };
 
-describe("Milestone 16 release integrity", () => {
+describe("Milestone 6 release integrity", () => {
   it("keeps every application and installer version synchronized with the release manifest", () => {
     for (const relative of ["package.json", "apps/desktop/package.json", "apps/mobile/package.json", "packages/core/package.json"]) {
       expect(JSON.parse(readFileSync(join(root, relative), "utf8")).version, relative).toBe(release.version);
@@ -59,7 +59,7 @@ describe("Milestone 16 release integrity", () => {
       "0002_seed_reference_data.sql",
       "0003_assignment_lifecycle.sql",
       "0004_cancellation_evidence_integrity.sql",
-  "0005_audit_version_baseline.sql",
+      "0005_audit_version_baseline.sql",
     ]);
     const stamped = migrationNames.flatMap((name) => [
       ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")
@@ -95,7 +95,7 @@ describe("Milestone 16 release integrity", () => {
     await expect(loadReleaseInfo()).rejects.toThrow("APPLICATION_VERSION_MISMATCH");
   });
 
-  it("ships the complete 0.6.0 release evidence set", () => {
+  it("ships the complete 0.7.0 Beta release evidence set", () => {
     expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toContain(`## [${release.version}]`);
     for (const name of [
       "RELEASE-CHECKLIST.md", "MIGRATION-NOTES.md", "ROLLBACK.md", "KNOWN-LIMITATIONS.md",
