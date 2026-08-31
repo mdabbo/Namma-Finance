@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/lib/db", async () => await import("./db-harness"));
 
 import { computeCertificate } from "@mep/core";
-import { raw, rawOne, resetDb } from "./db-harness";
+import { raw, rawExec, rawOne, resetDb } from "./db-harness";
 import { createClient } from "../src/repositories/clients";
 import { createProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
@@ -232,5 +232,69 @@ describe("Milestone 1 — atomic certificate lifecycle & reconciliation", () => 
     // a rejected financial edit must leave no audit trace
     await expect(updateCertificate(id, certInput(contractId, { grossMinor: 99_000_000, status: "SUBMITTED" }))).rejects.toThrow("CERTIFICATE_FINANCIALS_IMMUTABLE");
     expect(rawOne<{ c: number }>("SELECT COUNT(*) AS c FROM audit_logs")!.c).toBe(before);
+  });
+
+  // (13) Audit regression: cross-contract mutation.
+  //
+  // updateCertificate located the row by id but bound the revision snapshot
+  // with the caller's contractId, so a caller could graft a foreign contract's
+  // VAT, retention, withholding, advance, payment terms, currency and
+  // historical FX onto a certificate that stayed filed under its own contract.
+  it("refuses to bind another contract's terms onto a certificate", async () => {
+    const own = await makeContract({ vatBp: 0, retentionBp: 0, advanceMinor: 0 });
+    const foreign = await makeContract({ vatBp: 1400, retentionBp: 500, advanceMinor: 40_000_000 });
+    const id = await createCertificate(certInput(own.contractId, { status: "DRAFT" }));
+    const snapshot = () =>
+      rawOne<{ contract_id: number; vat_bp_snapshot: number; retention_bp_snapshot: number; advance_minor_snapshot: number }>(
+        `SELECT contract_id,vat_bp_snapshot,retention_bp_snapshot,advance_minor_snapshot FROM payment_certificates WHERE id=${id}`,
+      )!;
+    const before = snapshot();
+
+    await expect(
+      updateCertificate(id, { ...certInput(foreign.contractId, { status: "DRAFT" }), grossMinor: 20_000_000 }),
+    ).rejects.toThrow("CERTIFICATE_CONTRACT_MISMATCH");
+
+    // The foreign terms did not land, and the edit did not partially apply.
+    expect(snapshot()).toEqual(before);
+    expect(before.vat_bp_snapshot).toBe(0);
+    expect(before.contract_id).toBe(own.contractId);
+    expect(rawOne<{ g: number }>(`SELECT gross_minor AS g FROM payment_certificates WHERE id=${id}`)!.g).toBe(10_000_000);
+  });
+
+  // (14) Audit regression: archived contracts and projects are read-only.
+  //
+  // Every certificate read path — the listing, loadContractPayables, the
+  // allocation-integrity check, reconciliation — excludes archived contracts
+  // and projects. A certificate written against one was therefore invisible:
+  // never listed, never reconciled, never covered by the integrity check.
+  it("refuses to create a certificate on an archived contract or project", async () => {
+    const archivedContract = await makeContract();
+    rawExec(`UPDATE contracts SET archived_at=datetime('now') WHERE id=${archivedContract.contractId}`);
+    await expect(createCertificate(certInput(archivedContract.contractId, { status: "DRAFT" })))
+      .rejects.toThrow("ARCHIVED_CONTRACT_IS_READ_ONLY");
+    expect(raw(`SELECT id FROM payment_certificates WHERE contract_id=${archivedContract.contractId}`)).toHaveLength(0);
+
+    const archivedProject = await makeContract();
+    rawExec(`UPDATE projects SET archived_at=datetime('now') WHERE id=${archivedProject.projectId}`);
+    await expect(createCertificate(certInput(archivedProject.contractId, { status: "DRAFT" })))
+      .rejects.toThrow("ARCHIVED_CONTRACT_IS_READ_ONLY");
+    expect(raw(`SELECT id FROM payment_certificates WHERE contract_id=${archivedProject.contractId}`)).toHaveLength(0);
+  });
+
+  it("refuses to edit, transition or void a certificate under an archived project", async () => {
+    const { projectId, contractId } = await makeContract();
+    const id = await createCertificate(certInput(contractId, { status: "DRAFT" }));
+    rawExec(`UPDATE projects SET archived_at=datetime('now') WHERE id=${projectId}`);
+
+    await expect(updateCertificate(id, certInput(contractId, { grossMinor: 55_000_000, status: "DRAFT" })))
+      .rejects.toThrow("ARCHIVED_CONTRACT_IS_READ_ONLY");
+    await expect(transitionCertificate(id, "SUBMITTED")).rejects.toThrow("ARCHIVED_CONTRACT_IS_READ_ONLY");
+    await expect(voidCertificate(id, "Cleaning up")).rejects.toThrow("ARCHIVED_CONTRACT_IS_READ_ONLY");
+
+    // The certificate is exactly as it was: no amount, status or void applied.
+    const row = rawOne<{ gross_minor: number; status: string; voided_at: string | null }>(
+      `SELECT gross_minor,status,voided_at FROM payment_certificates WHERE id=${id}`,
+    )!;
+    expect(row).toEqual({ gross_minor: 10_000_000, status: "DRAFT", voided_at: null });
   });
 });

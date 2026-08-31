@@ -1193,6 +1193,41 @@ async fn load_certificate_lifecycle(
     })
 }
 
+/// Reject any write to a certificate whose contract — or whose contract's
+/// project — is archived.
+///
+/// Every certificate read path (the listing, `load_contract_payables`,
+/// `assert_contract_allocation_integrity`, reconciliation) excludes archived
+/// contracts and projects, so a certificate written against one is invisible:
+/// never listed, never reconciled, never covered by the allocation check.
+/// Archived therefore has to mean read-only here, exactly as it already does
+/// for payments; correcting an archived contract means restoring it first,
+/// which is itself audited.
+async fn assert_contract_writable(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    contract_id: i64,
+) -> Result<(), String> {
+    let row = sqlx::query(
+        "SELECT c.archived_at AS contract_archived_at, p.archived_at AS project_archived_at
+         FROM contracts c JOIN projects p ON p.id=c.project_id WHERE c.id=?",
+    )
+    .bind(contract_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "CONTRACT_NOT_FOUND".to_string())?;
+    let contract_archived: Option<String> = row
+        .try_get("contract_archived_at")
+        .map_err(|e| e.to_string())?;
+    let project_archived: Option<String> = row
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
+    if contract_archived.is_some() || project_archived.is_some() {
+        return Err("ARCHIVED_CONTRACT_IS_READ_ONLY".into());
+    }
+    Ok(())
+}
+
 /// The financial terms of a certificate, off which lifecycle immutability is
 /// judged. The revision snapshot is a function of `date`, so `date` is a
 /// financial field: changing it can rebind VAT/retention/advance.
@@ -1284,6 +1319,7 @@ async fn create_certificate_atomic(
         _ => return Err("database is not loaded".into()),
     };
     let mut tx = begin_immediate(pool).await?;
+    assert_contract_writable(&mut tx, input.contract_id).await?;
     let seq: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(seq),0)+1 FROM payment_certificates WHERE contract_id=? AND deleted_at IS NULL",
     )
@@ -1332,6 +1368,22 @@ async fn update_certificate_atomic(
     number: String,
     input: CertificateCommandInput,
 ) -> Result<(), String> {
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    update_certificate_transaction(pool, certificate_id, number, input).await
+}
+
+/// The edit itself, so the contract-identity and archived rules can be asserted
+/// directly by `cargo test` rather than only through the command wrapper.
+async fn update_certificate_transaction(
+    pool: &sqlx::SqlitePool,
+    certificate_id: i64,
+    number: String,
+    input: CertificateCommandInput,
+) -> Result<(), String> {
     if input.status == "PAID" {
         return Err("PAID_REQUIRES_PAYMENT".into());
     }
@@ -1339,13 +1391,17 @@ async fn update_certificate_atomic(
     {
         return Err("INVALID_CERTIFICATE_AMOUNTS".into());
     }
-    let instances = db_instances.0.read().await;
-    let pool = match instances.get("sqlite:mep-finance.db") {
-        Some(DbPool::Sqlite(pool)) => pool,
-        _ => return Err("database is not loaded".into()),
-    };
     let mut tx = begin_immediate(pool).await?;
     let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    // The certificate is located by id, so a caller-supplied contract id that
+    // disagrees with the stored one would otherwise bind a *foreign* contract's
+    // approved revision — its VAT, retention, withholding, advance, payment
+    // terms, currency and historical FX — onto this certificate while leaving
+    // it filed under its own contract. The stored contract is the only truth.
+    if input.contract_id != stored.contract_id {
+        return Err("CERTIFICATE_CONTRACT_MISMATCH".into());
+    }
+    assert_contract_writable(&mut tx, stored.contract_id).await?;
     if stored.status == "PAID" {
         return Err("PAID_CERTIFICATE_IMMUTABLE".into());
     }
@@ -1373,7 +1429,7 @@ async fn update_certificate_atomic(
                currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
              WHERE id=? AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)",
         )
-        .bind(input.contract_id).bind(&input.date).bind(&input.date)
+        .bind(stored.contract_id).bind(&input.date).bind(&input.date)
         .bind(&number).bind(&input.date).bind(&input.submission_date).bind(&input.due_date_override)
         .bind(i64::from(input.due_date_confirmed)).bind(&input.description)
         .bind(input.gross_minor).bind(input.discount_minor).bind(input.manual_advance_recovery_minor).bind(&input.status)
@@ -1433,6 +1489,7 @@ async fn transition_certificate_atomic(
     };
     let mut tx = begin_immediate(pool).await?;
     let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    assert_contract_writable(&mut tx, stored.contract_id).await?;
     if stored.status == "PAID" {
         return Err("PAID_NO_MANUAL_DOWNGRADE".into());
     }
@@ -1502,6 +1559,7 @@ async fn void_certificate_atomic(
     };
     let mut tx = begin_immediate(pool).await?;
     let stored = load_certificate_lifecycle(&mut tx, certificate_id).await?;
+    assert_contract_writable(&mut tx, stored.contract_id).await?;
     let allocated = valid_allocated_minor(&mut tx, certificate_id).await?;
     if allocated > 0 {
         return Err("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED".into());
@@ -5429,6 +5487,162 @@ mod financial_transaction_tests {
             // the draft's base were dropped, the paid stage would absorb the
             // remainder and release the whole fee.
             assert_eq!(released, 20_000);
+        });
+    }
+
+    /// A second contract, on its own project, with commercial terms that differ
+    /// from `payout_fixture`'s in every snapshot column.
+    async fn foreign_contract(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Other Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+             VALUES('PRJ-2026-900','Other',2,'USD',48000000);
+             INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                 withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,valuation_mode)
+             VALUES(2,'C-OTHER',500000,'2026-01-01',1400,500,300,50000,'PROPORTIONAL',90,'LUMP_SUM');
+             INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                 contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                 advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+             VALUES(2,1,'2026-01-01',500000,1400,500,300,50000,'PROPORTIONAL',90,'USD',48000000,'Initial',datetime('now'));",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        2
+    }
+
+    fn edit_input(contract_id: i64, gross_minor: i64) -> CertificateCommandInput {
+        CertificateCommandInput {
+            contract_id,
+            date: "2026-02-01".into(),
+            submission_date: None,
+            due_date_override: None,
+            due_date_confirmed: false,
+            description: None,
+            gross_minor,
+            discount_minor: 0,
+            manual_advance_recovery_minor: None,
+            status: "DRAFT".into(),
+        }
+    }
+
+    /// Audit regression: a certificate is located by id, so a caller-supplied
+    /// contract id that disagrees with the stored one would bind a *foreign*
+    /// contract's approved revision — VAT, retention, withholding, advance,
+    /// payment terms, currency and historical FX — onto it, while the row stayed
+    /// filed under its own contract. Terms and FX would silently become another
+    /// contract's.
+    #[test]
+    fn a_certificate_cannot_be_bound_to_another_contracts_revision() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            payout_fixture(&pool, 40_000).await;
+            let foreign = foreign_contract(&pool).await;
+            let certificate = add_certificate(&pool, 1, "PC-1", 50_000, "DRAFT").await;
+
+            let snapshot = |pool: sqlx::SqlitePool| async move {
+                sqlx::query_as::<_, (i64, i64, i64, i64, i64, String, i64)>(
+                    "SELECT contract_id,vat_bp_snapshot,retention_bp_snapshot,withholding_bp_snapshot,
+                            advance_minor_snapshot,currency_snapshot,fx_rate_micro_snapshot
+                     FROM payment_certificates WHERE id=?",
+                )
+                .bind(certificate)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            };
+            let before = snapshot(pool.clone()).await;
+
+            let rejected = update_certificate_transaction(
+                &pool,
+                certificate,
+                "PC-1".into(),
+                edit_input(foreign, 60_000),
+            )
+            .await;
+            assert_eq!(rejected.unwrap_err(), "CERTIFICATE_CONTRACT_MISMATCH");
+
+            // Nothing moved: not the terms, not the FX, not the amount.
+            assert_eq!(snapshot(pool.clone()).await, before);
+            let gross: i64 =
+                sqlx::query_scalar("SELECT gross_minor FROM payment_certificates WHERE id=?")
+                    .bind(certificate)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(gross, 50_000);
+        });
+    }
+
+    /// Audit regression: every certificate read path excludes archived
+    /// contracts and projects, so a certificate written against one is
+    /// invisible — never listed, never reconciled, never covered by the
+    /// allocation-integrity check. Archived has to mean read-only.
+    #[test]
+    fn an_archived_contract_or_project_is_read_only_for_certificates() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            payout_fixture(&pool, 40_000).await;
+            let certificate = add_certificate(&pool, 1, "PC-1", 50_000, "DRAFT").await;
+
+            let writable = |pool: sqlx::SqlitePool| async move {
+                let mut tx = begin_immediate(&pool).await.unwrap();
+                let result = assert_contract_writable(&mut tx, 1).await;
+                tx.commit().await.unwrap();
+                result
+            };
+
+            // A live contract on a live project is writable.
+            assert!(writable(pool.clone()).await.is_ok());
+
+            sqlx::query("UPDATE contracts SET archived_at=datetime('now') WHERE id=1")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                writable(pool.clone()).await.unwrap_err(),
+                "ARCHIVED_CONTRACT_IS_READ_ONLY"
+            );
+            assert_eq!(
+                update_certificate_transaction(
+                    &pool,
+                    certificate,
+                    "PC-1".into(),
+                    edit_input(1, 60_000)
+                )
+                .await
+                .unwrap_err(),
+                "ARCHIVED_CONTRACT_IS_READ_ONLY",
+            );
+
+            // The project alone being archived is equally read-only.
+            sqlx::query("UPDATE contracts SET archived_at=NULL WHERE id=1")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE projects SET archived_at=datetime('now') WHERE id=1")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                writable(pool.clone()).await.unwrap_err(),
+                "ARCHIVED_CONTRACT_IS_READ_ONLY"
+            );
+
+            // The rejected edit left the certificate exactly as it was.
+            let gross: i64 =
+                sqlx::query_scalar("SELECT gross_minor FROM payment_certificates WHERE id=?")
+                    .bind(certificate)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(gross, 50_000);
+
+            // A contract that does not exist is not silently writable either.
+            let mut tx = begin_immediate(&pool).await.unwrap();
+            let missing = assert_contract_writable(&mut tx, 9_999).await;
+            tx.commit().await.unwrap();
+            assert_eq!(missing.unwrap_err(), "CONTRACT_NOT_FOUND");
         });
     }
 

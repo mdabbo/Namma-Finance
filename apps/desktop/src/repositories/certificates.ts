@@ -145,6 +145,27 @@ async function contractCertificateIdsDouble(contractId: number): Promise<number[
   return rows.map((row) => row.id);
 }
 
+/**
+ * Reject any write to a certificate whose contract — or whose contract's
+ * project — is archived (test double for Rust `assert_contract_writable`).
+ *
+ * Every certificate read path excludes archived contracts and projects, so a
+ * certificate written against one is invisible: never listed, never reconciled,
+ * never covered by the allocation check. Archived means read-only, as it
+ * already does for payments.
+ */
+async function assertContractWritableDouble(contractId: number): Promise<void> {
+  const row = await selectOne<{ contractArchivedAt: string | null; projectArchivedAt: string | null }>(
+    `SELECT c.archived_at AS contractArchivedAt, p.archived_at AS projectArchivedAt
+     FROM contracts c JOIN projects p ON p.id=c.project_id WHERE c.id=$1`,
+    [contractId],
+  );
+  if (!row) throw new Error("CONTRACT_NOT_FOUND");
+  if (row.contractArchivedAt !== null || row.projectArchivedAt !== null) {
+    throw new Error("ARCHIVED_CONTRACT_IS_READ_ONLY");
+  }
+}
+
 /** Reject over-allocation / allocated drafts across the contract (test double). */
 async function assertContractAllocationIntegrityDouble(contractId: number): Promise<void> {
   const { loadContractPayables, validAllocatedMinor } = await import("./payments");
@@ -190,6 +211,7 @@ async function createCertificateDouble(number: string, input: CertificateInput):
   if (input.status === "PAID") throw new Error("PAID_REQUIRES_PAYMENT");
   if (input.discountMinor < 0 || input.grossMinor < 0 || input.discountMinor > input.grossMinor) throw new Error("INVALID_CERTIFICATE_AMOUNTS");
   if (!number.trim()) throw new Error("CERTIFICATE_NUMBER_REQUIRED");
+  await assertContractWritableDouble(input.contractId);
   const seqRow = await selectOne<{ seq: number }>(
     "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM payment_certificates WHERE contract_id=$1 AND deleted_at IS NULL",
     [input.contractId],
@@ -236,6 +258,13 @@ async function updateCertificateDouble(id: number, number: string, input: Certif
     [id],
   );
   if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  // The certificate is located by id, so a caller-supplied contract id that
+  // disagrees with the stored one would otherwise bind a foreign contract's
+  // approved revision — VAT, retention, withholding, advance, payment terms,
+  // currency and historical FX — onto this certificate while leaving it filed
+  // under its own contract. The stored contract is the only truth.
+  if (input.contractId !== stored.contractId) throw new Error("CERTIFICATE_CONTRACT_MISMATCH");
+  await assertContractWritableDouble(stored.contractId);
   if (stored.status === "PAID") throw new Error("PAID_CERTIFICATE_IMMUTABLE");
   if (stored.status === "DRAFT") {
     if (input.status !== "DRAFT" && input.status !== "SUBMITTED") throw new Error("USE_TRANSITION_FOR_APPROVAL");
@@ -255,7 +284,7 @@ async function updateCertificateDouble(id: number, number: string, input: Certif
          advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
          currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen)
        WHERE id=$12 AND status='DRAFT' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
-      [input.contractId, number, input.date, input.submissionDate ?? null, input.dueDateOverride ?? null,
+      [stored.contractId, number, input.date, input.submissionDate ?? null, input.dueDateOverride ?? null,
        input.dueDateConfirmed ? 1 : 0, input.description ?? null, input.grossMinor, input.discountMinor,
        input.manualAdvanceRecoveryMinor ?? null, input.status, id],
     );
@@ -303,6 +332,7 @@ async function transitionCertificateDouble(id: number, targetStatus: Certificate
     [id],
   );
   if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  await assertContractWritableDouble(stored.contractId);
   if (stored.status === "PAID") throw new Error("PAID_NO_MANUAL_DOWNGRADE");
   if (targetStatus === "DRAFT" && (await validAllocatedMinor(id)) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_DRAFT");
   if (targetStatus === "SUBMITTED" && stored.status === "DRAFT") {
@@ -365,6 +395,7 @@ async function voidCertificateDouble(id: number, reason: string | null): Promise
     [id],
   );
   if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+  await assertContractWritableDouble(stored.contractId);
   if ((await validAllocatedMinor(id)) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED");
   const updated = await execute(
     "UPDATE payment_certificates SET deleted_at=datetime('now'), voided_at=datetime('now'), void_reason=$2 WHERE id=$1 AND voided_at IS NULL",
