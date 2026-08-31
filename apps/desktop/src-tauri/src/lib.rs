@@ -374,25 +374,95 @@ async fn begin_immediate(
         .map_err(|e| e.to_string())
 }
 
-const SYNC_MUTATION_TABLES: &[&str] = &[
-    "clients",
-    "people",
-    "expense_categories",
-    "projects",
-    "contracts",
-    "project_stages",
-    "contract_revisions",
-    "variation_orders",
-    "documents",
-    "time_entries",
-    "project_assignments",
-    "payment_certificates",
-    "payments",
-    "payment_certificate_allocations",
-    "person_payments",
-    "expenses",
-    "recurring_expenses",
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyncTableRisk {
+    SimpleMasterData,
+    FinanciallyProtectedData,
+    ImmutableOrEventEvidence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SyncTablePolicy {
+    table: &'static str,
+    risk: SyncTableRisk,
+}
+
+const SYNC_TABLE_POLICIES: &[SyncTablePolicy] = &[
+    SyncTablePolicy {
+        table: "clients",
+        risk: SyncTableRisk::SimpleMasterData,
+    },
+    SyncTablePolicy {
+        table: "people",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "expense_categories",
+        risk: SyncTableRisk::SimpleMasterData,
+    },
+    SyncTablePolicy {
+        table: "projects",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "contracts",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "project_stages",
+        risk: SyncTableRisk::SimpleMasterData,
+    },
+    SyncTablePolicy {
+        table: "contract_revisions",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "variation_orders",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "documents",
+        risk: SyncTableRisk::SimpleMasterData,
+    },
+    SyncTablePolicy {
+        table: "time_entries",
+        risk: SyncTableRisk::SimpleMasterData,
+    },
+    SyncTablePolicy {
+        table: "project_assignments",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "payment_certificates",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "payments",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "payment_certificate_allocations",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "person_payments",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
+        table: "expenses",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "recurring_expenses",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
 ];
+
+fn sync_table_policy(table: &str) -> Option<&'static SyncTablePolicy> {
+    SYNC_TABLE_POLICIES
+        .iter()
+        .find(|policy| policy.table == table)
+}
 
 fn validate_sync_mutation_sql(sql: &str) -> Result<(), String> {
     let trimmed = sql.trim();
@@ -422,7 +492,7 @@ fn validate_sync_mutation_sql(sql: &str) -> Result<(), String> {
     if !table
         .chars()
         .all(|character| character.is_ascii_lowercase() || character == '_')
-        || !SYNC_MUTATION_TABLES.contains(&table)
+        || sync_table_policy(table).is_none()
     {
         return Err("SYNC_MUTATION_TABLE_DENIED".into());
     }
@@ -5065,6 +5135,65 @@ mod financial_transaction_tests {
         assert!(validate_sync_mutation_sql("PRAGMA foreign_keys=OFF").is_err());
         let query = sqlx::query("UPDATE clients SET name=$1");
         assert!(bind_json_value(query, JsonValue::from(1.25)).is_err());
+    }
+
+    #[test]
+    fn sync_table_risk_mapping_classifies_every_mutable_table() {
+        assert_eq!(SYNC_TABLE_POLICIES.len(), 17);
+
+        let simple = [
+            "clients",
+            "expense_categories",
+            "project_stages",
+            "documents",
+            "time_entries",
+        ];
+        for table in simple {
+            assert_eq!(
+                sync_table_policy(table).map(|policy| policy.risk),
+                Some(SyncTableRisk::SimpleMasterData)
+            );
+        }
+
+        let protected = [
+            "people",
+            "projects",
+            "contracts",
+            "project_assignments",
+            "expenses",
+            "recurring_expenses",
+        ];
+        for table in protected {
+            assert_eq!(
+                sync_table_policy(table).map(|policy| policy.risk),
+                Some(SyncTableRisk::FinanciallyProtectedData)
+            );
+        }
+
+        let evidence = [
+            "contract_revisions",
+            "variation_orders",
+            "payment_certificates",
+            "payments",
+            "payment_certificate_allocations",
+            "person_payments",
+        ];
+        for table in evidence {
+            assert_eq!(
+                sync_table_policy(table).map(|policy| policy.risk),
+                Some(SyncTableRisk::ImmutableOrEventEvidence)
+            );
+        }
+    }
+
+    #[test]
+    fn sync_table_risk_mapping_is_the_mutation_allowlist() {
+        assert!(sync_table_policy("audit_logs").is_none());
+        assert!(validate_sync_mutation_sql("UPDATE audit_logs SET action=$1").is_err());
+        assert!(validate_sync_mutation_sql(
+            "UPDATE payment_certificates SET status=$1 WHERE id=$2"
+        )
+        .is_ok());
     }
 
     #[test]
