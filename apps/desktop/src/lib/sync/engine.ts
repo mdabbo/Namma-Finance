@@ -359,6 +359,40 @@ async function pullTable(
               continue;
             }
           }
+          if (spec.name === "payment_certificates") {
+            const { applySyncedCertificate } = await import("../../repositories/certificates");
+            await applySyncedCertificate({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              seq: values.seq as number,
+              number: values.number as string,
+              date: values.date as string,
+              submissionDate: values.submission_date as string | null,
+              dueDateOverride: values.due_date_override as string | null,
+              dueDateConfirmedAt: values.due_date_confirmed_at as string | null,
+              description: values.description as string | null,
+              grossMinor: values.gross_minor as number,
+              discountMinor: values.discount_minor as number,
+              manualAdvanceRecoveryMinor: values.manual_advance_recovery_minor as number | null,
+              status: values.status as "DRAFT" | "SUBMITTED" | "APPROVED" | "PAID",
+              deletedAt: values.deleted_at as string | null,
+              createdAt: values.created_at as string | null,
+              archivedAt: values.archived_at as string | null,
+              archivedBy: values.archived_by as string | null,
+              archiveReason: values.archive_reason as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
           if (spec.name === "payment_certificate_allocations") {
             const duplicate = await selectOne<LocalRow>("SELECT * FROM payment_certificate_allocations WHERE payment_id=$1 AND certificate_id=$2 AND sync_uuid<>$3", [values.payment_id, values.certificate_id, uuid]);
             if (duplicate) {

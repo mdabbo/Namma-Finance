@@ -405,6 +405,45 @@ describe("milestone references across devices", () => {
   });
 });
 
+describe("domain-aware certificate sync", () => {
+  async function syncedApprovedCertificate() {
+    newDevice("A");
+    const clientId = await createClient({ name: "Certificate Sync Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-CERT-SYNC", { name: "Certificate Sync", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: "C-CERT-SYNC", title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    await createCertificate(await nextCertificateSeq(contractId), { contractId, number: "PC-CERT-SYNC", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 10_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { contractId };
+  }
+
+  it("does not trust a remote PAID certificate status without local payment evidence", async () => {
+    await syncedApprovedCertificate();
+    const remote = remoteRows("payment_certificates")[0]!;
+    remote.status = "PAID";
+    remote.updated_at = "2099-03-01T00:00:00.000Z";
+
+    await sync("B");
+
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("APPROVED");
+  });
+
+  it("rejects remote financial edits to an immutable certificate", async () => {
+    await syncedApprovedCertificate();
+    const remote = remoteRows("payment_certificates")[0]!;
+    remote.gross_minor = 20_000;
+    remote.updated_at = "2099-03-02T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("CERTIFICATE_FINANCIALS_IMMUTABLE");
+    expect(rawOneOn<{ gross_minor: number }>("B", "SELECT gross_minor FROM payment_certificates")!.gross_minor).toBe(10_000);
+  });
+});
+
 describe("time entries sync", () => {
   it("round-trip a time entry with person/project/stage FK translation", async () => {
     newDevice("A");

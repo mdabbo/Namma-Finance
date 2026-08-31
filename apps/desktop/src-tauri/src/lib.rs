@@ -1226,6 +1226,35 @@ struct CertificateCommandInput {
     status: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncedCertificateInput {
+    local_id: Option<i64>,
+    sync_uuid: String,
+    updated_at: String,
+    contract_id: i64,
+    seq: i64,
+    number: String,
+    date: String,
+    submission_date: Option<String>,
+    due_date_override: Option<String>,
+    due_date_confirmed_at: Option<String>,
+    description: Option<String>,
+    gross_minor: i64,
+    discount_minor: i64,
+    manual_advance_recovery_minor: Option<i64>,
+    status: String,
+    deleted_at: Option<String>,
+    created_at: Option<String>,
+    archived_at: Option<String>,
+    archived_by: Option<String>,
+    archive_reason: Option<String>,
+    voided_at: Option<String>,
+    voided_by: Option<String>,
+    void_reason: Option<String>,
+    reversal_of_id: Option<i64>,
+}
+
 /// The stored lifecycle-relevant columns of one certificate.
 struct CertificateLifecycleRow {
     contract_id: i64,
@@ -1235,6 +1264,18 @@ struct CertificateLifecycleRow {
     gross_minor: i64,
     discount_minor: i64,
     manual_advance_recovery_minor: Option<i64>,
+}
+
+struct SyncedCertificateStoredRow {
+    contract_id: i64,
+    status: String,
+    number: String,
+    date: String,
+    gross_minor: i64,
+    discount_minor: i64,
+    manual_advance_recovery_minor: Option<i64>,
+    deleted_at: Option<String>,
+    voided_at: Option<String>,
 }
 
 async fn load_certificate_lifecycle(
@@ -1531,6 +1572,290 @@ async fn update_certificate_transaction(
     let ids = contract_certificate_ids(&mut tx, stored.contract_id).await?;
     reconcile_certificates(&mut tx, &ids).await?;
     tx.commit().await.map_err(|e| e.to_string())
+}
+
+fn normalized_synced_certificate_status(status: &str) -> Result<&str, String> {
+    match status {
+        "DRAFT" | "SUBMITTED" | "APPROVED" => Ok(status),
+        "PAID" => Ok("APPROVED"),
+        _ => Err("INVALID_CERTIFICATE_STATUS".into()),
+    }
+}
+
+async fn load_synced_certificate_stored(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    certificate_id: i64,
+) -> Result<SyncedCertificateStoredRow, String> {
+    let row = sqlx::query(
+        "SELECT contract_id,status,number,date,gross_minor,discount_minor,
+                manual_advance_recovery_minor,deleted_at,voided_at
+         FROM payment_certificates WHERE id=?",
+    )
+    .bind(certificate_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "CERTIFICATE_NOT_FOUND".to_string())?;
+    Ok(SyncedCertificateStoredRow {
+        contract_id: row.try_get("contract_id").map_err(|e| e.to_string())?,
+        status: row.try_get("status").map_err(|e| e.to_string())?,
+        number: row.try_get("number").map_err(|e| e.to_string())?,
+        date: row.try_get("date").map_err(|e| e.to_string())?,
+        gross_minor: row.try_get("gross_minor").map_err(|e| e.to_string())?,
+        discount_minor: row.try_get("discount_minor").map_err(|e| e.to_string())?,
+        manual_advance_recovery_minor: row
+            .try_get("manual_advance_recovery_minor")
+            .map_err(|e| e.to_string())?,
+        deleted_at: row.try_get("deleted_at").map_err(|e| e.to_string())?,
+        voided_at: row.try_get("voided_at").map_err(|e| e.to_string())?,
+    })
+}
+
+fn synced_certificate_financials_changed(
+    stored: &SyncedCertificateStoredRow,
+    incoming: &SyncedCertificateInput,
+) -> bool {
+    stored.gross_minor != incoming.gross_minor
+        || stored.discount_minor != incoming.discount_minor
+        || stored.manual_advance_recovery_minor != incoming.manual_advance_recovery_minor
+        || stored.date != incoming.date
+        || stored.number != incoming.number
+}
+
+async fn apply_synced_certificate_transaction(
+    pool: &sqlx::SqlitePool,
+    input: SyncedCertificateInput,
+) -> Result<(), String> {
+    if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
+        return Err("SYNC_CERTIFICATE_IDENTITY_REQUIRED".into());
+    }
+    if input.discount_minor < 0
+        || input.gross_minor < 0
+        || input.discount_minor > input.gross_minor
+        || input.number.trim().is_empty()
+    {
+        return Err("INVALID_CERTIFICATE_AMOUNTS".into());
+    }
+    let target_status = normalized_synced_certificate_status(&input.status)?;
+    let mut tx = begin_immediate(pool).await?;
+    assert_contract_writable(&mut tx, input.contract_id).await?;
+
+    if let Some(certificate_id) = input.local_id {
+        let stored = load_synced_certificate_stored(&mut tx, certificate_id).await?;
+        if stored.contract_id != input.contract_id {
+            return Err("CERTIFICATE_CONTRACT_MISMATCH".into());
+        }
+        if (stored.deleted_at.is_some() || stored.voided_at.is_some())
+            && (input.deleted_at.is_none() || input.voided_at.is_none())
+        {
+            return Err("VOIDED_CERTIFICATE_CANNOT_BE_RESTORED_BY_SYNC".into());
+        }
+        if stored.status == "PAID" {
+            return Err("PAID_CERTIFICATE_IMMUTABLE".into());
+        }
+        if target_status == "DRAFT" && stored.status != "DRAFT" {
+            return Err("CERTIFICATE_LIFECYCLE_REGRESSION_DENIED".into());
+        }
+        if input.voided_at.is_some() || input.deleted_at.is_some() {
+            if valid_allocated_minor(&mut tx, certificate_id).await? > 0 {
+                return Err("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED".into());
+            }
+            let void_reason = input
+                .void_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .ok_or_else(|| "VOID_REASON_REQUIRED".to_string())?;
+            sqlx::query(
+                "UPDATE payment_certificates SET deleted_at=COALESCE(?,?), voided_at=COALESCE(?,?),
+                   voided_by=?, void_reason=?, archived_at=?, archived_by=?, archive_reason=?,
+                   reversal_of_id=?, sync_uuid=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+            )
+            .bind(&input.deleted_at)
+            .bind(&input.voided_at)
+            .bind(&input.voided_at)
+            .bind(&input.deleted_at)
+            .bind(&input.voided_by)
+            .bind(void_reason)
+            .bind(&input.archived_at)
+            .bind(&input.archived_by)
+            .bind(&input.archive_reason)
+            .bind(input.reversal_of_id)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(certificate_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else if stored.status == "DRAFT" {
+            let updated = sqlx::query(
+                "WITH chosen AS (
+                   SELECT r.* FROM contract_revisions r
+                   WHERE r.contract_id=? AND r.approved_at IS NOT NULL
+                     AND (r.effective_date <= ? OR r.revision_number=1)
+                   ORDER BY CASE WHEN r.effective_date <= ? THEN 0 ELSE 1 END,
+                            r.effective_date DESC, r.revision_number DESC LIMIT 1
+                 )
+                 UPDATE payment_certificates SET seq=?, number=?, date=?, submission_date=?,
+                   due_date_override=?, due_date_confirmed_at=?, description=?,
+                   gross_minor=?, discount_minor=?, manual_advance_recovery_minor=?, status=?,
+                   contract_revision_id=(SELECT id FROM chosen),
+                   contract_value_minor_snapshot=(SELECT contract_value_minor FROM chosen),
+                   vat_bp_snapshot=(SELECT vat_bp FROM chosen),
+                   retention_bp_snapshot=(SELECT retention_bp FROM chosen),
+                   withholding_bp_snapshot=(SELECT withholding_bp FROM chosen),
+                   advance_minor_snapshot=(SELECT advance_minor FROM chosen),
+                   advance_method_snapshot=(SELECT advance_recovery_method FROM chosen),
+                   payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
+                   currency_snapshot=(SELECT currency FROM chosen),
+                   fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen),
+                   archived_at=?, archived_by=?, archive_reason=?, reversal_of_id=?,
+                   sync_uuid=?, updated_at=?
+                 WHERE id=? AND status='DRAFT' AND deleted_at IS NULL AND voided_at IS NULL
+                   AND EXISTS (SELECT 1 FROM chosen)",
+            )
+            .bind(input.contract_id)
+            .bind(&input.date)
+            .bind(&input.date)
+            .bind(input.seq)
+            .bind(&input.number)
+            .bind(&input.date)
+            .bind(&input.submission_date)
+            .bind(&input.due_date_override)
+            .bind(&input.due_date_confirmed_at)
+            .bind(&input.description)
+            .bind(input.gross_minor)
+            .bind(input.discount_minor)
+            .bind(input.manual_advance_recovery_minor)
+            .bind(target_status)
+            .bind(&input.archived_at)
+            .bind(&input.archived_by)
+            .bind(&input.archive_reason)
+            .bind(input.reversal_of_id)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(certificate_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            if updated.rows_affected() != 1 {
+                return Err("CERTIFICATE_REVISION_BIND_FAILED".into());
+            }
+        } else {
+            if synced_certificate_financials_changed(&stored, &input) {
+                return Err("CERTIFICATE_FINANCIALS_IMMUTABLE".into());
+            }
+            let updated = sqlx::query(
+                "UPDATE payment_certificates SET submission_date=?, due_date_override=?,
+                   due_date_confirmed_at=COALESCE(due_date_confirmed_at,?), description=?,
+                   status=?, archived_at=?, archived_by=?, archive_reason=?, reversal_of_id=?,
+                   sync_uuid=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+            )
+            .bind(&input.submission_date)
+            .bind(&input.due_date_override)
+            .bind(&input.due_date_confirmed_at)
+            .bind(&input.description)
+            .bind(target_status)
+            .bind(&input.archived_at)
+            .bind(&input.archived_by)
+            .bind(&input.archive_reason)
+            .bind(input.reversal_of_id)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(certificate_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            if updated.rows_affected() != 1 {
+                return Err("CERTIFICATE_NOT_FOUND".into());
+            }
+        }
+    } else {
+        if input.deleted_at.is_some() || input.voided_at.is_some() {
+            return Err("SYNC_CERTIFICATE_VOID_INSERT_REJECTED".into());
+        }
+        let seq_exists: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM payment_certificates
+             WHERE contract_id=? AND seq=? AND deleted_at IS NULL AND voided_at IS NULL
+             LIMIT 1",
+        )
+        .bind(input.contract_id)
+        .bind(input.seq)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if seq_exists.is_some() {
+            return Err("DUPLICATE_CERTIFICATE_SEQUENCE".into());
+        }
+        let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
+        let inserted = sqlx::query(
+            "WITH chosen AS (
+               SELECT r.* FROM contract_revisions r
+               WHERE r.contract_id=? AND r.approved_at IS NOT NULL
+                 AND (r.effective_date <= ? OR r.revision_number=1)
+               ORDER BY CASE WHEN r.effective_date <= ? THEN 0 ELSE 1 END,
+                        r.effective_date DESC, r.revision_number DESC LIMIT 1
+             )
+             INSERT INTO payment_certificates (
+               contract_id, seq, number, date, submission_date, due_date_override,
+               due_date_confirmed_at, description, gross_minor, discount_minor,
+               manual_advance_recovery_minor, status, created_at, archived_at, archived_by,
+               archive_reason, reversal_of_id, sync_uuid, updated_at, contract_revision_id,
+               contract_value_minor_snapshot, vat_bp_snapshot, retention_bp_snapshot,
+               withholding_bp_snapshot, advance_minor_snapshot, advance_method_snapshot,
+               payment_terms_days_snapshot, currency_snapshot, fx_rate_micro_snapshot
+             )
+             SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+               r.id,r.contract_value_minor,r.vat_bp,r.retention_bp,r.withholding_bp,
+               r.advance_minor,r.advance_recovery_method,r.payment_terms_days,
+               r.currency,r.fx_rate_micro
+             FROM chosen r",
+        )
+        .bind(input.contract_id)
+        .bind(&input.date)
+        .bind(&input.date)
+        .bind(input.contract_id)
+        .bind(input.seq)
+        .bind(&input.number)
+        .bind(&input.date)
+        .bind(&input.submission_date)
+        .bind(&input.due_date_override)
+        .bind(&input.due_date_confirmed_at)
+        .bind(&input.description)
+        .bind(input.gross_minor)
+        .bind(input.discount_minor)
+        .bind(input.manual_advance_recovery_minor)
+        .bind(target_status)
+        .bind(created_at)
+        .bind(&input.archived_at)
+        .bind(&input.archived_by)
+        .bind(&input.archive_reason)
+        .bind(input.reversal_of_id)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if inserted.rows_affected() != 1 {
+            return Err("NO_APPROVED_CONTRACT_REVISION".into());
+        }
+    }
+
+    assert_contract_allocation_integrity(&mut tx, input.contract_id).await?;
+    let ids = contract_certificate_ids(&mut tx, input.contract_id).await?;
+    reconcile_certificates(&mut tx, &ids).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn apply_synced_certificate_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: SyncedCertificateInput,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    apply_synced_certificate_transaction(&pool, input).await
 }
 
 /// Move a certificate between workflow states. PAID is never a target — it is
@@ -5196,6 +5521,149 @@ mod financial_transaction_tests {
         .is_ok());
     }
 
+    async fn sync_certificate_fixture(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Sync Certificate Client');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+             VALUES('PRJ-SYNC-CERT','Sync Certificate',1,'EGP',1000000);
+             INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                 withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,valuation_mode)
+             VALUES(1,'C-SYNC-CERT',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30,'LUMP_SUM');
+             INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                 contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                 advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+             VALUES(1,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));
+             INSERT INTO payment_certificates(contract_id,seq,number,date,submission_date,gross_minor,
+                 discount_minor,status,contract_revision_id,contract_value_minor_snapshot,vat_bp_snapshot,
+                 retention_bp_snapshot,withholding_bp_snapshot,advance_minor_snapshot,advance_method_snapshot,
+                 payment_terms_days_snapshot,currency_snapshot,fx_rate_micro_snapshot,sync_uuid,updated_at)
+             VALUES(1,1,'PC-SYNC-CERT','2026-07-01','2026-07-01',10000,0,'APPROVED',
+                 1,100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,
+                 '11111111-1111-4111-8111-111111111111','2026-07-01T00:00:00.000Z');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar("SELECT id FROM payment_certificates WHERE number='PC-SYNC-CERT'")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn synced_certificate_input(
+        local_id: Option<i64>,
+        status: &str,
+        gross_minor: i64,
+    ) -> SyncedCertificateInput {
+        SyncedCertificateInput {
+            local_id,
+            sync_uuid: "11111111-1111-4111-8111-111111111111".into(),
+            updated_at: "2099-03-01T00:00:00.000Z".into(),
+            contract_id: 1,
+            seq: 1,
+            number: "PC-SYNC-CERT".into(),
+            date: "2026-07-01".into(),
+            submission_date: Some("2026-07-01".into()),
+            due_date_override: None,
+            due_date_confirmed_at: None,
+            description: None,
+            gross_minor,
+            discount_minor: 0,
+            manual_advance_recovery_minor: None,
+            status: status.into(),
+            deleted_at: None,
+            created_at: Some("2026-07-01T00:00:00.000Z".into()),
+            archived_at: None,
+            archived_by: None,
+            archive_reason: None,
+            voided_at: None,
+            voided_by: None,
+            void_reason: None,
+            reversal_of_id: None,
+        }
+    }
+
+    #[test]
+    fn synced_certificate_paid_status_is_derived_not_trusted() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let certificate_id = sync_certificate_fixture(&pool).await;
+            apply_synced_certificate_transaction(
+                &pool,
+                synced_certificate_input(Some(certificate_id), "PAID", 10_000),
+            )
+            .await
+            .unwrap();
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE id=?")
+                    .bind(certificate_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, "APPROVED");
+        });
+    }
+
+    #[test]
+    fn synced_certificate_insert_binds_snapshot_and_refuses_direct_paid() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            sqlx::raw_sql(
+                "INSERT INTO clients(name) VALUES('Sync Certificate Client');
+                 INSERT INTO projects(code,name,client_id,currency,fx_rate_micro)
+                 VALUES('PRJ-SYNC-CERT','Sync Certificate',1,'EGP',1000000);
+                 INSERT INTO contracts(project_id,number,value_minor,signed_date,vat_bp,retention_bp,
+                     withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,valuation_mode)
+                 VALUES(1,'C-SYNC-CERT',100000,'2026-01-01',0,0,0,0,'PROPORTIONAL',30,'LUMP_SUM');
+                 INSERT INTO contract_revisions(contract_id,revision_number,effective_date,
+                     contract_value_minor,vat_bp,retention_bp,withholding_bp,advance_minor,
+                     advance_recovery_method,payment_terms_days,currency,fx_rate_micro,reason,approved_at)
+                 VALUES(1,1,'2026-01-01',100000,0,0,0,0,'PROPORTIONAL',30,'EGP',1000000,'Initial',datetime('now'));",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            apply_synced_certificate_transaction(
+                &pool,
+                synced_certificate_input(None, "PAID", 10_000),
+            )
+            .await
+            .unwrap();
+
+            let (status, snapshot): (String, i64) = sqlx::query_as(
+                "SELECT status,contract_value_minor_snapshot FROM payment_certificates",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(status, "APPROVED");
+            assert_eq!(snapshot, 100_000);
+        });
+    }
+
+    #[test]
+    fn synced_certificate_rejects_immutable_financial_edit() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let certificate_id = sync_certificate_fixture(&pool).await;
+            let error = apply_synced_certificate_transaction(
+                &pool,
+                synced_certificate_input(Some(certificate_id), "APPROVED", 20_000),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, "CERTIFICATE_FINANCIALS_IMMUTABLE");
+            let gross: i64 =
+                sqlx::query_scalar("SELECT gross_minor FROM payment_certificates WHERE id=?")
+                    .bind(certificate_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(gross, 10_000);
+        });
+    }
+
     #[test]
     fn sync_mutation_and_audit_source_commit_or_roll_back_together() {
         tauri::async_runtime::block_on(async {
@@ -7007,6 +7475,7 @@ pub fn run() {
             reconcile_certificates_atomic,
             create_certificate_atomic,
             update_certificate_atomic,
+            apply_synced_certificate_atomic,
             transition_certificate_atomic,
             void_certificate_atomic,
             create_person_payment_atomic,

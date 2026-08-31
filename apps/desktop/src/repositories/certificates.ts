@@ -134,6 +134,37 @@ function toCertificateCommandInput(input: CertificateInput) {
   };
 }
 
+export interface SyncedCertificateInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  contractId: number;
+  seq: number;
+  number: string;
+  date: string;
+  submissionDate: string | null;
+  dueDateOverride: string | null;
+  dueDateConfirmedAt: string | null;
+  description: string | null;
+  grossMinor: number;
+  discountMinor: number;
+  manualAdvanceRecoveryMinor: number | null;
+  status: CertificateStatus;
+  deletedAt: string | null;
+  createdAt: string | null;
+  archivedAt: string | null;
+  archivedBy: string | null;
+  archiveReason: string | null;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+  reversalOfId: number | null;
+}
+
+function normalizeSyncedCertificateStatus(status: CertificateStatus): Exclude<CertificateStatus, "PAID"> {
+  return status === "PAID" ? "APPROVED" : status;
+}
+
 /** Live certificate ids of a contract, for the whole-contract reconcile (test double). */
 async function contractCertificateIdsDouble(contractId: number): Promise<number[]> {
   const rows = await select<{ id: number }>(
@@ -182,6 +213,134 @@ async function assertContractAllocationIntegrityDouble(contractId: number): Prom
 async function reconcileContractDouble(contractId: number): Promise<void> {
   const { reconcileWithinTransaction } = await import("./payments");
   await reconcileWithinTransaction(await contractCertificateIdsDouble(contractId));
+}
+
+export function applySyncedCertificate(input: SyncedCertificateInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_certificate_atomic", { input }, () => applySyncedCertificateDouble(input));
+}
+
+async function applySyncedCertificateDouble(input: SyncedCertificateInput): Promise<void> {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_CERTIFICATE_IDENTITY_REQUIRED");
+  if (input.discountMinor < 0 || input.grossMinor < 0 || input.discountMinor > input.grossMinor || !input.number.trim()) {
+    throw new Error("INVALID_CERTIFICATE_AMOUNTS");
+  }
+  const targetStatus = normalizeSyncedCertificateStatus(input.status);
+  await assertContractWritableDouble(input.contractId);
+  if (input.localId !== null) {
+    const stored = await selectOne<{
+      contractId: number;
+      status: CertificateStatus;
+      number: string;
+      date: string;
+      grossMinor: number;
+      discountMinor: number;
+      manualAdvanceRecoveryMinor: number | null;
+      deletedAt: string | null;
+      voidedAt: string | null;
+    }>(
+      `SELECT contract_id AS contractId,status,number,date,gross_minor AS grossMinor,
+              discount_minor AS discountMinor,manual_advance_recovery_minor AS manualAdvanceRecoveryMinor,
+              deleted_at AS deletedAt,voided_at AS voidedAt
+       FROM payment_certificates WHERE id=$1`,
+      [input.localId],
+    );
+    if (!stored) throw new Error("CERTIFICATE_NOT_FOUND");
+    if (stored.contractId !== input.contractId) throw new Error("CERTIFICATE_CONTRACT_MISMATCH");
+    if ((stored.deletedAt !== null || stored.voidedAt !== null) && (input.deletedAt === null || input.voidedAt === null)) {
+      throw new Error("VOIDED_CERTIFICATE_CANNOT_BE_RESTORED_BY_SYNC");
+    }
+    if (stored.status === "PAID") throw new Error("PAID_CERTIFICATE_IMMUTABLE");
+    if (targetStatus === "DRAFT" && stored.status !== "DRAFT") throw new Error("CERTIFICATE_LIFECYCLE_REGRESSION_DENIED");
+    if (input.voidedAt !== null || input.deletedAt !== null) {
+      const { validAllocatedMinor } = await import("./payments");
+      if ((await validAllocatedMinor(input.localId)) > 0) throw new Error("ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED");
+      if (!input.voidReason?.trim()) throw new Error("VOID_REASON_REQUIRED");
+      await execute(
+        `UPDATE payment_certificates SET deleted_at=COALESCE($1,$2), voided_at=COALESCE($2,$1),
+           voided_by=$3, void_reason=$4, archived_at=$5, archived_by=$6, archive_reason=$7,
+           reversal_of_id=$8, sync_uuid=$9, updated_at=$10
+         WHERE id=$11 AND deleted_at IS NULL AND voided_at IS NULL`,
+        [input.deletedAt, input.voidedAt, input.voidedBy, input.voidReason.trim(), input.archivedAt,
+         input.archivedBy, input.archiveReason, input.reversalOfId, input.syncUuid, input.updatedAt, input.localId],
+      );
+    } else if (stored.status === "DRAFT") {
+      const updated = await execute(
+        `WITH chosen AS (
+           SELECT r.* FROM contract_revisions r
+           WHERE r.contract_id=$1 AND r.approved_at IS NOT NULL AND (r.effective_date <= $2 OR r.revision_number=1)
+           ORDER BY CASE WHEN r.effective_date <= $2 THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1
+         )
+         UPDATE payment_certificates SET seq=$3, number=$4, date=$5, submission_date=$6,
+           due_date_override=$7, due_date_confirmed_at=$8, description=$9, gross_minor=$10,
+           discount_minor=$11, manual_advance_recovery_minor=$12, status=$13,
+           contract_revision_id=(SELECT id FROM chosen), contract_value_minor_snapshot=(SELECT contract_value_minor FROM chosen),
+           vat_bp_snapshot=(SELECT vat_bp FROM chosen), retention_bp_snapshot=(SELECT retention_bp FROM chosen),
+           withholding_bp_snapshot=(SELECT withholding_bp FROM chosen), advance_minor_snapshot=(SELECT advance_minor FROM chosen),
+           advance_method_snapshot=(SELECT advance_recovery_method FROM chosen), payment_terms_days_snapshot=(SELECT payment_terms_days FROM chosen),
+           currency_snapshot=(SELECT currency FROM chosen), fx_rate_micro_snapshot=(SELECT fx_rate_micro FROM chosen),
+           archived_at=$14, archived_by=$15, archive_reason=$16, reversal_of_id=$17, sync_uuid=$18, updated_at=$19
+         WHERE id=$20 AND status='DRAFT' AND deleted_at IS NULL AND voided_at IS NULL AND EXISTS (SELECT 1 FROM chosen)`,
+        [input.contractId, input.date, input.seq, input.number, input.date, input.submissionDate,
+         input.dueDateOverride, input.dueDateConfirmedAt, input.description, input.grossMinor,
+         input.discountMinor, input.manualAdvanceRecoveryMinor, targetStatus, input.archivedAt,
+         input.archivedBy, input.archiveReason, input.reversalOfId, input.syncUuid, input.updatedAt, input.localId],
+      );
+      if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_REVISION_BIND_FAILED");
+    } else {
+      const financialsChanged = stored.grossMinor !== input.grossMinor ||
+        stored.discountMinor !== input.discountMinor ||
+        (stored.manualAdvanceRecoveryMinor ?? null) !== input.manualAdvanceRecoveryMinor ||
+        stored.date !== input.date ||
+        stored.number !== input.number;
+      if (financialsChanged) throw new Error("CERTIFICATE_FINANCIALS_IMMUTABLE");
+      const updated = await execute(
+        `UPDATE payment_certificates SET submission_date=$1, due_date_override=$2,
+           due_date_confirmed_at=COALESCE(due_date_confirmed_at,$3), description=$4,
+           status=$5, archived_at=$6, archived_by=$7, archive_reason=$8, reversal_of_id=$9,
+           sync_uuid=$10, updated_at=$11
+         WHERE id=$12 AND deleted_at IS NULL AND voided_at IS NULL`,
+        [input.submissionDate, input.dueDateOverride, input.dueDateConfirmedAt, input.description,
+         targetStatus, input.archivedAt, input.archivedBy, input.archiveReason, input.reversalOfId,
+         input.syncUuid, input.updatedAt, input.localId],
+      );
+      if (updated.rowsAffected !== 1) throw new Error("CERTIFICATE_NOT_FOUND");
+    }
+  } else {
+    if (input.deletedAt !== null || input.voidedAt !== null) throw new Error("SYNC_CERTIFICATE_VOID_INSERT_REJECTED");
+    const seq = await selectOne<{ id: number }>(
+      "SELECT id FROM payment_certificates WHERE contract_id=$1 AND seq=$2 AND deleted_at IS NULL AND voided_at IS NULL LIMIT 1",
+      [input.contractId, input.seq],
+    );
+    if (seq) throw new Error("DUPLICATE_CERTIFICATE_SEQUENCE");
+    const createdAt = input.createdAt ?? input.updatedAt;
+    const inserted = await execute(
+      `WITH chosen AS (
+         SELECT r.* FROM contract_revisions r
+         WHERE r.contract_id=$1 AND r.approved_at IS NOT NULL AND (r.effective_date <= $2 OR r.revision_number=1)
+         ORDER BY CASE WHEN r.effective_date <= $2 THEN 0 ELSE 1 END, r.effective_date DESC, r.revision_number DESC LIMIT 1
+       )
+       INSERT INTO payment_certificates (
+         contract_id,seq,number,date,submission_date,due_date_override,due_date_confirmed_at,
+         description,gross_minor,discount_minor,manual_advance_recovery_minor,status,created_at,
+         archived_at,archived_by,archive_reason,reversal_of_id,sync_uuid,updated_at,
+         contract_revision_id,contract_value_minor_snapshot,vat_bp_snapshot,retention_bp_snapshot,
+         withholding_bp_snapshot,advance_minor_snapshot,advance_method_snapshot,payment_terms_days_snapshot,
+         currency_snapshot,fx_rate_micro_snapshot
+       )
+       SELECT $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+         r.id,r.contract_value_minor,r.vat_bp,r.retention_bp,r.withholding_bp,r.advance_minor,
+         r.advance_recovery_method,r.payment_terms_days,r.currency,r.fx_rate_micro
+       FROM chosen r`,
+      [input.contractId, input.date, input.contractId, input.seq, input.number, input.date,
+       input.submissionDate, input.dueDateOverride, input.dueDateConfirmedAt, input.description,
+       input.grossMinor, input.discountMinor, input.manualAdvanceRecoveryMinor, targetStatus,
+       createdAt, input.archivedAt, input.archivedBy, input.archiveReason, input.reversalOfId,
+       input.syncUuid, input.updatedAt],
+    );
+    if (inserted.rowsAffected !== 1) throw new Error("NO_APPROVED_CONTRACT_REVISION");
+  }
+  await assertContractAllocationIntegrityDouble(input.contractId);
+  await reconcileContractDouble(input.contractId);
 }
 
 /**
