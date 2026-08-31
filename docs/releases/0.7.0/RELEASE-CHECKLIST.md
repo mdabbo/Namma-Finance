@@ -89,9 +89,15 @@ latest run before merging.
 - [ ] `playwright-report` downloaded and reviewed — same authentication
       limitation.
 - [ ] The four checks are configured as **required status checks** on `main`
-      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge. Branch
-      protection could not be read anonymously (401); confirm this in repository
-      settings before relying on it to block a merge.
+      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge.
+      **Verified NOT configured.** The public branches API reports `main` as
+      `protected: false` with
+      `required_status_checks.enforcement_level: "off"` and an empty check
+      list. There is no branch protection rule on `main` at all: nothing blocks
+      a direct push, and nothing prevents merging a pull request whose gates are
+      red. The green gate on this release was **discipline, not enforcement** —
+      it was chosen, not required. Configure this in Settings → Branches before
+      relying on CI to protect `main`.
 
 ### Merge record
 
@@ -222,9 +228,12 @@ Outstanding before any distribution:
   27, and completes onboarding. No automated test drives the packaged binary, so
   nothing has verified the installed application.
 - **Complete the two-PC sync acceptance test.**
-- **Confirm the four checks are required status checks on `main`**, so a future
-  red gate actually blocks a merge. This was never verified — branch protection
-  could not be read anonymously.
+- **Configure the four checks as required status checks on `main`.** They are
+  verified *not* configured today: `main` reports `protected: false` with
+  enforcement `off`. Every gate this release passed was voluntary, and the next
+  change can reach `main` with a red suite or no suite at all. This is the
+  single cheapest durable improvement available and it is a settings change, not
+  code.
 
 Anyone pulling `main` must delete and recreate their development database; there
 is no upgrade path from the retired migration chain. See `MIGRATION-NOTES.md`.
