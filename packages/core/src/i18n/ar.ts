@@ -860,6 +860,12 @@ export const ar: Dictionary = {
     advanced: "متقدم",
     securityTitle: "الأمان",
     sectionNavigation: "أقسام الإعدادات",
+    groups: {
+      general: "عام",
+      finance: "الشؤون المالية",
+      data: "البيانات",
+      system: "النظام",
+    },
     companyName: "اسم الشركة",
     companyAddress: "العنوان",
     companyPhone: "الهاتف",

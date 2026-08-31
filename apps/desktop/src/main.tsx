@@ -26,7 +26,6 @@ import { TimePage } from "./features/time/TimePage";
 import { ReportsPage } from "./features/reports/ReportsPage";
 import { CashflowView } from "./features/reports/CashflowView";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { AuditPage } from "./features/audit/AuditPage";
 import { finalizePendingRestoreAudit } from "./repositories/audit";
 import { getRuntimeReleaseInfo } from "./lib/db";
 
@@ -62,7 +61,8 @@ const router = createHashRouter([
       { path: "reports", element: <Navigate to="/reports/profitability" replace /> },
       { path: "reports/:view", element: <ReportsPage /> },
       { path: "settings", element: <Navigate to="/settings/general" replace /> },
-      { path: "settings/audit", element: <AuditPage /> },
+      // Audit is a settings section like any other, so it renders inside
+      // SettingsPage and keeps the single Settings navigator on screen.
       { path: "settings/:section", element: <SettingsPage /> },
 
       // Milestone 1 compatibility: preserve every pre-redesign route.

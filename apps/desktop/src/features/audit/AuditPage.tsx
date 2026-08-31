@@ -37,7 +37,17 @@ function HistoryPanel({ record, close }: { record: AuditRecord; close: () => voi
   );
 }
 
-export function AuditPage() {
+/**
+ * The audit log as a Settings section: SettingsPage owns the heading and the
+ * one Settings navigator, so this renders the body only. Rendering it as a
+ * standalone page would leave /settings/audit with no settings navigation at
+ * all, now that the duplicated global row is gone.
+ */
+export function AuditSection() {
+  return <AuditPage embedded />;
+}
+
+export function AuditPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const [filters, setFilters] = useState<AuditFilters>({});
   const [selected, setSelected] = useState<AuditRecord | null>(null);
@@ -45,10 +55,12 @@ export function AuditPage() {
   const set = (key: keyof AuditFilters, value: string) => setFilters((current) => ({ ...current, [key]: value || undefined }));
   return (
     <div>
-      <PageHeader
-        title={t("audit.title")}
-        meta={<FileClock className="text-brand-600" size={20} aria-hidden="true" />}
-      />
+      {!embedded && (
+        <PageHeader
+          title={t("audit.title")}
+          meta={<FileClock className="text-brand-600" size={20} aria-hidden="true" />}
+        />
+      )}
       <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-5 dark:border-slate-800 dark:bg-slate-900">
         <DateInput value={filters.dateFrom ?? ""} onChange={(e) => set("dateFrom",e.target.value)} title={t("audit.dateFrom")} />
         <DateInput value={filters.dateTo ?? ""} onChange={(e) => set("dateTo",e.target.value)} title={t("audit.dateTo")} />

@@ -813,6 +813,12 @@ export const en = {
     advanced: "Advanced",
     securityTitle: "Security",
     sectionNavigation: "Settings sections",
+    groups: {
+      general: "General",
+      finance: "Finance",
+      data: "Data",
+      system: "System",
+    },
     companyName: "Company name",
     companyAddress: "Address",
     companyPhone: "Phone",

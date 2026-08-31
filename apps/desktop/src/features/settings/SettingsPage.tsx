@@ -21,8 +21,11 @@ import { loadReleaseInfo } from "../../lib/release";
 import {
   SETTINGS_SECTIONS,
   canOpenSettingsSection,
-  settingsSectionsForRole,
+  firstSettingsSectionForRole,
+  settingsNavigationGroups,
+  settingsSectionPath,
 } from "../../app/navigation";
+import { AuditSection } from "../audit/AuditPage";
 import { ImportWizard } from "../reports/ImportWizard";
 import { PaymentIntegrityView } from "../reports/PaymentIntegrityView";
 
@@ -43,40 +46,60 @@ export function SettingsPage() {
   const [confirmRestore, setConfirmRestore] = useState(false);
   const role = useRole();
   const params = useParams<{ section: string }>();
-  const allowed = settingsSectionsForRole(role);
-  const section = params.section ?? "general";
+  const groups = settingsNavigationGroups(role);
+  const section = params.section ?? firstSettingsSectionForRole(role);
 
   // The URL is authoritative, so it is checked against the same role list that
   // builds the menu: a hand-typed or bookmarked section an engineer may not
-  // open lands on their own preferences instead of rendering it.
-  if (!params.section) return <Navigate to="/settings/general" replace />;
-  if (!canOpenSettingsSection(role, section)) return <Navigate to="/settings/general" replace />;
+  // open lands on their first permitted section instead of rendering it.
+  const fallback = settingsSectionPath(firstSettingsSectionForRole(role));
+  if (!params.section) return <Navigate to={fallback} replace />;
+  if (!canOpenSettingsSection(role, section)) return <Navigate to={fallback} replace />;
 
   const activeLabel = SETTINGS_SECTIONS.find((item) => item.id === section)?.labelKey;
 
   return (
-    <div className="max-w-4xl">
-      <PageHeader title={activeLabel ? t(activeLabel) : t("settings.title")} />
-
-      {/* One section at a time, each with its own address. */}
-      <nav aria-label={t("settings.sectionNavigation")} className="mb-4 flex flex-wrap gap-1">
-        {allowed.map((item) => (
-          <NavLink
-            key={item.id}
-            to={item.id === "audit" ? "/settings/audit" : `/settings/${item.id}`}
-            className={({ isActive }) => cx(
-              "rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
-              isActive
-                ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
-                : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
-            )}
-          >
-            {t(item.labelKey)}
-          </NavLink>
-        ))}
+    // A vertical sidebar beside the content: the only Settings navigation in
+    // the app, and the one place its sections are listed. It stacks above the
+    // content on narrow viewports so 1366×768 keeps both usable.
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <nav
+        aria-label={t("settings.sectionNavigation")}
+        className="w-full shrink-0 lg:sticky lg:top-4 lg:w-56"
+      >
+        <ul className="space-y-4">
+          {groups.map((group) => (
+            <li key={group.id}>
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                {t(group.labelKey)}
+              </p>
+              <ul className="space-y-0.5">
+                {group.sections.map((item) => (
+                  <li key={item.id}>
+                    <NavLink
+                      to={settingsSectionPath(item.id)}
+                      className={({ isActive }) => cx(
+                        "block rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
+                        isActive
+                          ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
+                      )}
+                    >
+                      {t(item.labelKey)}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
       </nav>
 
-      <div className="space-y-4">
+      <div className="min-w-0 flex-1">
+      <PageHeader title={activeLabel ? t(activeLabel) : t("settings.title")} />
+
+      <div className="max-w-4xl space-y-4">
         {section === "company" && (
           <Card className="p-5">
             <SectionTitle icon={<Building2 size={16} />} title={t("settings.companyProfile")} />
@@ -307,6 +330,8 @@ export function SettingsPage() {
 
         {section === "data-tools" && <DataToolsSection />}
 
+        {section === "audit" && <AuditSection />}
+
         {section === "security" && role === "ADMIN" && <UsersSection />}
 
         {section === "backup" && (
@@ -373,6 +398,7 @@ export function SettingsPage() {
       )}
       {/* keep i18n import referenced for language-sensitive rerender */}
       <span className="hidden">{i18n.language}</span>
+      </div>
     </div>
   );
 }

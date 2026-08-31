@@ -62,7 +62,9 @@ describe("Milestone 1 navigation", () => {
     expect(activeSecondaryItemId("/projects/clients/7", SECONDARY_NAVIGATION.projects)).toBe("clients");
     expect(activeSecondaryItemId("/projects/7", SECONDARY_NAVIGATION.projects)).toBe("projects");
     expect(activeSecondaryItemId("/team/people/7", SECONDARY_NAVIGATION.team)).toBe("people");
-    expect(activeSecondaryItemId("/settings/audit", SECONDARY_NAVIGATION.settings)).toBe("audit");
+    // Settings has no secondary navigation any more (Milestone 5): its sections
+    // are listed once, by the sidebar inside SettingsPage.
+    expect(activeSecondaryItemId("/settings/audit", SECONDARY_NAVIGATION.settings)).toBeNull();
   });
 
   it("gives finance a full secondary workspace with an exact overview entry", () => {

@@ -57,6 +57,28 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "audit", labelKey: "nav.audit", full: true },
 ] as const;
 
+/**
+ * Settings sections in named groups.
+ *
+ * Eleven flat entries recreated the tab overload the redesign set out to
+ * remove, so the sidebar groups them. The groups are presentation only: every
+ * section keeps its own URL, and membership references SETTINGS_SECTIONS by id
+ * so a section can never appear in the menu without an authorization rule (or
+ * vice versa) — `settingsNavigationGroups` asserts the two stay in step.
+ */
+export interface SettingsGroup {
+  id: string;
+  labelKey: string;
+  sectionIds: readonly string[];
+}
+
+export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
+  { id: "general", labelKey: "settings.groups.general", sectionIds: ["general", "company"] },
+  { id: "finance", labelKey: "settings.groups.finance", sectionIds: ["finance", "numbering", "categories"] },
+  { id: "data", labelKey: "settings.groups.data", sectionIds: ["backup", "sync", "data-tools", "audit"] },
+  { id: "system", labelKey: "settings.groups.system", sectionIds: ["security", "advanced"] },
+] as const;
+
 /** Sections a role may open. Engineers keep personal preferences only. */
 export function settingsSectionsForRole(role: string): readonly SettingsSection[] {
   return SETTINGS_SECTIONS.filter((section) => {
@@ -68,6 +90,38 @@ export function settingsSectionsForRole(role: string): readonly SettingsSection[
 
 export function canOpenSettingsSection(role: string, sectionId: string): boolean {
   return settingsSectionsForRole(role).some((section) => section.id === sectionId);
+}
+
+/** The canonical URL of a settings section. */
+export function settingsSectionPath(sectionId: string): string {
+  return `/settings/${sectionId}`;
+}
+
+export interface SettingsNavigationGroup {
+  id: string;
+  labelKey: string;
+  sections: readonly SettingsSection[];
+}
+
+/**
+ * The grouped menu for a role: the same authorization filter the route guard
+ * uses, arranged into groups. Groups with nothing visible are dropped, so a
+ * role never sees an empty heading.
+ */
+export function settingsNavigationGroups(role: string): readonly SettingsNavigationGroup[] {
+  const allowed = settingsSectionsForRole(role);
+  const byId = new Map(allowed.map((section) => [section.id, section]));
+  return SETTINGS_GROUPS.flatMap((group) => {
+    const sections = group.sectionIds
+      .map((id) => byId.get(id))
+      .filter((section): section is SettingsSection => section !== undefined);
+    return sections.length === 0 ? [] : [{ id: group.id, labelKey: group.labelKey, sections }];
+  });
+}
+
+/** The first section a role may open; where a bare or forbidden URL lands. */
+export function firstSettingsSectionForRole(role: string): string {
+  return settingsSectionsForRole(role)[0]?.id ?? "general";
 }
 
 export const SECONDARY_NAVIGATION: Readonly<Record<NavigationSectionId, readonly SecondaryNavigationItem[]>> = {
@@ -98,11 +152,10 @@ export const SECONDARY_NAVIGATION: Readonly<Record<NavigationSectionId, readonly
     { id: "cash-flow", labelKey: "reports.cashflow", to: "/finance/cash-flow" },
     { id: "export", labelKey: "reports.center", to: "/reports/export" },
   ],
-  settings: SETTINGS_SECTIONS.map((section) => ({
-    id: section.id,
-    labelKey: section.labelKey,
-    to: section.id === "audit" ? "/settings/audit" : `/settings/${section.id}`,
-  })),
+  // Settings deliberately has NO global secondary navigation. Its sections are
+  // listed once, by the sidebar inside SettingsPage: rendering them here too
+  // put two navigation rows on screen showing the same eleven destinations.
+  settings: [],
 };
 
 const LEGACY_SECTION_PREFIXES: ReadonlyArray<readonly [string, NavigationSectionId]> = [
