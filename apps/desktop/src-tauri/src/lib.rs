@@ -283,6 +283,40 @@ struct AllocationCommandInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SyncedPaymentInput {
+    local_id: Option<i64>,
+    sync_uuid: String,
+    updated_at: String,
+    contract_id: i64,
+    kind: String,
+    number: String,
+    date: String,
+    amount_minor: i64,
+    method: String,
+    bank: Option<String>,
+    reference: Option<String>,
+    notes: Option<String>,
+    deleted_at: Option<String>,
+    created_at: Option<String>,
+    voided_at: Option<String>,
+    voided_by: Option<String>,
+    void_reason: Option<String>,
+    reversal_of_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncedAllocationInput {
+    local_id: Option<i64>,
+    sync_uuid: String,
+    updated_at: String,
+    payment_id: i64,
+    certificate_id: i64,
+    amount_minor: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PersonPaymentCommandInput {
     assignment_id: i64,
     date: String,
@@ -1114,6 +1148,358 @@ async fn replace_payment_transaction(
     Ok(())
 }
 
+async fn assert_payment_contract_writable(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    contract_id: i64,
+) -> Result<(), String> {
+    assert_contract_writable(tx, contract_id).await
+}
+
+async fn apply_synced_payment_transaction(
+    pool: &sqlx::SqlitePool,
+    input: SyncedPaymentInput,
+) -> Result<(), String> {
+    let payment_input = PaymentCommandInput {
+        contract_id: input.contract_id,
+        kind: input.kind.clone(),
+        number: input.number.clone(),
+        date: input.date.clone(),
+        amount_minor: input.amount_minor,
+        method: input.method.clone(),
+        bank: input.bank.clone(),
+        reference: input.reference.clone(),
+        notes: input.notes.clone(),
+    };
+    validate_payment_input(&payment_input, &[])?;
+    if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
+        return Err("SYNC_PAYMENT_IDENTITY_REQUIRED".into());
+    }
+
+    let mut tx = begin_immediate(pool).await?;
+    assert_payment_contract_writable(&mut tx, input.contract_id).await?;
+    if let Some(payment_id) = input.local_id {
+        let row = sqlx::query("SELECT contract_id,deleted_at,voided_at FROM payments WHERE id=?")
+            .bind(payment_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "PAYMENT_NOT_FOUND".to_string())?;
+        let stored_contract: i64 = row.try_get("contract_id").map_err(|e| e.to_string())?;
+        if stored_contract != input.contract_id {
+            return Err("PAYMENT_CONTRACT_IMMUTABLE".into());
+        }
+        let stored_deleted: Option<String> =
+            row.try_get("deleted_at").map_err(|e| e.to_string())?;
+        let stored_voided: Option<String> = row.try_get("voided_at").map_err(|e| e.to_string())?;
+        if (stored_deleted.is_some() || stored_voided.is_some())
+            && (input.deleted_at.is_none() || input.voided_at.is_none())
+        {
+            return Err("VOIDED_PAYMENT_CANNOT_BE_RESTORED_BY_SYNC".into());
+        }
+        let touched = allocated_certificate_ids(&mut tx, payment_id).await?;
+        if input.deleted_at.is_some() || input.voided_at.is_some() {
+            let reason = input
+                .void_reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("Remote payment voided");
+            sqlx::query(
+                "UPDATE payments SET deleted_at=COALESCE(?,?), voided_at=COALESCE(?,?),
+                   voided_by=?, void_reason=?, sync_uuid=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+            )
+            .bind(&input.deleted_at)
+            .bind(&input.voided_at)
+            .bind(&input.voided_at)
+            .bind(&input.deleted_at)
+            .bind(&input.voided_by)
+            .bind(reason)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(payment_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            let allocated_sum: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(amount_minor),0) FROM payment_certificate_allocations WHERE payment_id=?",
+            )
+            .bind(payment_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+            if allocated_sum > input.amount_minor {
+                sqlx::query("DELETE FROM payment_certificate_allocations WHERE payment_id=?")
+                    .bind(payment_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            sqlx::query(
+                "UPDATE payments SET kind=?, number=?, date=?, amount_minor=?, method=?, bank=?,
+                   reference=?, notes=?, deleted_at=NULL, voided_at=NULL, voided_by=NULL,
+                   void_reason=NULL, reversal_of_id=?, sync_uuid=?, updated_at=?
+                 WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL",
+            )
+            .bind(&input.kind)
+            .bind(&input.number)
+            .bind(&input.date)
+            .bind(input.amount_minor)
+            .bind(&input.method)
+            .bind(&input.bank)
+            .bind(&input.reference)
+            .bind(&input.notes)
+            .bind(input.reversal_of_id)
+            .bind(&input.sync_uuid)
+            .bind(&input.updated_at)
+            .bind(payment_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        reconcile_certificates(&mut tx, &touched).await?;
+    } else {
+        if input.deleted_at.is_some() || input.voided_at.is_some() {
+            return Err("SYNC_PAYMENT_VOID_INSERT_REJECTED".into());
+        }
+        let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
+        sqlx::query(
+            "INSERT INTO payments (contract_id,kind,number,date,amount_minor,method,bank,reference,
+               notes,created_at,reversal_of_id,sync_uuid,updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(input.contract_id)
+        .bind(&input.kind)
+        .bind(&input.number)
+        .bind(&input.date)
+        .bind(input.amount_minor)
+        .bind(&input.method)
+        .bind(&input.bank)
+        .bind(&input.reference)
+        .bind(&input.notes)
+        .bind(created_at)
+        .bind(input.reversal_of_id)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+async fn validate_synced_allocation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payment_id: i64,
+    certificate_id: i64,
+    amount_minor: i64,
+    existing_allocation_id: Option<i64>,
+) -> Result<(), String> {
+    if amount_minor <= 0 {
+        return Err("INVALID_ALLOCATION_AMOUNT".into());
+    }
+    let payment = sqlx::query(
+        "SELECT p.contract_id,p.kind,c.archived_at AS contract_archived_at,pr.archived_at AS project_archived_at
+         FROM payments p
+         JOIN contracts c ON c.id=p.contract_id
+         JOIN projects pr ON pr.id=c.project_id
+         WHERE p.id=? AND p.deleted_at IS NULL AND p.voided_at IS NULL",
+    )
+    .bind(payment_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "ALLOCATION_REQUIRES_ACTIVE_CERTIFICATE_PAYMENT".to_string())?;
+    let payment_contract: i64 = payment.try_get("contract_id").map_err(|e| e.to_string())?;
+    let payment_kind: String = payment.try_get("kind").map_err(|e| e.to_string())?;
+    let contract_archived: Option<String> = payment
+        .try_get("contract_archived_at")
+        .map_err(|e| e.to_string())?;
+    let project_archived: Option<String> = payment
+        .try_get("project_archived_at")
+        .map_err(|e| e.to_string())?;
+    if payment_kind != "CERTIFICATE" || contract_archived.is_some() || project_archived.is_some() {
+        return Err("ALLOCATION_REQUIRES_ACTIVE_CERTIFICATE_PAYMENT".into());
+    }
+
+    let certificate = sqlx::query(
+        "SELECT contract_id,status FROM payment_certificates
+         WHERE id=? AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL",
+    )
+    .bind(certificate_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "ALLOCATION_REQUIRES_BILLABLE_CERTIFICATE".to_string())?;
+    let certificate_contract: i64 = certificate
+        .try_get("contract_id")
+        .map_err(|e| e.to_string())?;
+    let certificate_status: String = certificate.try_get("status").map_err(|e| e.to_string())?;
+    if certificate_contract != payment_contract {
+        return Err("ALLOCATION_CONTRACT_MISMATCH".into());
+    }
+    if certificate_status == "DRAFT" {
+        return Err("ALLOCATION_REQUIRES_BILLABLE_CERTIFICATE".into());
+    }
+
+    let payment_total: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount_minor),0) FROM payment_certificate_allocations
+         WHERE payment_id=? AND (? IS NULL OR id<>?)",
+    )
+    .bind(payment_id)
+    .bind(existing_allocation_id)
+    .bind(existing_allocation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    let payment_amount: i64 = sqlx::query_scalar("SELECT amount_minor FROM payments WHERE id=?")
+        .bind(payment_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    if payment_total.saturating_add(amount_minor) > payment_amount {
+        return Err("ALLOCATIONS_EXCEED_PAYMENT".into());
+    }
+
+    let payables = load_contract_payables(tx, payment_contract).await?;
+    let payable = payables
+        .iter()
+        .find(|payable| payable.id == certificate_id)
+        .ok_or_else(|| "CERTIFICATE_NOT_FOUND_OR_CONTRACT_MISMATCH".to_string())?;
+    let allocated: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(a.amount_minor),0) FROM payment_certificate_allocations a
+         JOIN payments p ON p.id=a.payment_id
+         WHERE a.certificate_id=? AND p.kind='CERTIFICATE'
+           AND p.deleted_at IS NULL AND p.voided_at IS NULL
+           AND (? IS NULL OR a.id<>?)",
+    )
+    .bind(certificate_id)
+    .bind(existing_allocation_id)
+    .bind(existing_allocation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if amount_minor > payable.net_payable_minor.saturating_sub(allocated).max(0) {
+        return Err("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID".into());
+    }
+    Ok(())
+}
+
+async fn apply_synced_allocation_transaction(
+    pool: &sqlx::SqlitePool,
+    input: SyncedAllocationInput,
+) -> Result<(), String> {
+    if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
+        return Err("SYNC_ALLOCATION_IDENTITY_REQUIRED".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    let previous_certificate = if let Some(id) = input.local_id {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT certificate_id FROM payment_certificate_allocations WHERE id=?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        None
+    };
+    validate_synced_allocation(
+        &mut tx,
+        input.payment_id,
+        input.certificate_id,
+        input.amount_minor,
+        input.local_id,
+    )
+    .await?;
+    if let Some(id) = input.local_id {
+        sqlx::query(
+            "UPDATE payment_certificate_allocations SET payment_id=?, certificate_id=?,
+               amount_minor=?, sync_uuid=?, updated_at=? WHERE id=?",
+        )
+        .bind(input.payment_id)
+        .bind(input.certificate_id)
+        .bind(input.amount_minor)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query(
+            "INSERT INTO payment_certificate_allocations
+               (payment_id,certificate_id,amount_minor,sync_uuid,updated_at)
+             VALUES (?,?,?,?,?)",
+        )
+        .bind(input.payment_id)
+        .bind(input.certificate_id)
+        .bind(input.amount_minor)
+        .bind(&input.sync_uuid)
+        .bind(&input.updated_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    let mut touched = vec![input.certificate_id];
+    if let Some(id) = previous_certificate {
+        touched.push(id);
+    }
+    touched.sort_unstable();
+    touched.dedup();
+    reconcile_certificates(&mut tx, &touched).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+async fn delete_synced_allocation_transaction(
+    pool: &sqlx::SqlitePool,
+    allocation_id: i64,
+) -> Result<(), String> {
+    let mut tx = begin_immediate(pool).await?;
+    let certificate_id: i64 =
+        sqlx::query_scalar("SELECT certificate_id FROM payment_certificate_allocations WHERE id=?")
+            .bind(allocation_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "ALLOCATION_NOT_FOUND".to_string())?;
+    sqlx::query("DELETE FROM payment_certificate_allocations WHERE id=?")
+        .bind(allocation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    reconcile_certificates(&mut tx, &[certificate_id]).await?;
+    tx.commit().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn apply_synced_payment_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: SyncedPaymentInput,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    apply_synced_payment_transaction(&pool, input).await
+}
+
+#[tauri::command]
+async fn apply_synced_allocation_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: SyncedAllocationInput,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    apply_synced_allocation_transaction(&pool, input).await
+}
+
+#[tauri::command]
+async fn delete_synced_allocation_atomic(
+    db_instances: State<'_, DbInstances>,
+    allocation_id: i64,
+) -> Result<(), String> {
+    let pool = application_database_pool(&db_instances).await?;
+    delete_synced_allocation_transaction(&pool, allocation_id).await
+}
+
 /// Insert a payment and every allocation as one all-or-nothing operation.
 #[tauri::command]
 async fn create_payment_atomic(
@@ -1649,9 +2035,6 @@ async fn apply_synced_certificate_transaction(
             && (input.deleted_at.is_none() || input.voided_at.is_none())
         {
             return Err("VOIDED_CERTIFICATE_CANNOT_BE_RESTORED_BY_SYNC".into());
-        }
-        if stored.status == "PAID" {
-            return Err("PAID_CERTIFICATE_IMMUTABLE".into());
         }
         if target_status == "DRAFT" && stored.status != "DRAFT" {
             return Err("CERTIFICATE_LIFECYCLE_REGRESSION_DENIED".into());
@@ -5583,6 +5966,45 @@ mod financial_transaction_tests {
         }
     }
 
+    fn synced_payment_input(local_id: Option<i64>, amount_minor: i64) -> SyncedPaymentInput {
+        SyncedPaymentInput {
+            local_id,
+            sync_uuid: "22222222-2222-4222-8222-222222222222".into(),
+            updated_at: "2099-04-01T00:00:00.000Z".into(),
+            contract_id: 1,
+            kind: "CERTIFICATE".into(),
+            number: "PAY-SYNC-CERT".into(),
+            date: "2026-07-02".into(),
+            amount_minor,
+            method: "CASH".into(),
+            bank: None,
+            reference: None,
+            notes: None,
+            deleted_at: None,
+            created_at: Some("2026-07-02T00:00:00.000Z".into()),
+            voided_at: None,
+            voided_by: None,
+            void_reason: None,
+            reversal_of_id: None,
+        }
+    }
+
+    fn synced_allocation_input(
+        local_id: Option<i64>,
+        payment_id: i64,
+        certificate_id: i64,
+        amount_minor: i64,
+    ) -> SyncedAllocationInput {
+        SyncedAllocationInput {
+            local_id,
+            sync_uuid: "33333333-3333-4333-8333-333333333333".into(),
+            updated_at: "2099-04-01T00:00:00.000Z".into(),
+            payment_id,
+            certificate_id,
+            amount_minor,
+        }
+    }
+
     #[test]
     fn synced_certificate_paid_status_is_derived_not_trusted() {
         tauri::async_runtime::block_on(async {
@@ -5661,6 +6083,87 @@ mod financial_transaction_tests {
                     .await
                     .unwrap();
             assert_eq!(gross, 10_000);
+        });
+    }
+
+    #[test]
+    fn synced_payment_allocation_settles_and_reopens_certificate() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let certificate_id = sync_certificate_fixture(&pool).await;
+            apply_synced_payment_transaction(&pool, synced_payment_input(None, 10_000))
+                .await
+                .unwrap();
+            let payment_id: i64 = sqlx::query_scalar("SELECT id FROM payments WHERE number=?")
+                .bind("PAY-SYNC-CERT")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            apply_synced_allocation_transaction(
+                &pool,
+                synced_allocation_input(None, payment_id, certificate_id, 10_000),
+            )
+            .await
+            .unwrap();
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE id=?")
+                    .bind(certificate_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, "PAID");
+
+            let allocation_id: i64 =
+                sqlx::query_scalar("SELECT id FROM payment_certificate_allocations")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            delete_synced_allocation_transaction(&pool, allocation_id)
+                .await
+                .unwrap();
+            let reopened: String =
+                sqlx::query_scalar("SELECT status FROM payment_certificates WHERE id=?")
+                    .bind(certificate_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(reopened, "APPROVED");
+        });
+    }
+
+    #[test]
+    fn synced_allocation_rejects_amounts_above_payment_or_certificate_capacity() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let certificate_id = sync_certificate_fixture(&pool).await;
+            apply_synced_payment_transaction(&pool, synced_payment_input(None, 4_000))
+                .await
+                .unwrap();
+            let payment_id: i64 = sqlx::query_scalar("SELECT id FROM payments WHERE number=?")
+                .bind("PAY-SYNC-CERT")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let payment_error = apply_synced_allocation_transaction(
+                &pool,
+                synced_allocation_input(None, payment_id, certificate_id, 4_001),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(payment_error, "ALLOCATIONS_EXCEED_PAYMENT");
+
+            sqlx::query("UPDATE payments SET amount_minor=20000 WHERE id=?")
+                .bind(payment_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let capacity_error = apply_synced_allocation_transaction(
+                &pool,
+                synced_allocation_input(None, payment_id, certificate_id, 10_001),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(capacity_error, "ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
         });
     }
 
@@ -7469,6 +7972,9 @@ pub fn run() {
             create_backup_file,
             restore_database,
             fetch_cbe_rates,
+            apply_synced_payment_atomic,
+            apply_synced_allocation_atomic,
+            delete_synced_allocation_atomic,
             create_payment_atomic,
             update_payment_atomic,
             void_payment_atomic,

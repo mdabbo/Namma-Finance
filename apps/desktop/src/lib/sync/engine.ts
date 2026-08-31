@@ -315,8 +315,35 @@ async function pullTable(
           if (archiveTables.has(spec.name)) {
             await executeSyncMutation(`UPDATE ${spec.name} SET archived_at=$1, archive_reason='Remote legacy deletion preserved as archive' WHERE id=$2`, [remote.deleted_at, local.id]);
           } else if (voidTables.has(spec.name)) {
-            const legacyDeleted = spec.name === "payments" || spec.name === "payment_certificates" ? ", deleted_at=$1" : "";
-            await executeSyncMutation(`UPDATE ${spec.name} SET voided_at=$1, void_reason='Remote legacy deletion preserved as void'${legacyDeleted} WHERE id=$2`, [remote.deleted_at, local.id]);
+            if (spec.name === "payments") {
+              const { applySyncedPayment } = await import("../../repositories/payments");
+              await applySyncedPayment({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                contractId: local.contract_id as number,
+                kind: local.kind as "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE",
+                number: local.number as string,
+                date: local.date as string,
+                amountMinor: local.amount_minor as number,
+                method: local.method as "BANK_TRANSFER" | "CHEQUE" | "CASH",
+                bank: local.bank as string | null,
+                reference: local.reference as string | null,
+                notes: local.notes as string | null,
+                deletedAt: remote.deleted_at as string,
+                createdAt: local.created_at as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              });
+            } else {
+              const legacyDeleted = spec.name === "payment_certificates" ? ", deleted_at=$1" : "";
+              await executeSyncMutation(`UPDATE ${spec.name} SET voided_at=$1, void_reason='Remote legacy deletion preserved as void'${legacyDeleted} WHERE id=$2`, [remote.deleted_at, local.id]);
+            }
+          } else if (spec.name === "payment_certificate_allocations") {
+            const { deleteSyncedAllocation } = await import("../../repositories/payments");
+            await deleteSyncedAllocation(local.id);
           } else {
             await executeSyncMutation(`DELETE FROM ${spec.name} WHERE id = $1`, [local.id]);
             mapFor(maps, spec.name).invalidate(uuid, local.id);
@@ -393,6 +420,34 @@ async function pullTable(
             await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
             continue;
           }
+          if (spec.name === "payments") {
+            const { applySyncedPayment } = await import("../../repositories/payments");
+            await applySyncedPayment({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              kind: values.kind as "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE",
+              number: values.number as string,
+              date: values.date as string,
+              amountMinor: values.amount_minor as number,
+              method: values.method as "BANK_TRANSFER" | "CHEQUE" | "CASH",
+              bank: values.bank as string | null,
+              reference: values.reference as string | null,
+              notes: values.notes as string | null,
+              deletedAt: values.deleted_at as string | null,
+              createdAt: values.created_at as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
           if (spec.name === "payment_certificate_allocations") {
             const duplicate = await selectOne<LocalRow>("SELECT * FROM payment_certificate_allocations WHERE payment_id=$1 AND certificate_id=$2 AND sync_uuid<>$3", [values.payment_id, values.certificate_id, uuid]);
             if (duplicate) {
@@ -400,13 +455,20 @@ async function pullTable(
               await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
               continue;
             }
-            const { validateSyncedAllocation } = await import("../../repositories/payments");
-            await validateSyncedAllocation(
-              values.payment_id as number,
-              values.certificate_id as number,
-              values.amount_minor as number,
-              local?.id,
-            );
+            const { applySyncedAllocation } = await import("../../repositories/payments");
+            await applySyncedAllocation({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              paymentId: values.payment_id as number,
+              certificateId: values.certificate_id as number,
+              amountMinor: values.amount_minor as number,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
           }
           if (local) {
             const sets = spec.columns.map((c, i) => `${c} = $${i + 1}`).join(", ");

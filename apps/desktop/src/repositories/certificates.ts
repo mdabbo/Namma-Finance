@@ -249,7 +249,6 @@ async function applySyncedCertificateDouble(input: SyncedCertificateInput): Prom
     if ((stored.deletedAt !== null || stored.voidedAt !== null) && (input.deletedAt === null || input.voidedAt === null)) {
       throw new Error("VOIDED_CERTIFICATE_CANNOT_BE_RESTORED_BY_SYNC");
     }
-    if (stored.status === "PAID") throw new Error("PAID_CERTIFICATE_IMMUTABLE");
     if (targetStatus === "DRAFT" && stored.status !== "DRAFT") throw new Error("CERTIFICATE_LIFECYCLE_REGRESSION_DENIED");
     if (input.voidedAt !== null || input.deletedAt !== null) {
       const { validAllocatedMinor } = await import("./payments");
