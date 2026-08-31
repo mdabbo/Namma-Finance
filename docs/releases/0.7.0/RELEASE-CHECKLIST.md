@@ -104,10 +104,18 @@ latest run before merging.
 | Gating evidence | `Quality gates` run 33389471727 on `d409a9c`, success, all four jobs |
 
 - [x] `d409a9c` verified as an ancestor of `origin/main`.
-- [ ] `Quality gates` green on the **post-merge** `main` commit `177e2aa`
-      (run #24). The merge commit is a tree no pre-merge run tested, so this is
-      the first gate against `main` as shipped. Confirm before treating `main`
-      as a known-good base.
+- [x] `Quality gates` green on the **post-merge** `main` commit `177e2aa` —
+      run #24, success, 19m 35s, all four jobs, 4 artifacts:
+      https://github.com/mdabbo/Namma-Finance/actions/runs/33389818970
+      The merge commit is a tree no pre-merge run tested, so this is the first
+      gate against `main` as shipped: `main` is a known-good base.
+
+| Job | run #24 on `main` |
+| --- | --- |
+| TypeScript and unit tests | success (1m 44s) |
+| Rust quality | success (9m 38s) |
+| Playwright E2E | success (8m 17s) |
+| Desktop production build | success (9m 51s) |
 
 ## Redesign acceptance
 
@@ -217,7 +225,6 @@ Outstanding before any distribution:
 - **Confirm the four checks are required status checks on `main`**, so a future
   red gate actually blocks a merge. This was never verified — branch protection
   could not be read anonymously.
-- **Confirm run #24 is green** on the post-merge merge commit.
 
 Anyone pulling `main` must delete and recreate their development database; there
 is no upgrade path from the retired migration chain. See `MIGRATION-NOTES.md`.
