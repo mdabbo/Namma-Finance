@@ -6,7 +6,8 @@ own headings are numbered 0–9; where a reader counts the UX audit as milestone
 
 ## Source and quality
 
-- [x] Work remains on `redesign/v0.7.0`; nothing is merged to `main`.
+- [x] Work was developed on `redesign/v0.7.0` and merged to `main` only after
+      `Quality gates` was green on the released commit — see **Merge record**.
 - [x] Application, mobile, core, Cargo, Tauri, and release-manifest versions are
       synchronized at 0.7.0 (`version:check` verified: **0.7.0 (Beta), schema
       27**).
@@ -88,9 +89,39 @@ latest run before merging.
 - [ ] `playwright-report` downloaded and reviewed — same authentication
       limitation.
 - [ ] The four checks are configured as **required status checks** on `main`
-      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge. Branch
-      protection could not be read anonymously (401); confirm this in repository
-      settings before relying on it to block a merge.
+      (see `docs/QUALITY-GATES.md`), so a red gate blocks the merge.
+      **Verified NOT configured.** The public branches API reports `main` as
+      `protected: false` with
+      `required_status_checks.enforcement_level: "off"` and an empty check
+      list. There is no branch protection rule on `main` at all: nothing blocks
+      a direct push, and nothing prevents merging a pull request whose gates are
+      red. The green gate on this release was **discipline, not enforcement** —
+      it was chosen, not required. Configure this in Settings → Branches before
+      relying on CI to protect `main`.
+
+### Merge record
+
+| | |
+| --- | --- |
+| Pull request | [#7](https://github.com/mdabbo/Namma-Finance/pull/7) — `main` ← `redesign/v0.7.0` |
+| Merge commit | `177e2aa` — *Merge pull request #7 from mdabbo/redesign/v0.7.0* |
+| Method | Merge commit (not squashed), preserving all 50 commit messages |
+| Scope | 50 commits, 244 files |
+| Gating evidence | `Quality gates` run 33389471727 on `d409a9c`, success, all four jobs |
+
+- [x] `d409a9c` verified as an ancestor of `origin/main`.
+- [x] `Quality gates` green on the **post-merge** `main` commit `177e2aa` —
+      run #24, success, 19m 35s, all four jobs, 4 artifacts:
+      https://github.com/mdabbo/Namma-Finance/actions/runs/33389818970
+      The merge commit is a tree no pre-merge run tested, so this is the first
+      gate against `main` as shipped: `main` is a known-good base.
+
+| Job | run #24 on `main` |
+| --- | --- |
+| TypeScript and unit tests | success (1m 44s) |
+| Rust quality | success (9m 38s) |
+| Playwright E2E | success (8m 17s) |
+| Desktop production build | success (9m 51s) |
 
 ## Redesign acceptance
 
@@ -184,12 +215,25 @@ and migrations, not against the installed `.exe`.
 recorded in `KNOWN-LIMITATIONS.md`; the database reset requirement is in
 `MIGRATION-NOTES.md` and the changelog.
 
-**Merge recommendation: READY TO MERGE.** `Quality gates` is green on
-`da440cd` across both the push and pull-request runs, with all four required
-jobs passing and none missing or skipped; PR #7 reports `mergeable_state: clean`.
+**Status: MERGED, NOT SHIPPABLE.** PR #7 merged to `main` as `177e2aa` after
+`Quality gates` passed all four required jobs on `d409a9c` across both the push
+and pull-request runs, with none missing or skipped.
 
-Merging is not the same as shipping. Before this build is distributed to anyone:
-sign the installer (it is unsigned, and while unsigned it must stay labelled
-**Beta** and must not be presented as a trusted production release), confirm a
-clean-machine install, and complete the two-PC sync acceptance test. Confirm the
-four checks are required on `main` so a future red gate actually blocks a merge.
+Merging is not shipping, and this build is not ready to distribute to anyone.
+Outstanding before any distribution:
+
+- **Sign the installer.** It is unsigned. While unsigned it must stay labelled
+  **Beta** and must not be presented as a trusted production release.
+- **Confirm a clean-machine install** starts, creates a fresh database at schema
+  27, and completes onboarding. No automated test drives the packaged binary, so
+  nothing has verified the installed application.
+- **Complete the two-PC sync acceptance test.**
+- **Configure the four checks as required status checks on `main`.** They are
+  verified *not* configured today: `main` reports `protected: false` with
+  enforcement `off`. Every gate this release passed was voluntary, and the next
+  change can reach `main` with a red suite or no suite at all. This is the
+  single cheapest durable improvement available and it is a settings change, not
+  code.
+
+Anyone pulling `main` must delete and recreate their development database; there
+is no upgrade path from the retired migration chain. See `MIGRATION-NOTES.md`.
