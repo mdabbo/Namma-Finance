@@ -23,14 +23,14 @@ import {
   makeFakeClient,
 } from "./sync-harness";
 import { createClient } from "../src/repositories/clients";
-import { createProject } from "../src/repositories/projects";
+import { createProject, updateProject } from "../src/repositories/projects";
 import { createContract } from "../src/repositories/contracts";
 import { createStage, updateStage } from "../src/repositories/stages";
 import { reconcileMilestoneCertificates } from "../src/repositories/milestoneCertificates";
 import { createAssignment, createPerson, createPersonPayment, deletePersonPayment } from "../src/repositories/people";
 import { resolveSyncConflict } from "../src/repositories/syncConflicts";
-import { createCertificate, nextCertificateSeq } from "../src/repositories/certificates";
-import { createPayment } from "../src/repositories/payments";
+import { createCertificate, nextCertificateSeq, setCertificateStatus } from "../src/repositories/certificates";
+import { createPayment, deletePayment } from "../src/repositories/payments";
 import { createExpense } from "../src/repositories/expenses";
 
 /** Run a full sync on a given device against the shared remote. */
@@ -248,6 +248,195 @@ describe("two-device round-trip", () => {
     const pulledAudit = rawOn<{ entity_type: string; source: string }>("B", "SELECT entity_type,source FROM audit_logs WHERE entity_type IN ('project','contract')");
     expect(pulledAudit.length).toBeGreaterThanOrEqual(2);
     expect(pulledAudit.every((row) => row.source === "SYNC")).toBe(true);
+  });
+
+  it("covers the Milestone 8 two-device financial sync acceptance matrix", async () => {
+    const resolveOpenKeepLocal = async (deviceId: string, table: string, note: string) => {
+      useDevice(deviceId);
+      for (const conflict of rawOn<{ id: number }>(deviceId, "SELECT id FROM sync_conflicts WHERE table_name=$1 AND status='OPEN'", [table])) {
+        await resolveSyncConflict(conflict.id, "KEEP_LOCAL", note);
+      }
+      await sync(deviceId);
+    };
+
+    newDevice("A");
+    const clientId = await createClient({ name: "M8 Client", company: "Acceptance Co", address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-M8", {
+      name: "M8 Project", clientId, country: "Egypt", city: "Cairo", manager: "Amina",
+      discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP",
+      fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0,
+      description: "initial scope",
+    });
+    const contractId = await createContract({
+      projectId, number: "C-M8", title: "M8 Contract", valueMinor: 100_000, vatBp: 0,
+      retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL",
+      performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null,
+      paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM",
+      milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null,
+    });
+    const certificateId = await createCertificate(await nextCertificateSeq(contractId), {
+      contractId, number: "PC-M8", date: "2026-07-10", submissionDate: null,
+      dueDateOverride: null, description: "draft", grossMinor: 40_000,
+      discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "DRAFT",
+    });
+    await setCertificateStatus(certificateId, "SUBMITTED", "2026-07-10");
+    await setCertificateStatus(certificateId, "APPROVED", "2026-07-10", true);
+    await sync("A");
+
+    newDevice("B");
+    await sync("B");
+
+    expect(rawOneOn<{ name: string }>("B", "SELECT name FROM clients")!.name).toBe("M8 Client");
+    const bProject = rawOneOn<{ id: number; name: string; client_id: number }>("B", "SELECT id,name,client_id FROM projects WHERE code='PRJ-M8'")!;
+    const bClientId = rawOneOn<{ id: number }>("B", "SELECT id FROM clients WHERE name='M8 Client'")!.id;
+    expect(bProject).toMatchObject({ name: "M8 Project", client_id: bClientId });
+    const bContract = rawOneOn<{ id: number; number: string; project_id: number }>("B", "SELECT id,number,project_id FROM contracts WHERE number='C-M8'")!;
+    expect(bContract).toMatchObject({ number: "C-M8", project_id: bProject.id });
+    const bCertificate = rawOneOn<{ id: number; status: string; contract_id: number; gross_minor: number }>("B", "SELECT id,status,contract_id,gross_minor FROM payment_certificates WHERE number='PC-M8'")!;
+    expect(bCertificate).toMatchObject({ status: "APPROVED", contract_id: bContract.id, gross_minor: 40_000 });
+    expect(rawOn("B", "SELECT id FROM audit_logs WHERE source='SYNC'").length).toBeGreaterThan(0);
+
+    useDevice("A");
+    const paymentId = await createPayment({
+      contractId, kind: "CERTIFICATE", number: "PAY-M8", date: "2026-07-11",
+      amountMinor: 40_000, method: "CASH", bank: null, reference: null, notes: null,
+    }, [{ certificateId, amountMinor: 40_000 }]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("A", "SELECT status FROM payment_certificates WHERE number='PC-M8'")!.status).toBe("PAID");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates WHERE number='PC-M8'")!.status).toBe("PAID");
+
+    useDevice("B");
+    const bPaymentId = rawOneOn<{ id: number }>("B", "SELECT id FROM payments WHERE number='PAY-M8'")!.id;
+    await deletePayment(bPaymentId, "Milestone 8 remote void");
+    await sync("B");
+    await sync("A");
+    expect(rawOneOn<{ status: string }>("A", "SELECT status FROM payment_certificates WHERE number='PC-M8'")!.status).toBe("APPROVED");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates WHERE number='PC-M8'")!.status).toBe("APPROVED");
+
+    useDevice("A");
+    await updateProject(projectId, {
+      name: "M8 Project", clientId, country: "Egypt", city: "Cairo", manager: "Device A",
+      discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP",
+      fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0,
+      description: "metadata from A",
+    });
+    await stamp("projects", projectId, "2099-08-01T00:00:00.000Z");
+    useDevice("B");
+    await updateProject(bProject.id, {
+      name: "M8 Project", clientId: bClientId, country: "Egypt", city: "Cairo", manager: "Device B",
+      discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP",
+      fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0,
+      description: "metadata from B",
+    });
+    await stamp("projects", bProject.id, "2099-08-02T00:00:00.000Z");
+    await sync("A");
+    await sync("B");
+    await sync("A");
+    expect(rawOneOn<{ manager: string }>("A", "SELECT manager FROM projects WHERE code='PRJ-M8'")!.manager).toBe("Device B");
+    expect(rawOneOn<{ manager: string }>("B", "SELECT manager FROM projects WHERE code='PRJ-M8'")!.manager).toBe("Device B");
+
+    const remoteCert = remoteRows("payment_certificates").find((row) => row.number === "PC-M8")!;
+    remoteCert.status = "PAID";
+    remoteCert.gross_minor = 41_000;
+    remoteCert.updated_at = "2099-08-03T00:00:00.000Z";
+    const rejectedCert = await sync("B");
+    expect(rejectedCert.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificates", "CERTIFICATE_FINANCIALS_IMMUTABLE");
+    expect(rawOneOn<{ status: string; gross_minor: number }>("B", "SELECT status,gross_minor FROM payment_certificates WHERE number='PC-M8'")!).toEqual({ status: "APPROVED", gross_minor: 40_000 });
+    const certConflict = rawOneOn<{ id: number }>("B", "SELECT id FROM sync_conflicts WHERE table_name='payment_certificates' AND status='OPEN'")!;
+    await resolveSyncConflict(certConflict.id, "KEEP_LOCAL", "Reject stale paid status and immutable financial change");
+    await sync("B");
+    await sync("A");
+    await resolveOpenKeepLocal("A", "payment_certificates", "Reject stale paid status and immutable financial change");
+    await sync("B");
+    expect(rawOneOn<{ status: string; gross_minor: number }>("A", "SELECT status,gross_minor FROM payment_certificates WHERE number='PC-M8'")!).toEqual({ status: "APPROVED", gross_minor: 40_000 });
+
+    useDevice("A");
+    await createPayment({
+      contractId, kind: "CERTIFICATE", number: "PAY-M8-RESTORE", date: "2026-07-12",
+      amountMinor: 40_000, method: "CASH", bank: null, reference: null, notes: null,
+    }, [{ certificateId, amountMinor: 40_000 }]);
+    await sync("A");
+    await sync("B");
+
+    const personId = await createPerson({ type: "FREELANCER", name: "M8 Person", specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
+    const assignmentId = await createAssignment({ personId, projectId: bProject.id, agreedMinor: 100_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
+    await createPersonPayment({ assignmentId, date: "2026-07-12", amountMinor: 40_000, note: "earned payout before cancellation" });
+    await sync("B");
+    await sync("A");
+    const assignment = remoteRows("project_assignments").find((row) => row.agreed_minor === 100_000)!;
+    Object.assign(assignment, {
+      lifecycle_status: "CANCELLED",
+      cancelled_at: "2026-07-12T00:00:00.000Z",
+      cancellation_reason: "Milestone 8 cancellation",
+      earned_minor_at_cancellation: 40_000,
+      updated_at: "2099-08-05T00:00:00.000Z",
+    });
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ lifecycle_status: string; earned_minor_at_cancellation: number }>("A", "SELECT lifecycle_status,earned_minor_at_cancellation FROM project_assignments WHERE sync_uuid=$1", [assignment.uuid])!).toEqual({ lifecycle_status: "CANCELLED", earned_minor_at_cancellation: 40_000 });
+    expect(rawOneOn<{ lifecycle_status: string; earned_minor_at_cancellation: number }>("B", "SELECT lifecycle_status,earned_minor_at_cancellation FROM project_assignments WHERE sync_uuid=$1", [assignment.uuid])!).toEqual({ lifecycle_status: "CANCELLED", earned_minor_at_cancellation: 40_000 });
+
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+      assignment_id: assignment.uuid,
+      date: "2026-07-13",
+      amount_minor: 1,
+      note: "above due after frozen earning is paid",
+      created_at: "2099-08-06T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-08-06T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+    const overpay = await sync("B");
+    expect(overpay.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "person_payments", "PERSON_PAYMENT_EXCEEDS_DUE");
+    expect(rawOn("B", "SELECT id FROM person_payments WHERE sync_uuid='cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd'")).toHaveLength(0);
+    await resolveSyncConflict(rawOneOn<{ id: number }>("B", "SELECT id FROM sync_conflicts WHERE table_name='person_payments' AND status='OPEN'")!.id, "KEEP_LOCAL", "Reject overpayment above frozen due");
+    await sync("B");
+    await sync("A");
+    await resolveOpenKeepLocal("A", "person_payments", "Reject overpayment above frozen due");
+    await sync("B");
+
+    for (const device of ["A", "B"]) {
+      for (const table of ["payment_certificates", "payments"]) {
+        const counts = rawOneOn<{ total: number; unique_sync: number }>(device, `SELECT COUNT(*) AS total, COUNT(DISTINCT sync_uuid) AS unique_sync FROM ${table}`)!;
+        expect(counts.total).toBe(counts.unique_sync);
+      }
+    }
+
+    const finalA = await sync("A");
+    const finalB = await sync("B");
+    expect(finalA.pulled + finalA.pushed + finalA.deletedLocal + finalA.deletedRemote + finalA.conflicts).toBe(0);
+    expect(finalB.pulled + finalB.pushed + finalB.deletedLocal + finalB.deletedRemote + finalB.conflicts).toBe(0);
+    expect(paymentId).toBeGreaterThan(0);
+    expect(assignmentId).toBeGreaterThan(0);
+  });
+
+  it("records delete-vs-edit as a deterministic protected sync conflict", async () => {
+    newDevice("A");
+    const clientId = await createClient({ name: "Delete Edit Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-DELETE-EDIT", { name: "Delete Edit Project", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    await createContract({ projectId, number: "C-DELETE-EDIT", title: null, valueMinor: 10_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+
+    const contractUuid = remoteRows("contracts").find((row) => row.number === "C-DELETE-EDIT")!.uuid as string;
+    useDevice("B");
+    await execute("INSERT INTO sync_tombstones(tbl,row_uuid,deleted_at) VALUES('contracts',$1,'2099-08-07T00:00:00.000Z')", [contractUuid]);
+    const remoteContract = remoteRows("contracts").find((row) => row.uuid === contractUuid)!;
+    remoteContract.notes = "remote edit during local deletion";
+    remoteContract.updated_at = "2099-08-08T00:00:00.000Z";
+
+    const report = await sync("B");
+
+    expect(report.conflicts).toBe(1);
+    expect(rawOneOn<{ conflict_kind: string }>("B", "SELECT conflict_kind FROM sync_conflicts WHERE table_name='contracts' AND status='OPEN'")!.conflict_kind).toBe("DELETE_VS_EDIT");
   });
 
   it("syncs portable document metadata without leaking a device cache path", async () => {
