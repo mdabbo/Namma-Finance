@@ -81,5 +81,9 @@ On your second PC (and later the mobile app), install the same app version,
 enter the same URL/key/login, and press **Sync now** — both machines now share
 the same data.
 
+For a release acceptance run, follow
+[`TWO-PC-SYNC-ACCEPTANCE.md`](./TWO-PC-SYNC-ACCEPTANCE.md) and save the stated
+evidence with the release records.
+
 > **Conflict rule:** if the same record was edited on two devices while
 > offline, the most recent edit wins (per record). Deletions replicate too.
