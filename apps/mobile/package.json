@@ -1,6 +1,6 @@
 {
   "name": "@mep/mobile",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "main": "index.ts",
   "dependencies": {
     "@mep/core": "workspace:*",

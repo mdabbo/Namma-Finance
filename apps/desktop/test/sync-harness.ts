@@ -28,6 +28,7 @@ const MIGRATIONS = [
   "0003_assignment_lifecycle.sql",
   "0004_cancellation_evidence_integrity.sql",
   "0005_audit_version_baseline.sql",
+  "0006_sync_domain_conflict_kind.sql",
 ];
 
 export function buildMigratedDb(through: number = MIGRATIONS.length): DatabaseSync {

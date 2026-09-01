@@ -4726,6 +4726,7 @@ const CONFLICT_TABLES: &[&str] = &[
     "payment_certificates",
     "payments",
     "payment_certificate_allocations",
+    "project_assignments",
     "expenses",
     "person_payments",
     "projects",
@@ -4835,6 +4836,9 @@ async fn resolve_sync_conflict_transaction(
     let kind: String = conflict
         .try_get("conflict_kind")
         .map_err(|e| e.to_string())?;
+    if kind == "REMOTE_DOMAIN_REJECTED" && !keep_local {
+        return Err("REJECTED_REMOTE_CANNOT_BE_APPLIED".into());
+    }
     let local_json: String = conflict.try_get("local_json").map_err(|e| e.to_string())?;
     let remote_json: String = conflict.try_get("remote_json").map_err(|e| e.to_string())?;
     let remote_updated_at: Option<String> = conflict
@@ -5254,14 +5258,14 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 27;
+const CURRENT_SCHEMA_VERSION: i64 = 28;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
-/// Migration lineage after the v0.7.0 rebase. The schema version stays 24
-/// because the baseline recreates that exact schema, so these describe the
-/// FILE sequence and are what distinguishes a rebased database from one built
-/// by the retired 0001..0024 development chain.
-const CURRENT_MIGRATION_VERSION: i64 = 5;
+/// Migration lineage after the v0.7.0 rebase. The baseline recreates schema 24
+/// and forward-only migrations carry it onward, so these describe the FILE
+/// sequence and are what distinguishes a rebased database from one built by the
+/// retired 0001..0024 development chain.
+const CURRENT_MIGRATION_VERSION: i64 = 6;
 const BASELINE_MIGRATION_DESCRIPTION: &str = "baseline_schema";
 
 #[derive(Debug, Clone, Serialize)]
@@ -6294,6 +6298,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0003_assignment_lifecycle.sql"),
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
+            include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -6698,6 +6703,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0003_assignment_lifecycle.sql"),
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
+            include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7446,6 +7452,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0003_assignment_lifecycle.sql"),
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
+            include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7517,7 +7524,7 @@ mod financial_transaction_tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-            assert_eq!(schema, CURRENT_SCHEMA_VERSION);
+            assert_eq!(schema, 27);
 
             // The historical row keeps the version that wrote it.
             let preserved: String = sqlx::query_scalar(
@@ -7534,7 +7541,7 @@ mod financial_transaction_tests {
                     .fetch_one(&pool)
                     .await
                     .unwrap();
-            assert_eq!(context, CURRENT_APP_VERSION);
+            assert_eq!(context, "0.7.0");
             sqlx::query("INSERT INTO clients(name) VALUES('After Upgrade')")
                 .execute(&pool)
                 .await
@@ -7545,7 +7552,7 @@ mod financial_transaction_tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-            assert_eq!(newest, CURRENT_APP_VERSION);
+            assert_eq!(newest, "0.7.0");
 
             // Immutability is intact: the migration bought nothing by weakening it.
             let update =
@@ -8814,6 +8821,41 @@ mod financial_transaction_tests {
         });
     }
 
+    /// A remote mutation already rejected by the financial domain cannot be
+    /// applied through conflict resolution; KEEP_LOCAL records the review only.
+    #[test]
+    fn rejected_remote_conflict_fails_closed_on_keep_remote() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            seed_project(&pool, "PRJ-2026-REJ", "project-rejected").await;
+            let id = conflict_fixture(
+                &pool,
+                "project_assignments",
+                "REMOTE_DOMAIN_REJECTED",
+                "assignment-rejected",
+                r#"{"_syncRejectionReason":"SYNC_CANCELLATION_EARNED_MISMATCH"}"#,
+                r#"{"lifecycle_status":"CANCELLED"}"#,
+            )
+            .await;
+
+            assert_eq!(
+                resolve_sync_conflict_transaction(&pool, id, "KEEP_REMOTE", "force remote")
+                    .await
+                    .unwrap_err(),
+                "REJECTED_REMOTE_CANNOT_BE_APPLIED"
+            );
+            assert_eq!(conflict_status(&pool, id).await.0, "OPEN");
+
+            resolve_sync_conflict_transaction(&pool, id, "KEEP_LOCAL", "remote rejected by domain")
+                .await
+                .unwrap();
+            assert_eq!(
+                conflict_status(&pool, id).await,
+                ("RESOLVED".into(), Some("KEEP_LOCAL".into()))
+            );
+        });
+    }
+
     /// KEEP_REMOTE for a row deleted locally has to cancel the tombstone, or the
     /// chosen cloud row is simply deleted again on the next pull.
     #[test]
@@ -9407,10 +9449,10 @@ mod financial_transaction_tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // v0.7.0 database rebase (Milestone 7): the development chain
-    // 0001..0024 is consolidated into one baseline. Schema identity stays
-    // 24 — this baseline recreates exactly that schema — so no database
-    // can claim a version whose shape differs. Development databases from
-    // before the rebase fail the plugin checksum check and must be deleted.
+    // 0001..0024 is consolidated into one baseline. Forward-only migrations
+    // then carry that schema onward, so no database can claim a version whose
+    // shape differs. Development databases from before the rebase fail the
+    // plugin checksum check and must be deleted.
     let migrations = vec![
         Migration {
             version: 1,
@@ -9440,6 +9482,12 @@ pub fn run() {
             version: 5,
             description: "audit_version_baseline",
             sql: include_str!("../migrations/0005_audit_version_baseline.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "sync_domain_conflict_kind",
+            sql: include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             kind: MigrationKind::Up,
         },
     ];

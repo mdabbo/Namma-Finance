@@ -2,6 +2,28 @@
 
 All notable changes to NAMAA Finance are documented here. Versions follow Semantic Versioning.
 
+## [0.7.1] - Unreleased
+
+### Added
+
+- Protected financial sync pulls that fail domain validation are preserved as
+  `REMOTE_DOMAIN_REJECTED` conflicts with local state, incoming state, rejection
+  reason and timestamps for later review.
+
+### Changed
+
+- Schema advances to **28** with a forward-only migration that extends
+  `sync_conflicts.conflict_kind` for domain-rejected remote mutations.
+
+### Fixed
+
+- Sync no longer aborts the whole run when an invalid remote financial mutation
+  is rejected by Rust domain validation; valid rows continue syncing while the
+  rejected row remains reviewable.
+- Conflict resolution fails closed for rejected remote financial mutations:
+  `KEEP_REMOTE` is refused because it would bypass the same validation that
+  rejected the incoming row.
+
 ## [0.7.0] - 2026-08-31
 
 Interface redesign, development-database rebase, and post-redesign audit

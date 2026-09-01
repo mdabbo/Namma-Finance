@@ -47,6 +47,16 @@ async function stamp(table: string, id: number, iso: string) {
   await execute(`UPDATE ${table} SET updated_at = $1 WHERE id = $2`, [iso, id]);
 }
 
+function expectRemoteDomainConflict(deviceId: string, table: string, reason: string) {
+  const conflict = rawOneOn<{ conflict_kind: string; local_json: string; remote_json: string }>(
+    deviceId,
+    `SELECT conflict_kind,local_json,remote_json FROM sync_conflicts WHERE table_name='${table}' AND status='OPEN'`,
+  )!;
+  expect(conflict.conflict_kind).toBe("REMOTE_DOMAIN_REJECTED");
+  expect(conflict.local_json).toContain(reason);
+  expect(conflict.remote_json).not.toContain("_syncRejectionReason");
+}
+
 beforeEach(() => resetRig());
 afterEach(() => resetRig());
 
@@ -439,8 +449,9 @@ describe("domain-aware certificate sync", () => {
     useDevice("B");
     const report = await runSync();
 
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("CERTIFICATE_FINANCIALS_IMMUTABLE");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificates", "CERTIFICATE_FINANCIALS_IMMUTABLE");
     expect(rawOneOn<{ gross_minor: number }>("B", "SELECT gross_minor FROM payment_certificates")!.gross_minor).toBe(10_000);
   });
 });
@@ -511,8 +522,9 @@ describe("domain-aware payment and allocation sync", () => {
     await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888881", payment_id: paymentUuid, certificate_id: firstCertUuid, amount_minor: 4_001, updated_at: "2099-04-01T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
     useDevice("B");
     const report = await runSync();
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("ALLOCATIONS_EXCEED_PAYMENT");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATIONS_EXCEED_PAYMENT");
     expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
   });
 
@@ -528,8 +540,9 @@ describe("domain-aware payment and allocation sync", () => {
     await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888882", payment_id: paymentUuid, certificate_id: certUuid, amount_minor: 10_001, updated_at: "2099-04-02T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
     useDevice("B");
     const report = await runSync();
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
     expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
   });
 
@@ -552,8 +565,9 @@ describe("domain-aware payment and allocation sync", () => {
     await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888883", payment_id: paymentUuid, certificate_id: certificateUuid, amount_minor: 1_000, updated_at: "2099-04-03T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
     useDevice("B");
     const report = await runSync();
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("ALLOCATION_CONTRACT_MISMATCH");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATION_CONTRACT_MISMATCH");
     expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
   });
 
@@ -564,8 +578,9 @@ describe("domain-aware payment and allocation sync", () => {
     await execute("UPDATE contracts SET archived_at='2099-05-01T00:00:00.000Z' WHERE number='C-PAY-ARCHIVE'");
     await makeFakeClient().from("payments").upsert([{ uuid: "77777777-7777-4777-8777-777777777777", contract_id: contractUuid, kind: "CERTIFICATE", number: "PAY-ARCHIVED", date: "2026-07-02", amount_minor: 1_000, method: "CASH", bank: null, reference: null, notes: null, app_deleted_at: null, created_at: "2099-05-02T00:00:00.000Z", voided_at: null, voided_by: null, void_reason: null, reversal_of_id: null, updated_at: "2099-05-02T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
     const report = await runSync();
-    expect(report.ok).toBe(false);
-    expect(report.error).toMatch(/CONTRACT_NOT_FOUND|ARCHIVED_CONTRACT_IS_READ_ONLY/);
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payments", "CONTRACT_NOT_FOUND");
     expect(rawOn("B", "SELECT id FROM payments WHERE number='PAY-ARCHIVED'")).toHaveLength(0);
   });
 });
@@ -625,8 +640,9 @@ describe("domain-aware assignment and person-payment sync", () => {
     useDevice("B");
     const report = await runSync();
 
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("SYNC_CANCELLATION_EARNED_MISMATCH");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "project_assignments", "SYNC_CANCELLATION_EARNED_MISMATCH");
     expect(rawOneOn<{ lifecycle_status: string }>("B", "SELECT lifecycle_status FROM project_assignments")!.lifecycle_status).toBe("ACTIVE");
   });
 
@@ -676,8 +692,9 @@ describe("domain-aware assignment and person-payment sync", () => {
     useDevice("B");
     const report = await runSync();
 
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("PERSON_PAYMENT_EXCEEDS_DUE");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "person_payments", "PERSON_PAYMENT_EXCEEDS_DUE");
     expect(rawOn("B", "SELECT id FROM person_payments")).toHaveLength(0);
     expect(rawOn("B", "SELECT id FROM expenses WHERE person_payment_id IS NOT NULL")).toHaveLength(0);
   });
@@ -744,6 +761,8 @@ describe("domain-aware expense and revision sync", () => {
     const report = await runSync();
 
     expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "expenses", "SYNC_PARENT_NOT_FOUND");
     expect(rawOn("B", "SELECT id FROM expenses WHERE description='Spoofed linked expense'")).toHaveLength(0);
   });
 
@@ -756,8 +775,9 @@ describe("domain-aware expense and revision sync", () => {
     useDevice("B");
     const report = await runSync();
 
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("APPROVED_CONTRACT_REVISION_IMMUTABLE");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "contract_revisions", "APPROVED_CONTRACT_REVISION_IMMUTABLE");
     expect(rawOneOn<{ vat_bp: number }>("B", "SELECT vat_bp FROM contract_revisions")!.vat_bp).toBe(0);
   });
 
@@ -776,8 +796,9 @@ describe("domain-aware expense and revision sync", () => {
     useDevice("B");
     const report = await runSync();
 
-    expect(report.ok).toBe(false);
-    expect(report.error).toContain("APPROVED_VARIATION_ORDER_IMMUTABLE");
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "variation_orders", "APPROVED_VARIATION_ORDER_IMMUTABLE");
     expect(rawOneOn<{ value_delta_minor: number }>("B", "SELECT value_delta_minor FROM variation_orders")!.value_delta_minor).toBe(10_000);
   });
 });

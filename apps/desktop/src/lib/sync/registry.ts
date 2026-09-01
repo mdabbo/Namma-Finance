@@ -164,7 +164,7 @@ export const SYNC_TABLES: SyncTableSpec[] = [
 /** Financial facts which must never use silent last-write-wins. */
 export const CONFLICT_PROTECTED_TABLES = new Set([
   "contracts", "contract_revisions", "payment_certificates", "payments",
-  "payment_certificate_allocations", "expenses", "person_payments",
+  "payment_certificate_allocations", "project_assignments", "expenses", "person_payments",
 ]);
 
 export const NUMBER_COLLISION_TABLES = new Set([
