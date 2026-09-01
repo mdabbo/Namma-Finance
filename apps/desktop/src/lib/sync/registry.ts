@@ -90,15 +90,6 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     ],
   },
   {
-    name: "project_assignments",
-    columns: ["person_id", "project_id", "agreed_minor", "currency", "fx_rate_micro", "scope",
-      "progress_note", "created_at", "archived_at", "archived_by", "archive_reason"],
-    fks: [
-      { column: "person_id", parent: "people" },
-      { column: "project_id", parent: "projects" },
-    ],
-  },
-  {
     name: "payment_certificates",
     columns: ["contract_id", "seq", "number", "date", "submission_date", "due_date_override", "due_date_confirmed_at", "description",
       "gross_minor", "discount_minor", "manual_advance_recovery_minor", "status", "deleted_at", "created_at",
@@ -132,6 +123,17 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     ],
   },
   {
+    name: "project_assignments",
+    columns: ["person_id", "project_id", "agreed_minor", "currency", "fx_rate_micro", "scope",
+      "progress_note", "created_at", "archived_at", "archived_by", "archive_reason",
+      "lifecycle_status", "completed_at", "cancelled_at", "cancellation_reason",
+      "earned_minor_at_cancellation"],
+    fks: [
+      { column: "person_id", parent: "people" },
+      { column: "project_id", parent: "projects" },
+    ],
+  },
+  {
     name: "person_payments",
     columns: ["assignment_id", "date", "amount_minor", "note", "created_at", "voided_at", "voided_by", "void_reason", "reversal_of_id"],
     fks: [
@@ -162,7 +164,7 @@ export const SYNC_TABLES: SyncTableSpec[] = [
 /** Financial facts which must never use silent last-write-wins. */
 export const CONFLICT_PROTECTED_TABLES = new Set([
   "contracts", "contract_revisions", "payment_certificates", "payments",
-  "payment_certificate_allocations", "expenses", "person_payments",
+  "payment_certificate_allocations", "project_assignments", "expenses", "person_payments",
 ]);
 
 export const NUMBER_COLLISION_TABLES = new Set([

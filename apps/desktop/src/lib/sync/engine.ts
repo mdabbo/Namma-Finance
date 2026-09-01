@@ -19,6 +19,8 @@ import { CONFLICT_PROTECTED_TABLES, NUMBER_COLLISION_TABLES, SYNC_TABLES, type S
 
 const PULL_BATCH = 500;
 const PUSH_BATCH = 200;
+export const FINANCIAL_SYNC_PROTOCOL_VERSION = 1;
+export const MIN_FINANCIAL_SYNC_PROTOCOL_VERSION = 1;
 
 export interface SyncReport {
   startedAt: string;
@@ -45,6 +47,8 @@ const nowIso = (): string => new Date().toISOString();
 const stableJson = (value: Record<string, unknown>): string => JSON.stringify(
   Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))),
 );
+
+type ConflictKind = "CONCURRENT_EDIT" | "DELETE_VS_EDIT" | "DUPLICATE_RECORD" | "REMOTE_DOMAIN_REJECTED";
 
 async function remoteShape(spec: SyncTableSpec, row: Record<string, unknown>, maps: IdMaps): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
@@ -75,9 +79,38 @@ async function saveBaseline(table: string, uuid: string, payload: string, update
   await execute("INSERT INTO sync_record_state(table_name,row_uuid,payload_json,remote_updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(table_name,row_uuid) DO UPDATE SET payload_json=$3,remote_updated_at=$4,synced_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')", [table, uuid, payload, updatedAt]);
 }
 
-async function preserveConflict(spec: SyncTableSpec, uuid: string, kind: "CONCURRENT_EDIT" | "DELETE_VS_EDIT" | "DUPLICATE_RECORD", localJson: string, remoteJson: string, localUpdated: string, remoteUpdated: string, report: SyncReport): Promise<void> {
+async function preserveConflict(spec: SyncTableSpec, uuid: string, kind: ConflictKind, localJson: string, remoteJson: string, localUpdated: string, remoteUpdated: string, report: SyncReport): Promise<void> {
   const result = await execute("INSERT OR IGNORE INTO sync_conflicts(table_name,row_uuid,conflict_kind,local_json,remote_json,local_updated_at,remote_updated_at) VALUES($1,$2,$3,$4,$5,$6,$7)", [spec.name, uuid, kind, localJson, remoteJson, localUpdated, remoteUpdated]);
   if (result.rowsAffected > 0) report.conflicts += 1;
+}
+
+function syncErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function preserveRejectedRemote(spec: SyncTableSpec, uuid: string, local: LocalRow | null, remote: Record<string, unknown>, maps: IdMaps, remoteUpdated: string, report: SyncReport, error: unknown): Promise<void> {
+  const localShape: Record<string, unknown> = local ? await remoteShape(spec, local, maps) : { _localMissing: true };
+  localShape._syncRejectionReason = syncErrorMessage(error);
+  await preserveConflict(
+    spec,
+    uuid,
+    "REMOTE_DOMAIN_REJECTED",
+    stableJson(localShape),
+    stableJson(remotePayload(spec, remote)),
+    local?.updated_at ?? "1970-01-01T00:00:00.000Z",
+    remoteUpdated,
+    report,
+  );
+}
+
+async function applyProtectedRemoteChange(spec: SyncTableSpec, uuid: string, local: LocalRow | null, remote: Record<string, unknown>, maps: IdMaps, remoteUpdated: string, report: SyncReport, mutation: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await mutation();
+    return true;
+  } catch (error) {
+    await preserveRejectedRemote(spec, uuid, local, remote, maps, remoteUpdated, report, error);
+    return false;
+  }
 }
 
 async function hasOpenConflict(table: string, uuid: string): Promise<boolean> {
@@ -134,6 +167,45 @@ async function getCursor(kind: "pull" | "push", table: string): Promise<Cursor |
 
 async function setCursor(kind: "pull" | "push", table: string, cursor: Cursor): Promise<void> {
   await setState(`${kind}:${table}`, JSON.stringify(cursor));
+}
+
+function isOptionalPeerTableMissing(error: { message: string } | null): boolean {
+  if (!error) return false;
+  return /sync_peers|relation .* does not exist|could not find the table|schema cache/i.test(error.message);
+}
+
+async function advertiseAndCheckProtocol(client: SupabaseClient): Promise<void> {
+  const settings = new Map((await select<{ key: string; value: string }>(
+    "SELECT key,value FROM settings WHERE key IN ('device_id')",
+  )).map((row) => [row.key, row.value]));
+  const metadata = new Map((await select<{ key: string; value: string }>(
+    "SELECT key,value FROM app_metadata WHERE key IN ('application_version','schema_version')",
+  )).map((row) => [row.key, row.value]));
+  const deviceId = settings.get("device_id") ?? "unknown-device";
+  const updatedAt = nowIso();
+  const { error: advertiseError } = await client.from("sync_peers").upsert([{
+    uuid: deviceId,
+    application_version: metadata.get("application_version") ?? null,
+    schema_version: Number(metadata.get("schema_version") ?? 0),
+    financial_protocol_version: FINANCIAL_SYNC_PROTOCOL_VERSION,
+    updated_at: updatedAt,
+    deleted_at: null,
+  }], { onConflict: "uuid" });
+  if (isOptionalPeerTableMissing(advertiseError)) return;
+  if (advertiseError) throw new Error(`sync peer advertise: ${advertiseError.message}`);
+
+  const { data, error } = await client.from("sync_peers")
+    .select("uuid,financial_protocol_version,deleted_at")
+    .is("deleted_at", null);
+  if (isOptionalPeerTableMissing(error)) return;
+  if (error) throw new Error(`sync peer check: ${error.message}`);
+  const incompatible = (data ?? []).find((peer) =>
+    peer.uuid !== deviceId
+    && Number(peer.financial_protocol_version ?? 0) < MIN_FINANCIAL_SYNC_PROTOCOL_VERSION
+  );
+  if (incompatible) {
+    throw new Error(`SYNC_PROTOCOL_UPGRADE_REQUIRED: ${String(incompatible.uuid)}`);
+  }
 }
 
 // ─── uuid ↔ local id maps (cached per run) ──────────────────────────────────
@@ -313,10 +385,152 @@ async function pullTable(
           const archiveTables = new Set(["clients", "projects", "contracts", "people", "project_assignments"]);
           const voidTables = new Set(["payment_certificates", "payments", "person_payments", "expenses"]);
           if (archiveTables.has(spec.name)) {
-            await executeSyncMutation(`UPDATE ${spec.name} SET archived_at=$1, archive_reason='Remote legacy deletion preserved as archive' WHERE id=$2`, [remote.deleted_at, local.id]);
+            if (spec.name === "project_assignments") {
+              const { applySyncedAssignment } = await import("../../repositories/people");
+              const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedAssignment({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                personId: local.person_id as number,
+                projectId: local.project_id as number,
+                agreedMinor: local.agreed_minor as number,
+                currency: local.currency as string,
+                fxRateMicro: local.fx_rate_micro as number,
+                scope: local.scope as string | null,
+                progressNote: local.progress_note as string | null,
+                createdAt: local.created_at as string | null,
+                archivedAt: remote.deleted_at as string,
+                archivedBy: null,
+                archiveReason: "Remote legacy deletion preserved as archive",
+                lifecycleStatus: local.lifecycle_status as "ACTIVE" | "COMPLETED" | "CANCELLED",
+                completedAt: local.completed_at as string | null,
+                cancelledAt: local.cancelled_at as string | null,
+                cancellationReason: local.cancellation_reason as string | null,
+                earnedMinorAtCancellation: local.earned_minor_at_cancellation as number | null,
+              }));
+              if (!accepted) {
+                await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+                continue;
+              }
+            } else {
+              await executeSyncMutation(`UPDATE ${spec.name} SET archived_at=$1, archive_reason='Remote legacy deletion preserved as archive' WHERE id=$2`, [remote.deleted_at, local.id]);
+            }
           } else if (voidTables.has(spec.name)) {
-            const legacyDeleted = spec.name === "payments" || spec.name === "payment_certificates" ? ", deleted_at=$1" : "";
-            await executeSyncMutation(`UPDATE ${spec.name} SET voided_at=$1, void_reason='Remote legacy deletion preserved as void'${legacyDeleted} WHERE id=$2`, [remote.deleted_at, local.id]);
+            if (spec.name === "payment_certificates") {
+              const { applySyncedCertificate } = await import("../../repositories/certificates");
+              const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedCertificate({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                contractId: local.contract_id as number,
+                seq: local.seq as number,
+                number: local.number as string,
+                date: local.date as string,
+                submissionDate: local.submission_date as string | null,
+                dueDateOverride: local.due_date_override as string | null,
+                dueDateConfirmedAt: local.due_date_confirmed_at as string | null,
+                description: local.description as string | null,
+                grossMinor: local.gross_minor as number,
+                discountMinor: local.discount_minor as number,
+                manualAdvanceRecoveryMinor: local.manual_advance_recovery_minor as number | null,
+                status: local.status as "DRAFT" | "SUBMITTED" | "APPROVED" | "PAID",
+                deletedAt: remote.deleted_at as string,
+                createdAt: local.created_at as string | null,
+                archivedAt: local.archived_at as string | null,
+                archivedBy: local.archived_by as string | null,
+                archiveReason: local.archive_reason as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              }));
+              if (!accepted) {
+                await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+                continue;
+              }
+            } else if (spec.name === "payments") {
+              const { applySyncedPayment } = await import("../../repositories/payments");
+              const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedPayment({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                contractId: local.contract_id as number,
+                kind: local.kind as "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE",
+                number: local.number as string,
+                date: local.date as string,
+                amountMinor: local.amount_minor as number,
+                method: local.method as "BANK_TRANSFER" | "CHEQUE" | "CASH",
+                bank: local.bank as string | null,
+                reference: local.reference as string | null,
+                notes: local.notes as string | null,
+                deletedAt: remote.deleted_at as string,
+                createdAt: local.created_at as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              }));
+              if (!accepted) {
+                await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+                continue;
+              }
+            } else if (spec.name === "person_payments") {
+              const { applySyncedPersonPayment } = await import("../../repositories/people");
+              const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedPersonPayment({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                assignmentId: local.assignment_id as number,
+                date: local.date as string,
+                amountMinor: local.amount_minor as number,
+                note: local.note as string | null,
+                createdAt: local.created_at as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              }));
+              if (!accepted) {
+                await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+                continue;
+              }
+            } else if (spec.name === "expenses") {
+              const { applySyncedExpense } = await import("../../repositories/expenses");
+              const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedExpense({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                number: local.number as string | null,
+                date: local.date as string,
+                categoryId: local.category_id as number,
+                description: local.description as string,
+                projectId: local.project_id as number | null,
+                supplier: local.supplier as string | null,
+                amountMinor: local.amount_minor as number,
+                currency: local.currency as string,
+                fxRateMicro: local.fx_rate_micro as number,
+                personPaymentId: local.person_payment_id as number | null,
+                createdAt: local.created_at as string | null,
+                archivedAt: local.archived_at as string | null,
+                archivedBy: local.archived_by as string | null,
+                archiveReason: local.archive_reason as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              }));
+              if (!accepted) {
+                await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+                continue;
+              }
+            }
+          } else if (spec.name === "payment_certificate_allocations") {
+            const { deleteSyncedAllocation } = await import("../../repositories/payments");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => deleteSyncedAllocation(local.id));
+            if (!accepted) {
+              await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+              continue;
+            }
           } else {
             await executeSyncMutation(`DELETE FROM ${spec.name} WHERE id = $1`, [local.id]);
             mapFor(maps, spec.name).invalidate(uuid, local.id);
@@ -327,15 +541,26 @@ async function pullTable(
       } else if (!local || Date.parse(remoteUpdated) > Date.parse(normIso(local.updated_at))) {
         const values: Record<string, unknown> = {};
         let missingParent = false;
+        let missingParentBlockedByConflict = false;
         for (const col of spec.columns) {
           const remoteCol = renames[col] ?? col;
           const fk = spec.fks.find((f) => f.column === col);
           if (fk) {
-            const parentId = await mapFor(maps, fk.parent).idOf(remote[remoteCol] as string | null);
-            if (parentId === null && remote[remoteCol] != null) {
+            const parentUuid = remote[remoteCol] as string | null;
+            const parentId = await mapFor(maps, fk.parent).idOf(parentUuid);
+            if (parentId === null && parentUuid != null) {
               if (fk.parent === spec.name) {
-                deferredSelfFks.push({ rowUuid: uuid, column: col, parentUuid: remote[remoteCol] as string });
+                deferredSelfFks.push({ rowUuid: uuid, column: col, parentUuid });
               } else {
+                if (await hasOpenConflict(fk.parent, parentUuid)) {
+                  missingParentBlockedByConflict = true;
+                } else {
+                  const { data: parentRows, error: parentError } = await client.from(fk.parent).select("*").eq("uuid", parentUuid).limit(1);
+                  if (parentError) throw new Error(`pull ${spec.name}: parent check ${fk.parent}: ${parentError.message}`);
+                  if ((parentRows?.[0] as Record<string, unknown> | undefined)?.deleted_at == null && parentRows?.[0]) {
+                    missingParentBlockedByConflict = true;
+                  }
+                }
                 missingParent = true;
               }
             }
@@ -348,7 +573,11 @@ async function pullTable(
         }
         // parents come first in SYNC_TABLES; a missing parent means it was
         // deleted — the child's own deletion is on its way, skip quietly
-        if (!missingParent) {
+        if (missingParent) {
+          if (CONFLICT_PROTECTED_TABLES.has(spec.name) && !missingParentBlockedByConflict) {
+            await preserveRejectedRemote(spec, uuid, local, remote, maps, remoteUpdated, report, new Error("SYNC_PARENT_NOT_FOUND"));
+          }
+        } else {
           if (!local) {
             const collision = await numberCollision(spec, values, uuid);
             if (collision) {
@@ -359,6 +588,126 @@ async function pullTable(
               continue;
             }
           }
+          if (spec.name === "payment_certificates") {
+            const { applySyncedCertificate } = await import("../../repositories/certificates");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedCertificate({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              seq: values.seq as number,
+              number: values.number as string,
+              date: values.date as string,
+              submissionDate: values.submission_date as string | null,
+              dueDateOverride: values.due_date_override as string | null,
+              dueDateConfirmedAt: values.due_date_confirmed_at as string | null,
+              description: values.description as string | null,
+              grossMinor: values.gross_minor as number,
+              discountMinor: values.discount_minor as number,
+              manualAdvanceRecoveryMinor: values.manual_advance_recovery_minor as number | null,
+              status: values.status as "DRAFT" | "SUBMITTED" | "APPROVED" | "PAID",
+              deletedAt: values.deleted_at as string | null,
+              createdAt: values.created_at as string | null,
+              archivedAt: values.archived_at as string | null,
+              archivedBy: values.archived_by as string | null,
+              archiveReason: values.archive_reason as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "payments") {
+            const { applySyncedPayment } = await import("../../repositories/payments");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedPayment({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              kind: values.kind as "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE",
+              number: values.number as string,
+              date: values.date as string,
+              amountMinor: values.amount_minor as number,
+              method: values.method as "BANK_TRANSFER" | "CHEQUE" | "CASH",
+              bank: values.bank as string | null,
+              reference: values.reference as string | null,
+              notes: values.notes as string | null,
+              deletedAt: values.deleted_at as string | null,
+              createdAt: values.created_at as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "contract_revisions") {
+            const { applySyncedContractRevision } = await import("../../repositories/contracts");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedContractRevision({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              revisionNumber: values.revision_number as number,
+              effectiveDate: values.effective_date as string,
+              contractValueMinor: values.contract_value_minor as number,
+              vatBp: values.vat_bp as number,
+              retentionBp: values.retention_bp as number,
+              withholdingBp: values.withholding_bp as number,
+              advanceMinor: values.advance_minor as number,
+              advanceRecoveryMethod: values.advance_recovery_method as "PROPORTIONAL" | "MANUAL",
+              paymentTermsDays: values.payment_terms_days as number,
+              currency: values.currency as string,
+              fxRateMicro: values.fx_rate_micro as number,
+              reason: values.reason as string,
+              createdAt: values.created_at as string | null,
+              createdBy: values.created_by as string | null,
+              approvedAt: values.approved_at as string | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "variation_orders") {
+            const { applySyncedVariationOrder } = await import("../../repositories/contracts");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedVariationOrder({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              revisionId: values.revision_id as number | null,
+              number: values.number as string,
+              description: values.description as string | null,
+              valueDeltaMinor: values.value_delta_minor as number,
+              approvedAt: values.approved_at as string | null,
+              createdAt: values.created_at as string | null,
+              createdBy: values.created_by as string | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
           if (spec.name === "payment_certificate_allocations") {
             const duplicate = await selectOne<LocalRow>("SELECT * FROM payment_certificate_allocations WHERE payment_id=$1 AND certificate_id=$2 AND sync_uuid<>$3", [values.payment_id, values.certificate_id, uuid]);
             if (duplicate) {
@@ -366,13 +715,127 @@ async function pullTable(
               await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
               continue;
             }
-            const { validateSyncedAllocation } = await import("../../repositories/payments");
-            await validateSyncedAllocation(
-              values.payment_id as number,
-              values.certificate_id as number,
-              values.amount_minor as number,
-              local?.id,
+            const { applySyncedAllocation } = await import("../../repositories/payments");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedAllocation({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              paymentId: values.payment_id as number,
+              certificateId: values.certificate_id as number,
+              amountMinor: values.amount_minor as number,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "project_assignments") {
+            const { applySyncedAssignment } = await import("../../repositories/people");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedAssignment({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              personId: values.person_id as number,
+              projectId: values.project_id as number,
+              agreedMinor: values.agreed_minor as number,
+              currency: values.currency as string,
+              fxRateMicro: values.fx_rate_micro as number,
+              scope: values.scope as string | null,
+              progressNote: values.progress_note as string | null,
+              createdAt: values.created_at as string | null,
+              archivedAt: values.archived_at as string | null,
+              archivedBy: values.archived_by as string | null,
+              archiveReason: values.archive_reason as string | null,
+              lifecycleStatus: values.lifecycle_status as "ACTIVE" | "COMPLETED" | "CANCELLED",
+              completedAt: values.completed_at as string | null,
+              cancelledAt: values.cancelled_at as string | null,
+              cancellationReason: values.cancellation_reason as string | null,
+              earnedMinorAtCancellation: values.earned_minor_at_cancellation as number | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "person_payments") {
+            const { applySyncedPersonPayment } = await import("../../repositories/people");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedPersonPayment({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              assignmentId: values.assignment_id as number,
+              date: values.date as string,
+              amountMinor: values.amount_minor as number,
+              note: values.note as string | null,
+              createdAt: values.created_at as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "expenses" && values.person_payment_id !== null) {
+            const linked = await selectOne<LocalRow>(
+              "SELECT * FROM expenses WHERE person_payment_id=$1 AND sync_uuid<>$2",
+              [values.person_payment_id, uuid],
             );
+            if (linked) {
+              await executeSyncMutation(
+                "UPDATE expenses SET sync_uuid=$1, updated_at=$2 WHERE id=$3",
+                [uuid, remoteUpdated, linked.id],
+              );
+              mapFor(maps, spec.name).invalidate(uuid, linked.id);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+              await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+              continue;
+            }
+          }
+          if (spec.name === "expenses") {
+            const { applySyncedExpense } = await import("../../repositories/expenses");
+            const accepted = await applyProtectedRemoteChange(spec, uuid, local, remote, maps, remoteUpdated, report, () => applySyncedExpense({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              number: values.number as string | null,
+              date: values.date as string,
+              categoryId: values.category_id as number,
+              description: values.description as string,
+              projectId: values.project_id as number | null,
+              supplier: values.supplier as string | null,
+              amountMinor: values.amount_minor as number,
+              currency: values.currency as string,
+              fxRateMicro: values.fx_rate_micro as number,
+              personPaymentId: values.person_payment_id as number | null,
+              createdAt: values.created_at as string | null,
+              archivedAt: values.archived_at as string | null,
+              archivedBy: values.archived_by as string | null,
+              archiveReason: values.archive_reason as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            }));
+            if (accepted) {
+              mapFor(maps, spec.name).invalidate(uuid);
+              report.pulled += 1;
+              await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            }
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
           }
           if (local) {
             const sets = spec.columns.map((c, i) => `${c} = $${i + 1}`).join(", ");
@@ -593,6 +1056,7 @@ export async function runSync(): Promise<SyncReport> {
     const maps: IdMaps = new Map();
     const purgedUuids = new Set<string>();
 
+    await advertiseAndCheckProtocol(client);
     await alignSeededCategories(client);
     for (const spec of SYNC_TABLES) await pullTable(client, spec, maps, report, purgedUuids);
     await fixupMilestoneRefs();

@@ -11,7 +11,7 @@ vi.mock("../src/lib/sync/client", async () => {
   };
 });
 
-import { runSync } from "../src/lib/sync/engine";
+import { FINANCIAL_SYNC_PROTOCOL_VERSION, MIN_FINANCIAL_SYNC_PROTOCOL_VERSION, runSync } from "../src/lib/sync/engine";
 import {
   execute,
   newDevice,
@@ -31,6 +31,7 @@ import { createAssignment, createPerson, createPersonPayment, deletePersonPaymen
 import { resolveSyncConflict } from "../src/repositories/syncConflicts";
 import { createCertificate, nextCertificateSeq } from "../src/repositories/certificates";
 import { createPayment } from "../src/repositories/payments";
+import { createExpense } from "../src/repositories/expenses";
 
 /** Run a full sync on a given device against the shared remote. */
 async function sync(deviceId: string) {
@@ -46,10 +47,48 @@ async function stamp(table: string, id: number, iso: string) {
   await execute(`UPDATE ${table} SET updated_at = $1 WHERE id = $2`, [iso, id]);
 }
 
+function expectRemoteDomainConflict(deviceId: string, table: string, reason: string) {
+  const conflict = rawOneOn<{ conflict_kind: string; local_json: string; remote_json: string }>(
+    deviceId,
+    `SELECT conflict_kind,local_json,remote_json FROM sync_conflicts WHERE table_name='${table}' AND status='OPEN'`,
+  )!;
+  expect(conflict.conflict_kind).toBe("REMOTE_DOMAIN_REJECTED");
+  expect(conflict.local_json).toContain(reason);
+  expect(conflict.remote_json).not.toContain("_syncRejectionReason");
+}
+
 beforeEach(() => resetRig());
 afterEach(() => resetRig());
 
 describe("two-device round-trip", () => {
+  it("advertises the local financial sync protocol before exchanging data", async () => {
+    newDevice("A");
+    await sync("A");
+
+    const peer = remoteRows("sync_peers")[0]!;
+    expect(peer.financial_protocol_version).toBe(FINANCIAL_SYNC_PROTOCOL_VERSION);
+    expect(peer.schema_version).toBe(28);
+    expect(peer.application_version).toBe("0.7.1");
+    expect(peer.deleted_at).toBeNull();
+  });
+
+  it("blocks sync when a known peer advertises an incompatible financial protocol", async () => {
+    newDevice("A");
+    await makeFakeClient().from("sync_peers").upsert([{
+      uuid: "older-device",
+      application_version: "0.6.7",
+      schema_version: 23,
+      financial_protocol_version: MIN_FINANCIAL_SYNC_PROTOCOL_VERSION - 1,
+      updated_at: "2099-01-01T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("SYNC_PROTOCOL_UPGRADE_REQUIRED: older-device");
+  });
+
   it("surfaces same project code created offline and applies explicit KEEP_LOCAL", async () => {
     newDevice("A");
     const aClient = await createClient({ name: "Office A", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
@@ -402,6 +441,393 @@ describe("milestone references across devices", () => {
     expect(bMilestones[0].stageId).toBe(bStageId);
     expect(bMilestones[0].certificateId).toBe(bCertId);
     expect(bMilestones[0].extension).toEqual({ source: "legacy", version: 2 });
+  });
+});
+
+describe("domain-aware certificate sync", () => {
+  async function syncedApprovedCertificate() {
+    newDevice("A");
+    const clientId = await createClient({ name: "Certificate Sync Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-CERT-SYNC", { name: "Certificate Sync", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: "C-CERT-SYNC", title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    await createCertificate(await nextCertificateSeq(contractId), { contractId, number: "PC-CERT-SYNC", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 10_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { contractId };
+  }
+
+  it("does not trust a remote PAID certificate status without local payment evidence", async () => {
+    await syncedApprovedCertificate();
+    const remote = remoteRows("payment_certificates")[0]!;
+    remote.status = "PAID";
+    remote.updated_at = "2099-03-01T00:00:00.000Z";
+
+    await sync("B");
+
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("APPROVED");
+  });
+
+  it("rejects remote financial edits to an immutable certificate", async () => {
+    await syncedApprovedCertificate();
+    const remote = remoteRows("payment_certificates")[0]!;
+    remote.gross_minor = 20_000;
+    remote.updated_at = "2099-03-02T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificates", "CERTIFICATE_FINANCIALS_IMMUTABLE");
+    expect(rawOneOn<{ gross_minor: number }>("B", "SELECT gross_minor FROM payment_certificates")!.gross_minor).toBe(10_000);
+  });
+});
+
+describe("domain-aware payment and allocation sync", () => {
+  async function paymentSyncFixture(prefix = "PAY-SYNC") {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const certificateId = await createCertificate(await nextCertificateSeq(contractId), { contractId, number: `PC-${prefix}`, date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 10_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { contractId, certificateId };
+  }
+
+  it("settles a certificate only when synced payment evidence fully covers it", async () => {
+    const { contractId, certificateId } = await paymentSyncFixture("PAY-FULL");
+    useDevice("A");
+    await createPayment({ contractId, kind: "CERTIFICATE", number: "PAY-FULL", date: "2026-07-02", amountMinor: 10_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId, amountMinor: 10_000 }]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("PAID");
+  });
+
+  it("keeps a partially allocated synced payment from settling a certificate", async () => {
+    const { contractId, certificateId } = await paymentSyncFixture("PAY-PART");
+    useDevice("A");
+    await createPayment({ contractId, kind: "CERTIFICATE", number: "PAY-PART", date: "2026-07-02", amountMinor: 5_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId, amountMinor: 5_000 }]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("APPROVED");
+  });
+
+  it("reopens a synced certificate after payment reduction or void", async () => {
+    const { contractId, certificateId } = await paymentSyncFixture("PAY-REOPEN");
+    useDevice("A");
+    const paymentId = await createPayment({ contractId, kind: "CERTIFICATE", number: "PAY-REOPEN", date: "2026-07-02", amountMinor: 10_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId, amountMinor: 10_000 }]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("PAID");
+
+    useDevice("A");
+    await import("../src/repositories/payments").then(({ updatePayment }) =>
+      updatePayment(paymentId, { contractId, kind: "CERTIFICATE", number: "PAY-REOPEN", date: "2026-07-02", amountMinor: 5_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId, amountMinor: 5_000 }]),
+    );
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("APPROVED");
+
+    useDevice("A");
+    await import("../src/repositories/payments").then(({ deletePayment }) => deletePayment(paymentId, "sync void"));
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ status: string }>("B", "SELECT status FROM payment_certificates")!.status).toBe("APPROVED");
+  });
+
+  it("rejects a synced allocation above the payment amount without changing local evidence", async () => {
+    const first = await paymentSyncFixture("PAY-BAD-A");
+    useDevice("A");
+    await createPayment({ contractId: first.contractId, kind: "CERTIFICATE", number: "PAY-BAD", date: "2026-07-02", amountMinor: 4_000, method: "CASH", bank: null, reference: null, notes: null }, []);
+    await sync("A");
+    await sync("B");
+    const paymentUuid = remoteRows("payments").find((row) => row.number === "PAY-BAD")!.uuid;
+    const firstCertUuid = remoteRows("payment_certificates").find((row) => row.number === "PC-PAY-BAD-A")!.uuid;
+
+    await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888881", payment_id: paymentUuid, certificate_id: firstCertUuid, amount_minor: 4_001, updated_at: "2099-04-01T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
+    useDevice("B");
+    const report = await runSync();
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATIONS_EXCEED_PAYMENT");
+    expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
+  });
+
+  it("rejects a synced allocation above certificate capacity", async () => {
+    const first = await paymentSyncFixture("PAY-BAD-B");
+    useDevice("A");
+    await createPayment({ contractId: first.contractId, kind: "CERTIFICATE", number: "PAY-BAD-CAP", date: "2026-07-02", amountMinor: 20_000, method: "CASH", bank: null, reference: null, notes: null }, []);
+    await sync("A");
+    await sync("B");
+    const paymentUuid = remoteRows("payments").find((row) => row.number === "PAY-BAD-CAP")!.uuid;
+    const certUuid = remoteRows("payment_certificates").find((row) => row.number === "PC-PAY-BAD-B")!.uuid;
+
+    await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888882", payment_id: paymentUuid, certificate_id: certUuid, amount_minor: 10_001, updated_at: "2099-04-02T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
+    useDevice("B");
+    const report = await runSync();
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
+    expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
+  });
+
+  it("rejects a cross-contract synced allocation", async () => {
+    newDevice("A");
+    const clientId = await createClient({ name: "Cross Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectA = await createProject("PRJ-CROSS-A", { name: "Cross A", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const projectB = await createProject("PRJ-CROSS-B", { name: "Cross B", clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractA = await createContract({ projectId: projectA, number: "C-CROSS-A", title: null, valueMinor: 10_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const contractB = await createContract({ projectId: projectB, number: "C-CROSS-B", title: null, valueMinor: 10_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const certificateA = await createCertificate(await nextCertificateSeq(contractA), { contractId: contractA, number: "PC-CROSS-A", date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 10_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await createPayment({ contractId: contractB, kind: "CERTIFICATE", number: "PAY-CROSS", date: "2026-07-02", amountMinor: 1_000, method: "CASH", bank: null, reference: null, notes: null }, []);
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    const paymentUuid = remoteRows("payments").find((row) => row.number === "PAY-CROSS")!.uuid;
+    const certificateUuid = remoteRows("payment_certificates").find((row) => row.number === "PC-CROSS-A")!.uuid;
+    expect(certificateA).toBeGreaterThan(0);
+
+    await makeFakeClient().from("payment_certificate_allocations").upsert([{ uuid: "88888888-8888-4888-8888-888888888883", payment_id: paymentUuid, certificate_id: certificateUuid, amount_minor: 1_000, updated_at: "2099-04-03T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
+    useDevice("B");
+    const report = await runSync();
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payment_certificate_allocations", "ALLOCATION_CONTRACT_MISMATCH");
+    expect(rawOn("B", "SELECT * FROM payment_certificate_allocations")).toHaveLength(0);
+  });
+
+  it("rejects a synced payment for an archived contract", async () => {
+    await paymentSyncFixture("PAY-ARCHIVE");
+    const contractUuid = remoteRows("contracts")[0]!.uuid;
+    useDevice("B");
+    await execute("UPDATE contracts SET archived_at='2099-05-01T00:00:00.000Z' WHERE number='C-PAY-ARCHIVE'");
+    await makeFakeClient().from("payments").upsert([{ uuid: "77777777-7777-4777-8777-777777777777", contract_id: contractUuid, kind: "CERTIFICATE", number: "PAY-ARCHIVED", date: "2026-07-02", amount_minor: 1_000, method: "CASH", bank: null, reference: null, notes: null, app_deleted_at: null, created_at: "2099-05-02T00:00:00.000Z", voided_at: null, voided_by: null, void_reason: null, reversal_of_id: null, updated_at: "2099-05-02T00:00:00.000Z", deleted_at: null }], { onConflict: "uuid" });
+    const report = await runSync();
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "payments", "CONTRACT_NOT_FOUND");
+    expect(rawOn("B", "SELECT id FROM payments WHERE number='PAY-ARCHIVED'")).toHaveLength(0);
+  });
+});
+
+describe("domain-aware assignment and person-payment sync", () => {
+  async function teamSyncFixture(prefix = "TEAM-SYNC") {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: null, notes: null });
+    const firstCertificateId = await createCertificate(await nextCertificateSeq(contractId), { contractId, number: `PC-${prefix}-1`, date: "2026-07-01", submissionDate: "2026-07-01", dueDateOverride: null, description: null, grossMinor: 40_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    const secondCertificateId = await createCertificate(await nextCertificateSeq(contractId), { contractId, number: `PC-${prefix}-2`, date: "2026-07-11", submissionDate: "2026-07-11", dueDateOverride: null, description: null, grossMinor: 60_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
+    await createPayment({ contractId, kind: "CERTIFICATE", number: `PAY-${prefix}-1`, date: "2026-07-02", amountMinor: 40_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId: firstCertificateId, amountMinor: 40_000 }]);
+    const personId = await createPerson({ type: "FREELANCER", name: `${prefix} Person`, specialization: null, phone: null, email: null, bankAccount: null, hourlyRateMinor: null, monthlyRateMinor: null, currency: "EGP", notes: null, isActive: true });
+    await createAssignment({ personId, projectId, agreedMinor: 100_000, currency: "EGP", fxRateMicro: 1_000_000, scope: null, progressNote: null });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { contractId, secondCertificateId };
+  }
+
+  it("derives synced cancellation earnings from payment evidence and ignores later collections", async () => {
+    const { contractId, secondCertificateId } = await teamSyncFixture("TEAM-CANCEL");
+    const assignment = remoteRows("project_assignments")[0]!;
+    Object.assign(assignment, {
+      lifecycle_status: "CANCELLED",
+      cancelled_at: "2026-07-10T00:00:00.000Z",
+      cancellation_reason: "Remote cancellation",
+      earned_minor_at_cancellation: 40_000,
+      updated_at: "2099-06-01T00:00:00.000Z",
+    });
+    useDevice("A");
+    await createPayment({ contractId, kind: "CERTIFICATE", number: "PAY-TEAM-CANCEL-LATE", date: "2026-07-11", amountMinor: 60_000, method: "CASH", bank: null, reference: null, notes: null }, [{ certificateId: secondCertificateId, amountMinor: 60_000 }]);
+    await sync("A");
+
+    await sync("B");
+
+    const pulled = rawOneOn<{ lifecycle_status: string; earned_minor_at_cancellation: number }>(
+      "B",
+      "SELECT lifecycle_status,earned_minor_at_cancellation FROM project_assignments",
+    )!;
+    expect(pulled.lifecycle_status).toBe("CANCELLED");
+    expect(pulled.earned_minor_at_cancellation).toBe(40_000);
+  });
+
+  it("rejects a synced cancellation with an unearned frozen amount", async () => {
+    await teamSyncFixture("TEAM-BAD-CANCEL");
+    const assignment = remoteRows("project_assignments")[0]!;
+    Object.assign(assignment, {
+      lifecycle_status: "CANCELLED",
+      cancelled_at: "2026-07-10T00:00:00.000Z",
+      cancellation_reason: "Inflated",
+      earned_minor_at_cancellation: 99_999,
+      updated_at: "2099-06-02T00:00:00.000Z",
+    });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "project_assignments", "SYNC_CANCELLATION_EARNED_MISMATCH");
+    expect(rawOneOn<{ lifecycle_status: string }>("B", "SELECT lifecycle_status FROM project_assignments")!.lifecycle_status).toBe("ACTIVE");
+  });
+
+  it("creates the linked expense when a valid person payment is pulled", async () => {
+    await teamSyncFixture("TEAM-PAY");
+    const assignmentUuid = remoteRows("project_assignments")[0]!.uuid;
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "66666666-6666-4666-8666-666666666661",
+      assignment_id: assignmentUuid,
+      date: "2026-07-05",
+      amount_minor: 10_000,
+      note: "remote team payout",
+      created_at: "2099-06-03T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-06-03T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    await sync("B");
+
+    const payment = rawOneOn<{ id: number; amount_minor: number }>("B", "SELECT id,amount_minor FROM person_payments WHERE voided_at IS NULL")!;
+    expect(payment.amount_minor).toBe(10_000);
+    expect(rawOn("B", `SELECT id FROM expenses WHERE person_payment_id=${payment.id} AND voided_at IS NULL`)).toHaveLength(1);
+  });
+
+  it("rejects a synced person payment above lifecycle-aware due", async () => {
+    await teamSyncFixture("TEAM-OVERPAY");
+    const assignmentUuid = remoteRows("project_assignments")[0]!.uuid;
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "66666666-6666-4666-8666-666666666662",
+      assignment_id: assignmentUuid,
+      date: "2026-07-05",
+      amount_minor: 40_001,
+      note: "too much",
+      created_at: "2099-06-04T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-06-04T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "person_payments", "PERSON_PAYMENT_EXCEEDS_DUE");
+    expect(rawOn("B", "SELECT id FROM person_payments")).toHaveLength(0);
+    expect(rawOn("B", "SELECT id FROM expenses WHERE person_payment_id IS NOT NULL")).toHaveLength(0);
+  });
+});
+
+describe("domain-aware expense and revision sync", () => {
+  async function financialSyncFixture(prefix = "M5-SYNC") {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { projectId, contractId };
+  }
+
+  it("pulls and voids a standalone expense through the synced expense path", async () => {
+    const { projectId } = await financialSyncFixture("EXPENSE");
+    useDevice("A");
+    const categoryId = rawOneOn<{ id: number }>("A", "SELECT id FROM expense_categories WHERE name_en='Travel'")!.id;
+    const expenseId = await createExpense({ date: "2026-07-05", categoryId, description: "Site visit", projectId, supplier: "Driver", amountMinor: 2_500, currency: "EGP", fxRateMicro: 1_000_000, attachmentPath: null });
+    await sync("A");
+    await sync("B");
+
+    expect(rawOneOn<{ amount_minor: number }>("B", "SELECT amount_minor FROM expenses WHERE description='Site visit'")!.amount_minor).toBe(2_500);
+
+    useDevice("A");
+    await execute("UPDATE expenses SET voided_at='2026-07-06T00:00:00.000Z', void_reason='Remote void' WHERE id=$1", [expenseId]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ voided_at: string | null }>("B", "SELECT voided_at FROM expenses WHERE description='Site visit'")!.voided_at).toBeTruthy();
+  });
+
+  it("rejects an independently inserted linked expense", async () => {
+    await financialSyncFixture("LINKED-EXPENSE");
+    const categoryUuid = remoteRows("expense_categories").find((row) => row.name_en === "Freelancers")!.uuid;
+    const projectUuid = remoteRows("projects")[0]!.uuid;
+    await makeFakeClient().from("expenses").upsert([{
+      uuid: "55555555-7777-4777-8777-555555555551",
+      number: "EXP-SPOOF",
+      date: "2026-07-05",
+      category_id: categoryUuid,
+      description: "Spoofed linked expense",
+      project_id: projectUuid,
+      supplier: "Someone",
+      amount_minor: 1_000,
+      currency: "EGP",
+      fx_rate_micro: 1_000_000,
+      person_payment_id: "55555555-7777-4777-8777-555555555552",
+      created_at: "2099-07-01T00:00:00.000Z",
+      archived_at: null,
+      archived_by: null,
+      archive_reason: null,
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-07-01T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "expenses", "SYNC_PARENT_NOT_FOUND");
+    expect(rawOn("B", "SELECT id FROM expenses WHERE description='Spoofed linked expense'")).toHaveLength(0);
+  });
+
+  it("refuses to rewrite an approved synced contract revision", async () => {
+    await financialSyncFixture("REV-IMMUTABLE");
+    const revision = remoteRows("contract_revisions")[0]!;
+    revision.vat_bp = 999;
+    revision.updated_at = "2099-07-02T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "contract_revisions", "APPROVED_CONTRACT_REVISION_IMMUTABLE");
+    expect(rawOneOn<{ vat_bp: number }>("B", "SELECT vat_bp FROM contract_revisions")!.vat_bp).toBe(0);
+  });
+
+  it("refuses to rewrite an approved synced variation order", async () => {
+    const { contractId } = await financialSyncFixture("VO-IMMUTABLE");
+    useDevice("A");
+    await import("../src/repositories/contracts").then(({ updateContract }) =>
+      updateContract(contractId, { projectId: 1, number: "C-VO-IMMUTABLE", title: null, valueMinor: 110_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null }, { effectiveDate: "2026-07-02", reason: "Approved VO" }),
+    );
+    await sync("A");
+    await sync("B");
+    const variation = remoteRows("variation_orders")[0]!;
+    variation.value_delta_minor = 1;
+    variation.updated_at = "2099-07-03T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(report.conflicts).toBe(1);
+    expectRemoteDomainConflict("B", "variation_orders", "APPROVED_VARIATION_ORDER_IMMUTABLE");
+    expect(rawOneOn<{ value_delta_minor: number }>("B", "SELECT value_delta_minor FROM variation_orders")!.value_delta_minor).toBe(10_000);
   });
 });
 

@@ -130,6 +130,36 @@ export interface AllocationInput {
   amountMinor: number;
 }
 
+export interface SyncedPaymentInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  contractId: number;
+  kind: Payment["kind"];
+  number: string;
+  date: string;
+  amountMinor: number;
+  method: Payment["method"];
+  bank: string | null;
+  reference: string | null;
+  notes: string | null;
+  deletedAt: string | null;
+  createdAt: string | null;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+  reversalOfId: number | null;
+}
+
+export interface SyncedAllocationInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  paymentId: number;
+  certificateId: number;
+  amountMinor: number;
+}
+
 /** Validate a remote allocation before the generic sync engine writes it locally. */
 export async function validateSyncedAllocation(
   paymentId: number,
@@ -146,7 +176,14 @@ export async function validateSyncedAllocation(
   const { loadWorkspaceFinancials } = await import("./financials");
   const state = await loadWorkspaceFinancials().then((workspace) => workspace.contractStates.get(payment.contractId));
   const certificate = state?.certificates.find((item) => item.certificate.id === certificateId);
-  if (!certificate) throw new Error("CERTIFICATE_NOT_FOUND_OR_CONTRACT_MISMATCH");
+  if (!certificate) {
+    const foreign = await selectOne<{ contractId: number }>(
+      "SELECT contract_id AS contractId FROM payment_certificates WHERE id=$1 AND deleted_at IS NULL AND voided_at IS NULL AND archived_at IS NULL",
+      [certificateId],
+    );
+    if (foreign && foreign.contractId !== payment.contractId) throw new Error("ALLOCATION_CONTRACT_MISMATCH");
+    throw new Error("CERTIFICATE_NOT_FOUND_OR_CONTRACT_MISMATCH");
+  }
   if (certificate.certificate.status === "DRAFT") throw new Error("ALLOCATION_REQUIRES_BILLABLE_CERTIFICATE");
   const previous = existingAllocationId
     ? await selectOne<{ amountMinor: number }>("SELECT amount_minor AS amountMinor FROM payment_certificate_allocations WHERE id=$1", [existingAllocationId])
@@ -154,6 +191,113 @@ export async function validateSyncedAllocation(
   if (amountMinor > certificate.unpaidMinor + (previous?.amountMinor ?? 0)) {
     throw new Error("ALLOCATION_EXCEEDS_CERTIFICATE_UNPAID");
   }
+}
+
+export function applySyncedPayment(input: SyncedPaymentInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_payment_atomic", { input }, () => applySyncedPaymentDouble(input));
+}
+
+export function applySyncedAllocation(input: SyncedAllocationInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_allocation_atomic", { input }, () => applySyncedAllocationDouble(input));
+}
+
+export function deleteSyncedAllocation(allocationId: number): Promise<void> {
+  return atomicCommand<void>("delete_synced_allocation_atomic", { allocationId }, () => deleteSyncedAllocationDouble(allocationId));
+}
+
+async function applySyncedPaymentDouble(input: SyncedPaymentInput): Promise<void> {
+  await validatePaymentWrite({
+    contractId: input.contractId,
+    kind: input.kind,
+    number: input.number,
+    date: input.date,
+    amountMinor: input.amountMinor,
+    method: input.method,
+    bank: input.bank,
+    reference: input.reference,
+    notes: input.notes,
+  }, []);
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_PAYMENT_IDENTITY_REQUIRED");
+  if (input.localId !== null) {
+    const stored = await selectOne<{ contractId: number; deletedAt: string | null; voidedAt: string | null }>(
+      "SELECT contract_id AS contractId,deleted_at AS deletedAt,voided_at AS voidedAt FROM payments WHERE id=$1",
+      [input.localId],
+    );
+    if (!stored) throw new Error("PAYMENT_NOT_FOUND");
+    if (stored.contractId !== input.contractId) throw new Error("PAYMENT_CONTRACT_IMMUTABLE");
+    if ((stored.deletedAt !== null || stored.voidedAt !== null) && (input.deletedAt === null || input.voidedAt === null)) {
+      throw new Error("VOIDED_PAYMENT_CANNOT_BE_RESTORED_BY_SYNC");
+    }
+    const touched = (await listAllocationsByPayment(input.localId)).map((allocation) => allocation.certificateId);
+    if (input.deletedAt !== null || input.voidedAt !== null) {
+      await execute(
+        `UPDATE payments SET deleted_at=COALESCE($1,$2), voided_at=COALESCE($2,$1),
+           voided_by=$3, void_reason=$4, sync_uuid=$5, updated_at=$6
+         WHERE id=$7 AND deleted_at IS NULL AND voided_at IS NULL`,
+        [input.deletedAt, input.voidedAt, input.voidedBy, input.voidReason?.trim() || "Remote payment voided",
+         input.syncUuid, input.updatedAt, input.localId],
+      );
+    } else {
+      const allocated = await selectOne<{ amountMinor: number }>(
+        "SELECT COALESCE(SUM(amount_minor),0) AS amountMinor FROM payment_certificate_allocations WHERE payment_id=$1",
+        [input.localId],
+      );
+      if ((allocated?.amountMinor ?? 0) > input.amountMinor) {
+        await execute("DELETE FROM payment_certificate_allocations WHERE payment_id=$1", [input.localId]);
+      }
+      await execute(
+        `UPDATE payments SET kind=$1, number=$2, date=$3, amount_minor=$4, method=$5, bank=$6,
+           reference=$7, notes=$8, deleted_at=NULL, voided_at=NULL, voided_by=NULL, void_reason=NULL,
+           reversal_of_id=$9, sync_uuid=$10, updated_at=$11
+         WHERE id=$12 AND deleted_at IS NULL AND voided_at IS NULL`,
+        [input.kind, input.number, input.date, input.amountMinor, input.method, input.bank,
+         input.reference, input.notes, input.reversalOfId, input.syncUuid, input.updatedAt, input.localId],
+      );
+    }
+    await reconcileWithinTransaction(touched);
+  } else {
+    if (input.deletedAt !== null || input.voidedAt !== null) throw new Error("SYNC_PAYMENT_VOID_INSERT_REJECTED");
+    const createdAt = input.createdAt ?? input.updatedAt;
+    await execute(
+      `INSERT INTO payments (contract_id,kind,number,date,amount_minor,method,bank,reference,notes,
+         created_at,reversal_of_id,sync_uuid,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [input.contractId, input.kind, input.number, input.date, input.amountMinor, input.method,
+       input.bank, input.reference, input.notes, createdAt, input.reversalOfId, input.syncUuid, input.updatedAt],
+    );
+  }
+}
+
+async function applySyncedAllocationDouble(input: SyncedAllocationInput): Promise<void> {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_ALLOCATION_IDENTITY_REQUIRED");
+  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) throw new Error("INVALID_ALLOCATION_AMOUNT");
+  const previous = input.localId === null ? null : await selectOne<{ certificateId: number }>(
+    "SELECT certificate_id AS certificateId FROM payment_certificate_allocations WHERE id=$1",
+    [input.localId],
+  );
+  await validateSyncedAllocation(input.paymentId, input.certificateId, input.amountMinor, input.localId ?? undefined);
+  if (input.localId !== null) {
+    await execute(
+      "UPDATE payment_certificate_allocations SET payment_id=$1, certificate_id=$2, amount_minor=$3, sync_uuid=$4, updated_at=$5 WHERE id=$6",
+      [input.paymentId, input.certificateId, input.amountMinor, input.syncUuid, input.updatedAt, input.localId],
+    );
+  } else {
+    await execute(
+      "INSERT INTO payment_certificate_allocations (payment_id,certificate_id,amount_minor,sync_uuid,updated_at) VALUES ($1,$2,$3,$4,$5)",
+      [input.paymentId, input.certificateId, input.amountMinor, input.syncUuid, input.updatedAt],
+    );
+  }
+  await reconcileWithinTransaction([input.certificateId, previous?.certificateId].filter((id): id is number => id !== undefined));
+}
+
+async function deleteSyncedAllocationDouble(allocationId: number): Promise<void> {
+  const existing = await selectOne<{ certificateId: number }>(
+    "SELECT certificate_id AS certificateId FROM payment_certificate_allocations WHERE id=$1",
+    [allocationId],
+  );
+  if (!existing) throw new Error("ALLOCATION_NOT_FOUND");
+  await execute("DELETE FROM payment_certificate_allocations WHERE id=$1", [allocationId]);
+  await reconcileWithinTransaction([existing.certificateId]);
 }
 
 async function validatePaymentWrite(

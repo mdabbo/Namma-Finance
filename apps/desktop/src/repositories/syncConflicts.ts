@@ -17,6 +17,7 @@ export async function resolveSyncConflict(id: number, resolution: SyncConflictRe
   const conflict = await selectOne<SyncConflict & { remote_updated_at: string }>("SELECT * FROM sync_conflicts WHERE id=$1 AND status='OPEN'", [id]);
   if (!conflict || (!CONFLICT_PROTECTED_TABLES.has(conflict.table_name) && !NUMBER_COLLISION_TABLES.has(conflict.table_name))) throw new Error("SYNC_CONFLICT_NOT_FOUND");
   if (!note.trim()) throw new Error("SYNC_CONFLICT_REASON_REQUIRED");
+  if (conflict.conflict_kind === "REMOTE_DOMAIN_REJECTED" && resolution === "KEEP_REMOTE") throw new Error("REJECTED_REMOTE_CANNOT_BE_APPLIED");
   await atomicCommand<void>(
     "resolve_sync_conflict_atomic",
     { conflictId: id, resolution, note },

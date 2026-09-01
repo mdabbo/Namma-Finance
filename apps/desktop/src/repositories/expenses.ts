@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Expense, ExpenseCategory, ExpenseInput } from "@mep/core";
-import { execute, select } from "../lib/db";
+import { execute, select, selectOne } from "../lib/db";
+import { atomicCommand } from "../lib/atomic";
 
 interface ExpenseRow {
   id: number;
@@ -30,6 +31,30 @@ export interface ExpenseListItem extends Expense {
   projectCode: string | null;
   /** Set when this expense was auto-created from a team payment (read-only in UI). */
   personPaymentId: number | null;
+}
+
+export interface SyncedExpenseInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  number: string | null;
+  date: string;
+  categoryId: number;
+  description: string;
+  projectId: number | null;
+  supplier: string | null;
+  amountMinor: number;
+  currency: string;
+  fxRateMicro: number;
+  personPaymentId: number | null;
+  createdAt: string | null;
+  archivedAt: string | null;
+  archivedBy: string | null;
+  archiveReason: string | null;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+  reversalOfId: number | null;
 }
 
 function mapExpense(r: ExpenseRow): ExpenseListItem {
@@ -111,6 +136,65 @@ export async function deleteExpense(id: number, reason?: string): Promise<void> 
     [id, reason?.trim() || "Voided by user"],
   );
   if (result.rowsAffected !== 1) throw new Error("EXPENSE_NOT_FOUND_VOIDED_OR_LINKED");
+}
+
+export function applySyncedExpense(input: SyncedExpenseInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_expense_atomic", { input }, () => applySyncedExpenseDouble(input));
+}
+
+async function applySyncedExpenseDouble(input: SyncedExpenseInput): Promise<void> {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_EXPENSE_IDENTITY_REQUIRED");
+  if (!input.date.trim() || !input.description.trim() || input.amountMinor <= 0 || !input.currency.trim() || input.fxRateMicro <= 0) {
+    throw new Error("invalid expense");
+  }
+  const category = await selectOne<{ id: number }>("SELECT id FROM expense_categories WHERE id=$1", [input.categoryId]);
+  if (!category) throw new Error("EXPENSE_CATEGORY_NOT_FOUND");
+  if (input.projectId !== null) {
+    const project = await selectOne<{ archivedAt: string | null }>("SELECT archived_at AS archivedAt FROM projects WHERE id=$1", [input.projectId]);
+    if (!project) throw new Error("PROJECT_NOT_FOUND");
+    if (project.archivedAt !== null && input.archivedAt === null && input.voidedAt === null) throw new Error("PROJECT_ARCHIVED");
+  }
+  if (input.localId !== null) {
+    const stored = await selectOne<{ personPaymentId: number | null; voidedAt: string | null; archivedAt: string | null }>(
+      "SELECT person_payment_id AS personPaymentId,voided_at AS voidedAt,archived_at AS archivedAt FROM expenses WHERE id=$1",
+      [input.localId],
+    );
+    if (!stored) throw new Error("EXPENSE_NOT_FOUND");
+    if (stored.personPaymentId !== null) {
+      if (stored.personPaymentId !== input.personPaymentId) throw new Error("LINKED_EXPENSE_PERSON_PAYMENT_IMMUTABLE");
+      if (input.voidedAt === null && input.archivedAt === null) {
+        await execute("UPDATE expenses SET sync_uuid=$1,updated_at=$2 WHERE id=$3", [input.syncUuid, input.updatedAt, input.localId]);
+        return;
+      }
+    }
+    if ((stored.voidedAt !== null && input.voidedAt === null) || (stored.archivedAt !== null && input.archivedAt === null)) {
+      throw new Error("EXPENSE_CANNOT_BE_RESTORED_BY_SYNC");
+    }
+    await execute(
+      `UPDATE expenses SET number=$1,date=$2,category_id=$3,description=$4,project_id=$5,
+         supplier=$6,amount_minor=$7,currency=$8,fx_rate_micro=$9,person_payment_id=$10,
+         archived_at=$11,archived_by=$12,archive_reason=$13,voided_at=$14,voided_by=$15,
+         void_reason=$16,reversal_of_id=$17,sync_uuid=$18,updated_at=$19
+       WHERE id=$20`,
+      [input.number, input.date, input.categoryId, input.description.trim(), input.projectId,
+       input.supplier, input.amountMinor, input.currency, input.fxRateMicro, input.personPaymentId,
+       input.archivedAt, input.archivedBy, input.archiveReason, input.voidedAt, input.voidedBy,
+       input.voidReason, input.reversalOfId, input.syncUuid, input.updatedAt, input.localId],
+    );
+    return;
+  }
+  if (input.personPaymentId !== null && input.voidedAt === null) throw new Error("SYNC_LINKED_EXPENSE_INSERT_REJECTED");
+  await execute(
+    `INSERT INTO expenses
+       (number,date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,
+        person_payment_id,created_at,archived_at,archived_by,archive_reason,voided_at,voided_by,
+        void_reason,reversal_of_id,sync_uuid,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+    [input.number, input.date, input.categoryId, input.description.trim(), input.projectId,
+     input.supplier, input.amountMinor, input.currency, input.fxRateMicro, input.personPaymentId,
+     input.createdAt ?? input.updatedAt, input.archivedAt, input.archivedBy, input.archiveReason,
+     input.voidedAt, input.voidedBy, input.voidReason, input.reversalOfId, input.syncUuid, input.updatedAt],
+  );
 }
 
 // --- categories ---

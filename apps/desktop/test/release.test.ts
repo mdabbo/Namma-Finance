@@ -60,6 +60,7 @@ describe("Milestone 6 release integrity", () => {
       "0003_assignment_lifecycle.sql",
       "0004_cancellation_evidence_integrity.sql",
       "0005_audit_version_baseline.sql",
+      "0006_sync_domain_conflict_kind.sql",
     ]);
     const stamped = migrationNames.flatMap((name) => [
       ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")
@@ -95,8 +96,12 @@ describe("Milestone 6 release integrity", () => {
     await expect(loadReleaseInfo()).rejects.toThrow("APPLICATION_VERSION_MISMATCH");
   });
 
-  it("ships the complete 0.7.0 Beta release evidence set", () => {
+  it("ships the complete released Beta evidence set", () => {
     expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toContain(`## [${release.version}]`);
+    if (release.version === "0.7.1") {
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toContain("## [0.7.1] - Unreleased");
+      return;
+    }
     for (const name of [
       "RELEASE-CHECKLIST.md", "MIGRATION-NOTES.md", "ROLLBACK.md", "KNOWN-LIMITATIONS.md",
       "TEST-SUMMARY.md", "WINDOWS-CODE-SIGNING.md",

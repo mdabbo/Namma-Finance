@@ -115,6 +115,28 @@ export interface AssignmentListItem extends ProjectAssignment {
   personArchived: boolean;
 }
 
+export interface SyncedAssignmentInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  personId: number;
+  projectId: number;
+  agreedMinor: number;
+  currency: string;
+  fxRateMicro: number;
+  scope: string | null;
+  progressNote: string | null;
+  createdAt: string | null;
+  archivedAt: string | null;
+  archivedBy: string | null;
+  archiveReason: string | null;
+  lifecycleStatus: AssignmentLifecycle;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  cancellationReason: string | null;
+  earnedMinorAtCancellation: number | null;
+}
+
 function mapAssignment(r: AssignmentRow): AssignmentListItem {
   return {
     id: r.id,
@@ -277,7 +299,165 @@ export async function deleteAssignment(id: number): Promise<void> {
   if (result.rowsAffected !== 1) throw new Error("ASSIGNMENT_NOT_FOUND_OR_ARCHIVED");
 }
 
+export function applySyncedAssignment(input: SyncedAssignmentInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_assignment_atomic", { input }, () => applySyncedAssignmentDouble(input));
+}
+
+function validateSyncedAssignmentInput(input: SyncedAssignmentInput): void {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_ASSIGNMENT_IDENTITY_REQUIRED");
+  if (!Number.isSafeInteger(input.agreedMinor) || input.agreedMinor < 0 || !input.currency.trim() || input.fxRateMicro <= 0) {
+    throw new Error("INVALID_ASSIGNMENT_INPUT");
+  }
+  if (input.lifecycleStatus === "ACTIVE") {
+    if (input.completedAt || input.cancelledAt || input.cancellationReason || input.earnedMinorAtCancellation !== null) {
+      throw new Error("ACTIVE_ASSIGNMENT_HAS_LIFECYCLE_EVIDENCE");
+    }
+  } else if (input.lifecycleStatus === "COMPLETED") {
+    if (!input.completedAt) throw new Error("COMPLETED_ASSIGNMENT_REQUIRES_DATE");
+    if (input.cancelledAt || input.cancellationReason || input.earnedMinorAtCancellation !== null) {
+      throw new Error("COMPLETED_ASSIGNMENT_HAS_CANCELLATION_EVIDENCE");
+    }
+  } else if (input.lifecycleStatus === "CANCELLED") {
+    if (!input.cancelledAt || !input.cancellationReason?.trim() || input.earnedMinorAtCancellation === null) {
+      throw new Error("CANCELLED_ASSIGNMENT_REQUIRES_EVIDENCE");
+    }
+  } else {
+    throw new Error("INVALID_ASSIGNMENT_LIFECYCLE");
+  }
+}
+
+async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number, cutoffDate: string): Promise<number> {
+  const { loadWorkspaceFinancials } = await import("./financials");
+  const { allocate } = await import("@mep/core");
+  const workspace = await loadWorkspaceFinancials();
+  const states = [...workspace.contractStates.values()].filter((state) => state.contract.projectId === projectId);
+  const stages: Array<{ weight: number; paid: boolean }> = [];
+  const paidForCertificate = async (certificateId: number) => {
+    const row = await selectOne<{ paid: number }>(
+      `SELECT COALESCE(SUM(a.amount_minor),0) AS paid
+         FROM payment_certificate_allocations a
+         JOIN payments p ON p.id=a.payment_id
+        WHERE a.certificate_id=$1 AND p.kind='CERTIFICATE'
+          AND p.deleted_at IS NULL AND p.voided_at IS NULL AND p.date <= $2`,
+      [certificateId, cutoffDate],
+    );
+    return row?.paid ?? 0;
+  };
+  for (const state of states) {
+    const milestones = state.contract.milestones ? JSON.parse(state.contract.milestones) as Array<{ percentBp?: number; certificateId?: number | null }> : [];
+    if (milestones.length > 0) {
+      const amounts = allocate(state.contract.valueMinor, milestones.map((m) => m.percentBp ?? 0));
+      for (const [index, m] of milestones.entries()) {
+        const payable = state.certificates.find((item) => item.certificate.id === m.certificateId);
+        const paid = payable ? await paidForCertificate(payable.certificate.id) : 0;
+        const net = payable?.breakdown.netPayableMinor ?? 0;
+        stages.push({ weight: amounts[index] ?? 0, paid: payable !== undefined && paid >= Math.max(0, net) });
+      }
+      continue;
+    }
+    let scheduled = 0;
+    for (const item of state.certificates) {
+      const weight = Math.max(0, item.certificate.grossMinor - item.certificate.discountMinor);
+      scheduled += weight;
+      const paid = await paidForCertificate(item.certificate.id);
+      stages.push({
+        weight: Math.max(0, item.certificate.grossMinor - item.certificate.discountMinor),
+        paid: paid >= Math.max(0, item.breakdown.netPayableMinor),
+      });
+    }
+    if (state.contract.valueMinor > scheduled) {
+      stages.push({ weight: state.contract.valueMinor - scheduled, paid: false });
+    }
+  }
+  const amounts = allocate(agreedMinor, stages.map((stage) => stage.weight));
+  return stages.reduce((sum, stage, index) => sum + (stage.paid ? amounts[index] ?? 0 : 0), 0);
+}
+
+async function applySyncedAssignmentDouble(input: SyncedAssignmentInput): Promise<void> {
+  validateSyncedAssignmentInput(input);
+  const parent = await selectOne<{ projectArchivedAt: string | null }>(
+    `SELECT p.archived_at AS projectArchivedAt
+       FROM projects p, people pe
+      WHERE p.id=$1 AND pe.id=$2`,
+    [input.projectId, input.personId],
+  );
+  if (!parent) throw new Error("ASSIGNMENT_PARENT_NOT_FOUND");
+  if (parent.projectArchivedAt !== null && input.archivedAt === null) throw new Error("PROJECT_ARCHIVED");
+  const derivedEarned = input.lifecycleStatus === "CANCELLED"
+    ? await assignmentEarnedMinorAsOf(input.projectId, input.agreedMinor, input.cancelledAt!.slice(0, 10))
+    : null;
+  if (input.lifecycleStatus === "CANCELLED" && input.earnedMinorAtCancellation !== derivedEarned) {
+    throw new Error("SYNC_CANCELLATION_EARNED_MISMATCH");
+  }
+  if (input.localId !== null) {
+    const stored = await selectOne<{
+      personId: number;
+      projectId: number;
+      lifecycleStatus: AssignmentLifecycle;
+      cancelledAt: string | null;
+      cancellationReason: string | null;
+      earnedMinorAtCancellation: number | null;
+    }>(
+      `SELECT person_id AS personId,project_id AS projectId,lifecycle_status AS lifecycleStatus,
+              cancelled_at AS cancelledAt,cancellation_reason AS cancellationReason,
+              earned_minor_at_cancellation AS earnedMinorAtCancellation
+         FROM project_assignments WHERE id=$1`,
+      [input.localId],
+    );
+    if (!stored) throw new Error("ASSIGNMENT_NOT_FOUND");
+    if (stored.personId !== input.personId || stored.projectId !== input.projectId) throw new Error("ASSIGNMENT_PARENT_IMMUTABLE");
+    if (stored.lifecycleStatus === "CANCELLED" && (
+      input.lifecycleStatus !== "CANCELLED" ||
+      input.cancelledAt !== stored.cancelledAt ||
+      input.cancellationReason !== stored.cancellationReason ||
+      input.earnedMinorAtCancellation !== stored.earnedMinorAtCancellation
+    )) {
+      throw new Error("CANCELLATION_EVIDENCE_IS_FINAL");
+    }
+    await execute(
+      `UPDATE project_assignments SET agreed_minor=$1,currency=$2,fx_rate_micro=$3,scope=$4,
+         progress_note=$5,archived_at=$6,archived_by=$7,archive_reason=$8,lifecycle_status=$9,
+         completed_at=$10,cancelled_at=$11,cancellation_reason=$12,
+         earned_minor_at_cancellation=$13,sync_uuid=$14,updated_at=$15
+       WHERE id=$16`,
+      [input.agreedMinor, input.currency, input.fxRateMicro, input.scope, input.progressNote,
+       input.archivedAt, input.archivedBy, input.archiveReason, input.lifecycleStatus,
+       input.completedAt, input.cancelledAt, input.cancellationReason?.trim() ?? null,
+       derivedEarned, input.syncUuid, input.updatedAt, input.localId],
+    );
+  } else {
+    const r = await execute(
+      `INSERT INTO project_assignments
+         (person_id,project_id,agreed_minor,currency,fx_rate_micro,scope,progress_note,
+          created_at,archived_at,archived_by,archive_reason,lifecycle_status,completed_at,
+          cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [input.personId, input.projectId, input.agreedMinor, input.currency, input.fxRateMicro,
+       input.scope, input.progressNote, input.createdAt ?? input.updatedAt, input.archivedAt,
+       input.archivedBy, input.archiveReason, input.lifecycleStatus, input.completedAt,
+       input.cancelledAt, input.cancellationReason?.trim() ?? null, derivedEarned,
+       input.syncUuid, input.updatedAt],
+    );
+    void r;
+  }
+}
+
 // --- person payments ---
+
+export interface SyncedPersonPaymentInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  assignmentId: number;
+  date: string;
+  amountMinor: number;
+  note: string | null;
+  createdAt: string | null;
+  voidedAt: string | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+  reversalOfId: number | null;
+}
 
 export async function listPersonPayments(assignmentIds: number[]): Promise<PersonPayment[]> {
   if (assignmentIds.length === 0) return [];
@@ -369,6 +549,133 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
       );
     return paymentId;
   });
+}
+
+export function applySyncedPersonPayment(input: SyncedPersonPaymentInput): Promise<number> {
+  return atomicCommand<number>("apply_synced_person_payment_atomic", { input }, () => applySyncedPersonPaymentDouble(input));
+}
+
+async function personPaymentContext(assignmentId: number) {
+  const ctx = await selectOne<{
+    projectId: number;
+    currency: string;
+    fxRateMicro: number;
+    personName: string;
+    personType: string;
+    agreedMinor: number;
+    lifecycleStatus: AssignmentLifecycle;
+    earnedMinorAtCancellation: number | null;
+    archivedAt: string | null;
+    projectArchivedAt: string | null;
+    personArchivedAt: string | null;
+  }>(
+    `SELECT a.project_id AS projectId, a.currency, a.fx_rate_micro AS fxRateMicro,
+            a.agreed_minor AS agreedMinor, a.lifecycle_status AS lifecycleStatus,
+            a.earned_minor_at_cancellation AS earnedMinorAtCancellation, a.archived_at AS archivedAt,
+            p.archived_at AS projectArchivedAt,
+            pe.name AS personName, pe.type AS personType, pe.archived_at AS personArchivedAt
+     FROM project_assignments a
+     JOIN people pe ON pe.id = a.person_id
+     JOIN projects p ON p.id = a.project_id
+     WHERE a.id = $1`,
+    [assignmentId],
+  );
+  if (!ctx) throw new Error("ASSIGNMENT_NOT_FOUND");
+  if (ctx.archivedAt !== null || ctx.projectArchivedAt !== null || ctx.personArchivedAt !== null) {
+    throw new Error("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID");
+  }
+  return ctx;
+}
+
+async function personPaymentDue(assignmentId: number, excludePaymentId?: number): Promise<Awaited<ReturnType<typeof personPaymentContext>> & { dueMinor: number }> {
+  const ctx = await personPaymentContext(assignmentId);
+  const earnedMinor = ctx.lifecycleStatus === "CANCELLED"
+    ? Math.max(0, ctx.earnedMinorAtCancellation ?? 0)
+    : Math.max(0, await assignmentEarnedMinor(assignmentId));
+  const paid = await selectOne<{ paid: number }>(
+    "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL AND ($2 IS NULL OR id<>$2)",
+    [assignmentId, excludePaymentId ?? null],
+  );
+  return { ...ctx, dueMinor: Math.max(0, earnedMinor - (paid?.paid ?? 0)) };
+}
+
+async function applySyncedPersonPaymentDouble(input: SyncedPersonPaymentInput): Promise<number> {
+  if (input.amountMinor <= 0 || !input.date.trim()) throw new Error("invalid person payment");
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_PERSON_PAYMENT_IDENTITY_REQUIRED");
+  const isVoid = input.voidedAt !== null;
+  if (input.localId !== null) {
+    const stored = await selectOne<{
+      assignmentId: number;
+      date: string;
+      amountMinor: number;
+      note: string | null;
+      voidedAt: string | null;
+      reversalOfId: number | null;
+    }>(
+      `SELECT assignment_id AS assignmentId,date,amount_minor AS amountMinor,note,
+              voided_at AS voidedAt,reversal_of_id AS reversalOfId
+         FROM person_payments WHERE id=$1`,
+      [input.localId],
+    );
+    if (!stored) throw new Error("PERSON_PAYMENT_NOT_FOUND");
+    if (stored.voidedAt !== null && !isVoid) throw new Error("VOIDED_PERSON_PAYMENT_CANNOT_BE_RESTORED_BY_SYNC");
+    if (stored.assignmentId !== input.assignmentId || stored.date !== input.date || stored.amountMinor !== input.amountMinor ||
+      stored.note !== input.note || stored.reversalOfId !== input.reversalOfId) {
+      throw new Error("PERSON_PAYMENT_IMMUTABLE_BY_SYNC");
+    }
+    if (isVoid) {
+      await execute(
+        "UPDATE person_payments SET voided_at=$1,voided_by=$2,void_reason=$3,sync_uuid=$4,updated_at=$5 WHERE id=$6 AND voided_at IS NULL",
+        [input.voidedAt, input.voidedBy, input.voidReason?.trim() || "Remote person payment voided", input.syncUuid, input.updatedAt, input.localId],
+      );
+      await execute(
+        "UPDATE expenses SET voided_at=$1,void_reason='Reversed with person payment',updated_at=$2 WHERE person_payment_id=$3 AND voided_at IS NULL",
+        [input.voidedAt, input.updatedAt, input.localId],
+      );
+    } else {
+      await execute("UPDATE person_payments SET sync_uuid=$1,updated_at=$2 WHERE id=$3", [input.syncUuid, input.updatedAt, input.localId]);
+    }
+    return input.localId;
+  }
+  if (!isVoid) {
+    const twin = await selectOne<{ id: number }>(
+      "SELECT id FROM person_payments WHERE assignment_id=$1 AND date=$2 AND amount_minor=$3 AND note IS $4 AND voided_at IS NULL LIMIT 1",
+      [input.assignmentId, input.date, input.amountMinor, input.note],
+    );
+    if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
+    const ctx = await personPaymentDue(input.assignmentId);
+    if (input.amountMinor > ctx.dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
+    const category = await selectOne<{ id: number }>(
+      "SELECT id FROM expense_categories ORDER BY CASE WHEN name_en=$1 THEN 0 ELSE 1 END, sort_order, id LIMIT 1",
+      [ctx.personType === "EMPLOYEE" ? "Salaries" : "Freelancers"],
+    );
+    if (!category) throw new Error("EXPENSE_CATEGORY_NOT_FOUND");
+    const r = await execute(
+      `INSERT INTO person_payments (assignment_id,date,amount_minor,note,created_at,reversal_of_id,sync_uuid,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [input.assignmentId, input.date, input.amountMinor, input.note, input.createdAt ?? input.updatedAt,
+       input.reversalOfId, input.syncUuid, input.updatedAt],
+    );
+    const paymentId = r.lastInsertId ?? 0;
+    await execute(
+      `INSERT INTO expenses (date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,person_payment_id,created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [input.date, category.id, input.note ? `${ctx.personName} — ${input.note}` : ctx.personName,
+       ctx.projectId, ctx.personName, input.amountMinor, ctx.currency, ctx.fxRateMicro, paymentId,
+       input.createdAt ?? input.updatedAt],
+    );
+    return paymentId;
+  }
+  const assignment = await selectOne<{ id: number }>("SELECT id FROM project_assignments WHERE id=$1", [input.assignmentId]);
+  if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
+  const r = await execute(
+    `INSERT INTO person_payments
+       (assignment_id,date,amount_minor,note,created_at,voided_at,voided_by,void_reason,reversal_of_id,sync_uuid,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [input.assignmentId, input.date, input.amountMinor, input.note, input.createdAt ?? input.updatedAt,
+     input.voidedAt, input.voidedBy, input.voidReason, input.reversalOfId, input.syncUuid, input.updatedAt],
+  );
+  return r.lastInsertId ?? 0;
 }
 
 /** Reverse a team payment without destroying either financial record. */

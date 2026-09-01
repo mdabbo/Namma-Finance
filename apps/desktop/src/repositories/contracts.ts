@@ -5,6 +5,42 @@ import { atomicCommand } from "../lib/atomic";
 
 export interface RevisionMetadata { effectiveDate: string; reason: string }
 
+export interface SyncedContractRevisionInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  contractId: number;
+  revisionNumber: number;
+  effectiveDate: string;
+  contractValueMinor: number;
+  vatBp: number;
+  retentionBp: number;
+  withholdingBp: number;
+  advanceMinor: number;
+  advanceRecoveryMethod: Contract["advanceRecoveryMethod"];
+  paymentTermsDays: number;
+  currency: string;
+  fxRateMicro: number;
+  reason: string;
+  createdAt: string | null;
+  createdBy: string | null;
+  approvedAt: string | null;
+}
+
+export interface SyncedVariationOrderInput {
+  localId: number | null;
+  syncUuid: string;
+  updatedAt: string;
+  contractId: number;
+  revisionId: number | null;
+  number: string;
+  description: string | null;
+  valueDeltaMinor: number;
+  approvedAt: string | null;
+  createdAt: string | null;
+  createdBy: string | null;
+}
+
 interface RevisionRow {
   id: number; contract_id: number; revision_number: number; effective_date: string;
   contract_value_minor: number; vat_bp: number; retention_bp: number; withholding_bp: number;
@@ -194,6 +230,124 @@ export async function deleteContract(id: number, reason?: string): Promise<void>
     [id, reason?.trim() || "Archived by user"],
   );
   if (result.rowsAffected !== 1) throw new Error("CONTRACT_NOT_FOUND_OR_ARCHIVED");
+}
+
+export function applySyncedContractRevision(input: SyncedContractRevisionInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_contract_revision_atomic", { input }, () => applySyncedContractRevisionDouble(input));
+}
+
+export function applySyncedVariationOrder(input: SyncedVariationOrderInput): Promise<void> {
+  return atomicCommand<void>("apply_synced_variation_order_atomic", { input }, () => applySyncedVariationOrderDouble(input));
+}
+
+function validateSyncedRevision(input: SyncedContractRevisionInput): void {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_REVISION_IDENTITY_REQUIRED");
+  if (input.revisionNumber <= 0 || !input.effectiveDate.trim() || input.contractValueMinor < 0 ||
+    input.advanceMinor < 0 || input.advanceMinor > input.contractValueMinor ||
+    input.vatBp < 0 || input.vatBp > 10_000 || input.retentionBp < 0 || input.retentionBp > 10_000 ||
+    input.withholdingBp < 0 || input.withholdingBp > 10_000 ||
+    input.paymentTermsDays < 0 || input.paymentTermsDays > 3650 ||
+    !input.currency.trim() || input.fxRateMicro <= 0 || !input.reason.trim()) {
+    throw new Error("invalid contract revision");
+  }
+}
+
+async function assertSyncedContractWritable(contractId: number): Promise<void> {
+  const row = await selectOne<{ archivedAt: string | null; projectArchivedAt: string | null }>(
+    `SELECT c.archived_at AS archivedAt,p.archived_at AS projectArchivedAt
+       FROM contracts c JOIN projects p ON p.id=c.project_id WHERE c.id=$1`,
+    [contractId],
+  );
+  if (!row) throw new Error("CONTRACT_NOT_FOUND");
+  if (row.archivedAt !== null || row.projectArchivedAt !== null) throw new Error("ARCHIVED_CONTRACT_IS_READ_ONLY");
+}
+
+async function applySyncedContractRevisionDouble(input: SyncedContractRevisionInput): Promise<void> {
+  validateSyncedRevision(input);
+  await assertSyncedContractWritable(input.contractId);
+  if (input.localId !== null) {
+    const stored = await selectOne<RevisionRow>("SELECT * FROM contract_revisions WHERE id=$1", [input.localId]);
+    if (!stored) throw new Error("CONTRACT_REVISION_NOT_FOUND");
+    if (stored.approved_at !== null) {
+      const same = stored.contract_id === input.contractId && stored.revision_number === input.revisionNumber &&
+        stored.effective_date === input.effectiveDate && stored.contract_value_minor === input.contractValueMinor &&
+        stored.vat_bp === input.vatBp && stored.retention_bp === input.retentionBp &&
+        stored.withholding_bp === input.withholdingBp && stored.advance_minor === input.advanceMinor &&
+        stored.advance_recovery_method === input.advanceRecoveryMethod &&
+        stored.payment_terms_days === input.paymentTermsDays && stored.currency === input.currency &&
+        stored.fx_rate_micro === input.fxRateMicro && stored.reason === input.reason &&
+        stored.approved_at === input.approvedAt;
+      if (!same) throw new Error("APPROVED_CONTRACT_REVISION_IMMUTABLE");
+      await execute("UPDATE contract_revisions SET sync_uuid=$1, updated_at=$2 WHERE id=$3", [input.syncUuid, input.updatedAt, input.localId]);
+      return;
+    }
+    await execute(
+      `UPDATE contract_revisions SET contract_id=$1,revision_number=$2,effective_date=$3,
+         contract_value_minor=$4,vat_bp=$5,retention_bp=$6,withholding_bp=$7,advance_minor=$8,
+         advance_recovery_method=$9,payment_terms_days=$10,currency=$11,fx_rate_micro=$12,
+         reason=$13,created_by=$14,approved_at=$15,sync_uuid=$16,updated_at=$17 WHERE id=$18`,
+      [input.contractId, input.revisionNumber, input.effectiveDate, input.contractValueMinor,
+       input.vatBp, input.retentionBp, input.withholdingBp, input.advanceMinor,
+       input.advanceRecoveryMethod, input.paymentTermsDays, input.currency, input.fxRateMicro,
+       input.reason.trim(), input.createdBy, input.approvedAt, input.syncUuid, input.updatedAt,
+       input.localId],
+    );
+    return;
+  }
+  await execute(
+    `INSERT INTO contract_revisions
+       (contract_id,revision_number,effective_date,contract_value_minor,vat_bp,retention_bp,
+        withholding_bp,advance_minor,advance_recovery_method,payment_terms_days,currency,
+        fx_rate_micro,reason,created_at,created_by,approved_at,sync_uuid,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+    [input.contractId, input.revisionNumber, input.effectiveDate, input.contractValueMinor,
+     input.vatBp, input.retentionBp, input.withholdingBp, input.advanceMinor,
+     input.advanceRecoveryMethod, input.paymentTermsDays, input.currency, input.fxRateMicro,
+     input.reason.trim(), input.createdAt ?? input.updatedAt, input.createdBy, input.approvedAt,
+     input.syncUuid, input.updatedAt],
+  );
+}
+
+async function applySyncedVariationOrderDouble(input: SyncedVariationOrderInput): Promise<void> {
+  if (!input.syncUuid.trim() || !input.updatedAt.trim()) throw new Error("SYNC_VARIATION_IDENTITY_REQUIRED");
+  if (!input.number.trim()) throw new Error("invalid variation order");
+  await assertSyncedContractWritable(input.contractId);
+  if (input.revisionId !== null) {
+    const revision = await selectOne<{ contractId: number }>("SELECT contract_id AS contractId FROM contract_revisions WHERE id=$1", [input.revisionId]);
+    if (!revision) throw new Error("CONTRACT_REVISION_NOT_FOUND");
+    if (revision.contractId !== input.contractId) throw new Error("VARIATION_REVISION_CONTRACT_MISMATCH");
+  }
+  if (input.localId !== null) {
+    const stored = await selectOne<{ contract_id: number; revision_id: number | null; number: string; description: string | null; value_delta_minor: number; approved_at: string | null }>(
+      "SELECT contract_id,revision_id,number,description,value_delta_minor,approved_at FROM variation_orders WHERE id=$1",
+      [input.localId],
+    );
+    if (!stored) throw new Error("VARIATION_ORDER_NOT_FOUND");
+    if (stored.approved_at !== null) {
+      const same = stored.contract_id === input.contractId && stored.revision_id === input.revisionId &&
+        stored.number === input.number && stored.description === input.description &&
+        stored.value_delta_minor === input.valueDeltaMinor && stored.approved_at === input.approvedAt;
+      if (!same) throw new Error("APPROVED_VARIATION_ORDER_IMMUTABLE");
+      await execute("UPDATE variation_orders SET sync_uuid=$1, updated_at=$2 WHERE id=$3", [input.syncUuid, input.updatedAt, input.localId]);
+      return;
+    }
+    await execute(
+      `UPDATE variation_orders SET contract_id=$1,revision_id=$2,number=$3,description=$4,
+         value_delta_minor=$5,approved_at=$6,created_by=$7,sync_uuid=$8,updated_at=$9 WHERE id=$10`,
+      [input.contractId, input.revisionId, input.number, input.description, input.valueDeltaMinor,
+       input.approvedAt, input.createdBy, input.syncUuid, input.updatedAt, input.localId],
+    );
+    return;
+  }
+  await execute(
+    `INSERT INTO variation_orders
+       (contract_id,revision_id,number,description,value_delta_minor,approved_at,created_at,
+        created_by,sync_uuid,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [input.contractId, input.revisionId, input.number, input.description, input.valueDeltaMinor,
+     input.approvedAt, input.createdAt ?? input.updatedAt, input.createdBy, input.syncUuid,
+     input.updatedAt],
+  );
 }
 
 export function useContractsByProject(projectId: number) {

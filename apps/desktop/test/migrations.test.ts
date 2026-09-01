@@ -61,13 +61,13 @@ describe("baseline database creation", () => {
     const database = freshDb();
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    // Schema identity is 27: the baseline recreates schema 24, then the
+    // Schema identity is 28: the baseline recreates schema 24, then the
     // forward migrations carry it to 25 (assignment lifecycle), 26 (cancellation
-    // evidence integrity) and 27 (truthful audit version), so no database can
-    // claim a version whose shape differs.
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
+    // evidence integrity), 27 (truthful audit version) and 28 (sync-domain
+    // conflict evidence), so no database can claim a version whose shape differs.
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "27" });
+      .toEqual({ value: "28" });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='application_id'").get())
       .toEqual({ value: "com.mepfinance.app" });
   });
@@ -83,7 +83,7 @@ describe("baseline database creation", () => {
     database.exec("INSERT INTO clients (name) VALUES ('Version Probe')");
     expect(database.prepare(
       "SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1",
-    ).get()).toEqual({ application_version: "0.7.0" });
+    ).get()).toEqual({ application_version: "0.7.1" });
 
     // No retired 0.6.x literal may remain on the live audit path.
     const finalize = (database.prepare(
@@ -118,11 +118,11 @@ describe("baseline database creation", () => {
     expect(historical[0]!.finalized).toBe(1);
     expect(["0.6.0", "0.6.3"]).toContain(historical[0]!.application_version);
 
-    // The schema-27 migration must apply, not abort.
+    // The remaining forward migrations must apply, not abort.
     expect(() => applyMigrations(database, 4)).not.toThrow();
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "27" });
+      .toEqual({ value: "28" });
 
     // The historical row keeps the version that actually wrote it: a row
     // stamped 0.6.3 is TRUE, and rewriting it would replace an accurate record
@@ -132,10 +132,10 @@ describe("baseline database creation", () => {
 
     // Everything written from here on carries the shipping version.
     expect(database.prepare("SELECT application_version FROM audit_context WHERE id=1").get())
-      .toEqual({ application_version: "0.7.0" });
+      .toEqual({ application_version: "0.7.1" });
     database.exec("INSERT INTO clients (name) VALUES ('After Upgrade')");
     expect(database.prepare("SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1").get())
-      .toEqual({ application_version: "0.7.0" });
+      .toEqual({ application_version: "0.7.1" });
   });
 
   /**
@@ -236,7 +236,7 @@ describe("baseline database creation", () => {
       .toEqual({ fx_rate_micro: 1_000_000 });
     expect(database.prepare("SELECT COUNT(*) AS n FROM currencies").get()).toEqual({ n: 11 });
     expect(database.prepare("SELECT source,application_version FROM audit_context WHERE id=1").get())
-      .toEqual({ source: "DESKTOP", application_version: "0.7.0" });
+      .toEqual({ source: "DESKTOP", application_version: "0.7.1" });
 
     // A brand-new workspace has no financial records and no audit history:
     // seeding reference data must not manufacture activity.
@@ -340,7 +340,7 @@ describe("baseline financial integrity constraints", () => {
       action: "CREATE",
       entity_type: "contract",
       source: "DESKTOP",
-      application_version: "0.7.0",
+      application_version: "0.7.1",
       finalized: 1,
     });
     expect(() => database.exec("UPDATE audit_logs SET action='TAMPER'")).toThrow(/AUDIT_LOG_IMMUTABLE/);
