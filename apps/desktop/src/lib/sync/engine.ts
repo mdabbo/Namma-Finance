@@ -378,6 +378,31 @@ async function pullTable(
                 voidReason: "Remote legacy deletion preserved as void",
                 reversalOfId: local.reversal_of_id as number | null,
               });
+            } else if (spec.name === "expenses") {
+              const { applySyncedExpense } = await import("../../repositories/expenses");
+              await applySyncedExpense({
+                localId: local.id,
+                syncUuid: uuid,
+                updatedAt: remoteUpdated,
+                number: local.number as string | null,
+                date: local.date as string,
+                categoryId: local.category_id as number,
+                description: local.description as string,
+                projectId: local.project_id as number | null,
+                supplier: local.supplier as string | null,
+                amountMinor: local.amount_minor as number,
+                currency: local.currency as string,
+                fxRateMicro: local.fx_rate_micro as number,
+                personPaymentId: local.person_payment_id as number | null,
+                createdAt: local.created_at as string | null,
+                archivedAt: local.archived_at as string | null,
+                archivedBy: local.archived_by as string | null,
+                archiveReason: local.archive_reason as string | null,
+                voidedAt: remote.deleted_at as string,
+                voidedBy: null,
+                voidReason: "Remote legacy deletion preserved as void",
+                reversalOfId: local.reversal_of_id as number | null,
+              });
             } else {
               const legacyDeleted = spec.name === "payment_certificates" ? ", deleted_at=$1" : "";
               await executeSyncMutation(`UPDATE ${spec.name} SET voided_at=$1, void_reason='Remote legacy deletion preserved as void'${legacyDeleted} WHERE id=$2`, [remote.deleted_at, local.id]);
@@ -489,6 +514,56 @@ async function pullTable(
             await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
             continue;
           }
+          if (spec.name === "contract_revisions") {
+            const { applySyncedContractRevision } = await import("../../repositories/contracts");
+            await applySyncedContractRevision({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              revisionNumber: values.revision_number as number,
+              effectiveDate: values.effective_date as string,
+              contractValueMinor: values.contract_value_minor as number,
+              vatBp: values.vat_bp as number,
+              retentionBp: values.retention_bp as number,
+              withholdingBp: values.withholding_bp as number,
+              advanceMinor: values.advance_minor as number,
+              advanceRecoveryMethod: values.advance_recovery_method as "PROPORTIONAL" | "MANUAL",
+              paymentTermsDays: values.payment_terms_days as number,
+              currency: values.currency as string,
+              fxRateMicro: values.fx_rate_micro as number,
+              reason: values.reason as string,
+              createdAt: values.created_at as string | null,
+              createdBy: values.created_by as string | null,
+              approvedAt: values.approved_at as string | null,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
+          if (spec.name === "variation_orders") {
+            const { applySyncedVariationOrder } = await import("../../repositories/contracts");
+            await applySyncedVariationOrder({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              contractId: values.contract_id as number,
+              revisionId: values.revision_id as number | null,
+              number: values.number as string,
+              description: values.description as string | null,
+              valueDeltaMinor: values.value_delta_minor as number,
+              approvedAt: values.approved_at as string | null,
+              createdAt: values.created_at as string | null,
+              createdBy: values.created_by as string | null,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
+          }
           if (spec.name === "payment_certificate_allocations") {
             const duplicate = await selectOne<LocalRow>("SELECT * FROM payment_certificate_allocations WHERE payment_id=$1 AND certificate_id=$2 AND sync_uuid<>$3", [values.payment_id, values.certificate_id, uuid]);
             if (duplicate) {
@@ -578,6 +653,37 @@ async function pullTable(
               await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
               continue;
             }
+          }
+          if (spec.name === "expenses") {
+            const { applySyncedExpense } = await import("../../repositories/expenses");
+            await applySyncedExpense({
+              localId: local?.id ?? null,
+              syncUuid: uuid,
+              updatedAt: remoteUpdated,
+              number: values.number as string | null,
+              date: values.date as string,
+              categoryId: values.category_id as number,
+              description: values.description as string,
+              projectId: values.project_id as number | null,
+              supplier: values.supplier as string | null,
+              amountMinor: values.amount_minor as number,
+              currency: values.currency as string,
+              fxRateMicro: values.fx_rate_micro as number,
+              personPaymentId: values.person_payment_id as number | null,
+              createdAt: values.created_at as string | null,
+              archivedAt: values.archived_at as string | null,
+              archivedBy: values.archived_by as string | null,
+              archiveReason: values.archive_reason as string | null,
+              voidedAt: values.voided_at as string | null,
+              voidedBy: values.voided_by as string | null,
+              voidReason: values.void_reason as string | null,
+              reversalOfId: values.reversal_of_id as number | null,
+            });
+            mapFor(maps, spec.name).invalidate(uuid);
+            report.pulled += 1;
+            await saveBaseline(spec.name, uuid, stableJson(remotePayload(spec, remote)), remoteUpdated);
+            await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+            continue;
           }
           if (local) {
             const sets = spec.columns.map((c, i) => `${c} = $${i + 1}`).join(", ");

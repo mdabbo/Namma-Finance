@@ -31,6 +31,7 @@ import { createAssignment, createPerson, createPersonPayment, deletePersonPaymen
 import { resolveSyncConflict } from "../src/repositories/syncConflicts";
 import { createCertificate, nextCertificateSeq } from "../src/repositories/certificates";
 import { createPayment } from "../src/repositories/payments";
+import { createExpense } from "../src/repositories/expenses";
 
 /** Run a full sync on a given device against the shared remote. */
 async function sync(deviceId: string) {
@@ -679,6 +680,105 @@ describe("domain-aware assignment and person-payment sync", () => {
     expect(report.error).toContain("PERSON_PAYMENT_EXCEEDS_DUE");
     expect(rawOn("B", "SELECT id FROM person_payments")).toHaveLength(0);
     expect(rawOn("B", "SELECT id FROM expenses WHERE person_payment_id IS NOT NULL")).toHaveLength(0);
+  });
+});
+
+describe("domain-aware expense and revision sync", () => {
+  async function financialSyncFixture(prefix = "M5-SYNC") {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    const contractId = await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 100_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null });
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    return { projectId, contractId };
+  }
+
+  it("pulls and voids a standalone expense through the synced expense path", async () => {
+    const { projectId } = await financialSyncFixture("EXPENSE");
+    useDevice("A");
+    const categoryId = rawOneOn<{ id: number }>("A", "SELECT id FROM expense_categories WHERE name_en='Travel'")!.id;
+    const expenseId = await createExpense({ date: "2026-07-05", categoryId, description: "Site visit", projectId, supplier: "Driver", amountMinor: 2_500, currency: "EGP", fxRateMicro: 1_000_000, attachmentPath: null });
+    await sync("A");
+    await sync("B");
+
+    expect(rawOneOn<{ amount_minor: number }>("B", "SELECT amount_minor FROM expenses WHERE description='Site visit'")!.amount_minor).toBe(2_500);
+
+    useDevice("A");
+    await execute("UPDATE expenses SET voided_at='2026-07-06T00:00:00.000Z', void_reason='Remote void' WHERE id=$1", [expenseId]);
+    await sync("A");
+    await sync("B");
+    expect(rawOneOn<{ voided_at: string | null }>("B", "SELECT voided_at FROM expenses WHERE description='Site visit'")!.voided_at).toBeTruthy();
+  });
+
+  it("rejects an independently inserted linked expense", async () => {
+    await financialSyncFixture("LINKED-EXPENSE");
+    const categoryUuid = remoteRows("expense_categories").find((row) => row.name_en === "Freelancers")!.uuid;
+    const projectUuid = remoteRows("projects")[0]!.uuid;
+    await makeFakeClient().from("expenses").upsert([{
+      uuid: "55555555-7777-4777-8777-555555555551",
+      number: "EXP-SPOOF",
+      date: "2026-07-05",
+      category_id: categoryUuid,
+      description: "Spoofed linked expense",
+      project_id: projectUuid,
+      supplier: "Someone",
+      amount_minor: 1_000,
+      currency: "EGP",
+      fx_rate_micro: 1_000_000,
+      person_payment_id: "55555555-7777-4777-8777-555555555552",
+      created_at: "2099-07-01T00:00:00.000Z",
+      archived_at: null,
+      archived_by: null,
+      archive_reason: null,
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-07-01T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(true);
+    expect(rawOn("B", "SELECT id FROM expenses WHERE description='Spoofed linked expense'")).toHaveLength(0);
+  });
+
+  it("refuses to rewrite an approved synced contract revision", async () => {
+    await financialSyncFixture("REV-IMMUTABLE");
+    const revision = remoteRows("contract_revisions")[0]!;
+    revision.vat_bp = 999;
+    revision.updated_at = "2099-07-02T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("APPROVED_CONTRACT_REVISION_IMMUTABLE");
+    expect(rawOneOn<{ vat_bp: number }>("B", "SELECT vat_bp FROM contract_revisions")!.vat_bp).toBe(0);
+  });
+
+  it("refuses to rewrite an approved synced variation order", async () => {
+    const { contractId } = await financialSyncFixture("VO-IMMUTABLE");
+    useDevice("A");
+    await import("../src/repositories/contracts").then(({ updateContract }) =>
+      updateContract(contractId, { projectId: 1, number: "C-VO-IMMUTABLE", title: null, valueMinor: 110_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null }, { effectiveDate: "2026-07-02", reason: "Approved VO" }),
+    );
+    await sync("A");
+    await sync("B");
+    const variation = remoteRows("variation_orders")[0]!;
+    variation.value_delta_minor = 1;
+    variation.updated_at = "2099-07-03T00:00:00.000Z";
+
+    useDevice("B");
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("APPROVED_VARIATION_ORDER_IMMUTABLE");
+    expect(rawOneOn<{ value_delta_minor: number }>("B", "SELECT value_delta_minor FROM variation_orders")!.value_delta_minor).toBe(10_000);
   });
 });
 
