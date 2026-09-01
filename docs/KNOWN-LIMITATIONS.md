@@ -1,6 +1,6 @@
 # Known limitations
 
-Current as of v0.7.0 (Beta), schema 27. Each entry states what the limitation
+Current as of v0.7.1 (Beta), schema 28. Each entry states what the limitation
 is, why it exists, and what to do about it.
 
 ## Database and migrations
@@ -19,8 +19,8 @@ procedure. v0.7.0 is unreleased, so no production database is affected.
 
 Rows written by a 0.6.x-era binary remain stamped `0.6.0` or `0.6.3`. They are
 not restamped, because `audit_logs` is append-only by trigger and because the
-old stamp is factually correct for those rows. Only rows written from schema 27
-onward carry `0.7.0`.
+old stamp is factually correct for those rows. Rows written from schema 27
+carry `0.7.0`; rows written from schema 28 onward carry `0.7.1`.
 
 Consequence: `application_version` in `audit_logs` is a record of *what wrote
 the row*, not of the schema the database currently has. Reports that group by
@@ -48,13 +48,18 @@ security is not yet implemented. See `docs/supabase-roles.sql`.
 itself is not encrypted, so anyone with filesystem access to the Windows account
 can read it. Database or volume encryption is a separate deployment option.
 
-### Synced rows bypass the certificate lifecycle gate
+### Older sync peers may not advertise protocol metadata
 
-Certificate lifecycle rules (financial fields immutable once submitted) are
-enforced by the Rust certificate commands. Rows arriving through
-`execute_sync_mutation_atomic` are validated for allocation integrity but do not
-pass the same lifecycle gate, so a peer running an older build could push a
-financial change to a submitted certificate.
+v0.7.1 clients can publish application version, schema version, and financial
+protocol version through the optional `sync_peers` table. Older clients, or
+Supabase projects that have not applied `docs/supabase-0018-sync-peers.sql`,
+cannot provide that proactive signal.
+
+This does not permit silent financial corruption: protected financial pulls
+still pass through the local Rust domain validation paths. Invalid incoming
+certificate, payment, allocation, assignment, person-payment, expense, approved
+revision, and variation-order mutations are preserved as reviewable
+`REMOTE_DOMAIN_REJECTED` conflicts instead of being applied.
 
 ## Mobile companion
 
