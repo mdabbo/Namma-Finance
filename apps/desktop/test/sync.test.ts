@@ -11,7 +11,7 @@ vi.mock("../src/lib/sync/client", async () => {
   };
 });
 
-import { runSync } from "../src/lib/sync/engine";
+import { FINANCIAL_SYNC_PROTOCOL_VERSION, MIN_FINANCIAL_SYNC_PROTOCOL_VERSION, runSync } from "../src/lib/sync/engine";
 import {
   execute,
   newDevice,
@@ -61,6 +61,34 @@ beforeEach(() => resetRig());
 afterEach(() => resetRig());
 
 describe("two-device round-trip", () => {
+  it("advertises the local financial sync protocol before exchanging data", async () => {
+    newDevice("A");
+    await sync("A");
+
+    const peer = remoteRows("sync_peers")[0]!;
+    expect(peer.financial_protocol_version).toBe(FINANCIAL_SYNC_PROTOCOL_VERSION);
+    expect(peer.schema_version).toBe(28);
+    expect(peer.application_version).toBe("0.7.1");
+    expect(peer.deleted_at).toBeNull();
+  });
+
+  it("blocks sync when a known peer advertises an incompatible financial protocol", async () => {
+    newDevice("A");
+    await makeFakeClient().from("sync_peers").upsert([{
+      uuid: "older-device",
+      application_version: "0.6.7",
+      schema_version: 23,
+      financial_protocol_version: MIN_FINANCIAL_SYNC_PROTOCOL_VERSION - 1,
+      updated_at: "2099-01-01T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    const report = await runSync();
+
+    expect(report.ok).toBe(false);
+    expect(report.error).toContain("SYNC_PROTOCOL_UPGRADE_REQUIRED: older-device");
+  });
+
   it("surfaces same project code created offline and applies explicit KEEP_LOCAL", async () => {
     newDevice("A");
     const aClient = await createClient({ name: "Office A", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });

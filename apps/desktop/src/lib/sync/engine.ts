@@ -19,6 +19,8 @@ import { CONFLICT_PROTECTED_TABLES, NUMBER_COLLISION_TABLES, SYNC_TABLES, type S
 
 const PULL_BATCH = 500;
 const PUSH_BATCH = 200;
+export const FINANCIAL_SYNC_PROTOCOL_VERSION = 1;
+export const MIN_FINANCIAL_SYNC_PROTOCOL_VERSION = 1;
 
 export interface SyncReport {
   startedAt: string;
@@ -165,6 +167,45 @@ async function getCursor(kind: "pull" | "push", table: string): Promise<Cursor |
 
 async function setCursor(kind: "pull" | "push", table: string, cursor: Cursor): Promise<void> {
   await setState(`${kind}:${table}`, JSON.stringify(cursor));
+}
+
+function isOptionalPeerTableMissing(error: { message: string } | null): boolean {
+  if (!error) return false;
+  return /sync_peers|relation .* does not exist|could not find the table|schema cache/i.test(error.message);
+}
+
+async function advertiseAndCheckProtocol(client: SupabaseClient): Promise<void> {
+  const settings = new Map((await select<{ key: string; value: string }>(
+    "SELECT key,value FROM settings WHERE key IN ('device_id')",
+  )).map((row) => [row.key, row.value]));
+  const metadata = new Map((await select<{ key: string; value: string }>(
+    "SELECT key,value FROM app_metadata WHERE key IN ('application_version','schema_version')",
+  )).map((row) => [row.key, row.value]));
+  const deviceId = settings.get("device_id") ?? "unknown-device";
+  const updatedAt = nowIso();
+  const { error: advertiseError } = await client.from("sync_peers").upsert([{
+    uuid: deviceId,
+    application_version: metadata.get("application_version") ?? null,
+    schema_version: Number(metadata.get("schema_version") ?? 0),
+    financial_protocol_version: FINANCIAL_SYNC_PROTOCOL_VERSION,
+    updated_at: updatedAt,
+    deleted_at: null,
+  }], { onConflict: "uuid" });
+  if (isOptionalPeerTableMissing(advertiseError)) return;
+  if (advertiseError) throw new Error(`sync peer advertise: ${advertiseError.message}`);
+
+  const { data, error } = await client.from("sync_peers")
+    .select("uuid,financial_protocol_version,deleted_at")
+    .is("deleted_at", null);
+  if (isOptionalPeerTableMissing(error)) return;
+  if (error) throw new Error(`sync peer check: ${error.message}`);
+  const incompatible = (data ?? []).find((peer) =>
+    peer.uuid !== deviceId
+    && Number(peer.financial_protocol_version ?? 0) < MIN_FINANCIAL_SYNC_PROTOCOL_VERSION
+  );
+  if (incompatible) {
+    throw new Error(`SYNC_PROTOCOL_UPGRADE_REQUIRED: ${String(incompatible.uuid)}`);
+  }
 }
 
 // ─── uuid ↔ local id maps (cached per run) ──────────────────────────────────
@@ -1015,6 +1056,7 @@ export async function runSync(): Promise<SyncReport> {
     const maps: IdMaps = new Map();
     const purgedUuids = new Set<string>();
 
+    await advertiseAndCheckProtocol(client);
     await alignSeededCategories(client);
     for (const spec of SYNC_TABLES) await pullTable(client, spec, maps, report, purgedUuids);
     await fixupMilestoneRefs();

@@ -9,6 +9,8 @@ All notable changes to NAMAA Finance are documented here. Versions follow Semant
 - Protected financial sync pulls that fail domain validation are preserved as
   `REMOTE_DOMAIN_REJECTED` conflicts with local state, incoming state, rejection
   reason and timestamps for later review.
+- Optional Supabase `sync_peers` metadata lets clients advertise app/schema and
+  financial sync protocol compatibility before exchanging data.
 
 ### Changed
 
@@ -23,6 +25,8 @@ All notable changes to NAMAA Finance are documented here. Versions follow Semant
 - Conflict resolution fails closed for rejected remote financial mutations:
   `KEEP_REMOTE` is refused because it would bypass the same validation that
   rejected the incoming row.
+- Sync fails closed with `SYNC_PROTOCOL_UPGRADE_REQUIRED` when a known active
+  peer advertises an unsupported financial sync protocol.
 
 ## [0.7.0] - 2026-08-31
 
