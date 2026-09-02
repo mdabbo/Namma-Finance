@@ -256,9 +256,9 @@ describe("freelancer/employee assignment accounts", () => {
         cancellationReason: null, earnedMinorAtCancellation: null, archivedAt: null,
       },
       [
-        { id: 1, assignmentId: 1, date: "2026-02-01", amountMinor: 1_500_000, note: null, createdAt: "" },
-        { id: 2, assignmentId: 1, date: "2026-03-01", amountMinor: 1_000_000, note: null, createdAt: "" },
-        { id: 3, assignmentId: 99, date: "2026-03-01", amountMinor: 9_999_999, note: null, createdAt: "" }, // other assignment
+        { id: 1, assignmentId: 1, date: "2026-02-01", amountMinor: 1_500_000, note: null, paymentKind: "EARNED", createdAt: "" },
+        { id: 2, assignmentId: 1, date: "2026-03-01", amountMinor: 1_000_000, note: null, paymentKind: "EARNED", createdAt: "" },
+        { id: 3, assignmentId: 99, date: "2026-03-01", amountMinor: 9_999_999, note: null, paymentKind: "EARNED", createdAt: "" }, // other assignment
       ],
     );
     expect(account.paidMinor).toBe(2_500_000);

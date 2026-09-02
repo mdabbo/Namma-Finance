@@ -222,6 +222,7 @@ export interface PersonPayment {
   date: string;
   amountMinor: number;
   note: string | null;
+  paymentKind: "EARNED" | "SPECIAL";
   createdAt: string;
 }
 

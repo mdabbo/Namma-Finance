@@ -61,13 +61,14 @@ describe("baseline database creation", () => {
     const database = freshDb();
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    // Schema identity is 28: the baseline recreates schema 24, then the
+    // Schema identity is 29: the baseline recreates schema 24, then the
     // forward migrations carry it to 25 (assignment lifecycle), 26 (cancellation
     // evidence integrity), 27 (truthful audit version) and 28 (sync-domain
-    // conflict evidence), so no database can claim a version whose shape differs.
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
+    // conflict evidence), then 29 (special person payments), so no database can
+    // claim a version whose shape differs.
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 29 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "28" });
+      .toEqual({ value: "29" });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='application_id'").get())
       .toEqual({ value: "com.mepfinance.app" });
   });
@@ -120,9 +121,9 @@ describe("baseline database creation", () => {
 
     // The remaining forward migrations must apply, not abort.
     expect(() => applyMigrations(database, 4)).not.toThrow();
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 29 });
     expect(database.prepare("SELECT value FROM app_metadata WHERE key='schema_version'").get())
-      .toEqual({ value: "28" });
+      .toEqual({ value: "29" });
 
     // The historical row keeps the version that actually wrote it: a row
     // stamped 0.6.3 is TRUE, and rewriting it would replace an accurate record

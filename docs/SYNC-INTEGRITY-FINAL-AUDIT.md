@@ -1,6 +1,6 @@
 # Sync Integrity Final Audit
 
-Current as of v0.7.1 Beta, schema 28.
+Current as of v0.7.1 Beta, schema 29.
 
 This audit covers the v0.7.1 sync-integrity hardening milestones. Its purpose is
 to verify that synchronized financial mutations follow the same domain rules as

@@ -122,6 +122,30 @@ describe("Milestone 3 — lifecycle-aware team accounts and payments", () => {
     expect((await accountOf(assignmentId))!.dueMinor).toBe(0);
   });
 
+  it("allows a deliberate special payment above due and records it as a linked expense", async () => {
+    const { assignmentId, contractId } = await workspace(100_000);
+    await collect(contractId, 20_000, "C2");
+
+    await expect(
+      createPersonPayment({ assignmentId, date: "2026-07-12", amountMinor: 20_001, note: "normal overpay" }),
+    ).rejects.toThrow("PERSON_PAYMENT_EXCEEDS_DUE");
+
+    const paymentId = await createPersonPayment({
+      assignmentId,
+      date: "2026-07-12",
+      amountMinor: 25_000,
+      note: "advance against next scope",
+      paymentKind: "SPECIAL",
+    });
+
+    expect(raw<{ payment_kind: string }>(`SELECT payment_kind FROM person_payments WHERE id=${paymentId}`)[0]?.payment_kind).toBe("SPECIAL");
+    expect(raw(`SELECT id FROM expenses WHERE person_payment_id=${paymentId} AND voided_at IS NULL`)).toHaveLength(1);
+    const account = (await accountOf(assignmentId))!;
+    expect(account.paidMinor).toBe(25_000);
+    expect(account.dueMinor).toBe(0);
+    expect(account.committedMinor).toBeGreaterThanOrEqual(account.paidMinor);
+  });
+
   // (5)
   it("a completed assignment keeps its commitment but only earned value is payable", async () => {
     const { contractId, assignmentId } = await workspace(100_000);

@@ -8,6 +8,7 @@ export const ar: Dictionary = {
     archive: "أرشفة",
     void: "إبطال",
     voided: "مُبطَل",
+    reverse: "عكس",
     reversed: "معكوس",
     reason: "السبب",
     reasonPlaceholder: "اذكر السبب — يُحفظ في سجل التدقيق",
@@ -554,6 +555,7 @@ export const ar: Dictionary = {
     markApproved: "اعتماد",
     markPaid: "تحويل إلى مدفوع",
     correctDetails: "تصحيح البيانات",
+    voidAllocatedBlocked: "هذا المستخلص عليه دفعات موزعة. أبطل الدفعة أو عدّلها أولًا، ثم أبطل المستخلص.",
     pdfTitle: "مستخلص أعمال",
   },
   payments: {
@@ -590,6 +592,11 @@ export const ar: Dictionary = {
     newCategory: "بند جديد",
     monthlyTotal: "هذا الشهر",
     autoTeamPayment: "تلقائي — دفعة فريق عمل",
+    reverseTeamPayment: "عكس دفعة فريق العمل",
+    confirmReverseTeamPayment:
+      "هذا المصروف ناتج عن دفعة لفريق العمل. سيؤدي عكسه إلى إبطال دفعة الفريق والمصروف المرتبط بها معًا.",
+    linkedExpenseUseTeamPayment:
+      "هذا المصروف مرتبط بدفعة لفريق العمل. اعكس دفعة الفريق بدلاً من إبطال المصروف مباشرة.",
   },
   costs: {
     certifiedRevenue: "الإيراد المعتمد",
@@ -649,6 +656,9 @@ export const ar: Dictionary = {
     workProgress: "تقدم العمل",
     payments: "الدفعات",
     newPayment: "تسجيل دفعة",
+    paymentKind: "نوع الدفعة",
+    paymentKindEarned: "دفعة مستحقة عادية",
+    paymentKindSpecial: "دفعة خاصة / مقدمة",
     duplicatePayment: "هذه الدفعة مسجلة بالفعل (نفس التاريخ والمبلغ والملاحظة) — غيّر التاريخ أو الملاحظة لتسجيلها مرة أخرى عمدًا.",
     paymentExceedsDue: "لا يمكن أن تتجاوز الدفعة المبلغ المستحق حاليًا ({{due}}).",
     paymentExceedsDueShort: "الدفعة تتجاوز المبلغ المستحق حاليًا.",

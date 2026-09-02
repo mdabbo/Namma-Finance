@@ -126,7 +126,7 @@ describe("Milestone 8 immutable audit trail", () => {
     expect(usd).toHaveLength(1);
     expect(usd[0]?.entityUuid).toBe("USD");
     // Stamped from the shipping version, not a retired 0.6.x literal.
-    expect(usd[0]?.applicationVersion).toBe("0.7.0");
+    expect(usd[0]?.applicationVersion).toBe("0.7.1");
   });
 
   it("retains cross-device UUID identity for newly audited synced entities", async () => {
@@ -164,7 +164,7 @@ describe("Milestone 8 immutable audit trail", () => {
     await finalizePendingRestoreAudit();
     expect(raw("SELECT key FROM settings WHERE key='pending_restore_audit'")).toHaveLength(0);
     expect(raw<{ action: string; source: string; application_version: string }>("SELECT action,source,application_version FROM audit_logs WHERE action='RESTORE'")).toEqual([
-      { action: "RESTORE", source: "RESTORE", application_version: "0.7.0" },
+      { action: "RESTORE", source: "RESTORE", application_version: "0.7.1" },
     ]);
   });
 });

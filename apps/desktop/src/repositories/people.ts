@@ -174,12 +174,12 @@ export async function listAllAssignments(): Promise<AssignmentListItem[]> {
 }
 
 export async function listAllPersonPayments(): Promise<PersonPayment[]> {
-  const rows = await select<{ id: number; assignment_id: number; date: string; amount_minor: number; note: string | null; created_at: string }>(
+  const rows = await select<{ id: number; assignment_id: number; date: string; amount_minor: number; note: string | null; payment_kind?: "EARNED" | "SPECIAL" | null; created_at: string }>(
     "SELECT * FROM person_payments WHERE voided_at IS NULL ORDER BY date",
   );
   return rows.map((r) => ({
     id: r.id, assignmentId: r.assignment_id, date: r.date, amountMinor: r.amount_minor,
-    note: r.note, createdAt: r.created_at,
+    note: r.note, paymentKind: r.payment_kind ?? "EARNED", createdAt: r.created_at,
   }));
 }
 
@@ -452,6 +452,7 @@ export interface SyncedPersonPaymentInput {
   date: string;
   amountMinor: number;
   note: string | null;
+  paymentKind: "EARNED" | "SPECIAL";
   createdAt: string | null;
   voidedAt: string | null;
   voidedBy: string | null;
@@ -462,13 +463,13 @@ export interface SyncedPersonPaymentInput {
 export async function listPersonPayments(assignmentIds: number[]): Promise<PersonPayment[]> {
   if (assignmentIds.length === 0) return [];
   const placeholders = assignmentIds.map((_, i) => `$${i + 1}`).join(",");
-  const rows = await select<{ id: number; assignment_id: number; date: string; amount_minor: number; note: string | null; created_at: string }>(
+  const rows = await select<{ id: number; assignment_id: number; date: string; amount_minor: number; note: string | null; payment_kind?: "EARNED" | "SPECIAL" | null; created_at: string }>(
     `SELECT * FROM person_payments WHERE assignment_id IN (${placeholders}) AND voided_at IS NULL ORDER BY date, id`,
     assignmentIds,
   );
   return rows.map((r) => ({
     id: r.id, assignmentId: r.assignment_id, date: r.date, amountMinor: r.amount_minor,
-    note: r.note, createdAt: r.created_at,
+    note: r.note, paymentKind: r.payment_kind ?? "EARNED", createdAt: r.created_at,
   }));
 }
 
@@ -479,13 +480,14 @@ export async function listPersonPayments(assignmentIds: number[]): Promise<Perso
  * revenue − expenses — always includes team costs.
  */
 export async function createPersonPayment(input: PersonPaymentInput): Promise<number> {
+  const paymentKind = input.paymentKind ?? "EARNED";
   return atomicCommand<number>("create_person_payment_atomic", { input }, async () => {
   // guard against accidental double-recording (double-click, repeated "Pay"):
   // an EXACT twin — same assignment, date, amount and note — is rejected;
   // change the date or note to record a genuine second payment
   const twin = await selectOne<{ id: number }>(
-    "SELECT id FROM person_payments WHERE assignment_id=$1 AND date=$2 AND amount_minor=$3 AND note IS $4 AND voided_at IS NULL LIMIT 1",
-    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
+    "SELECT id FROM person_payments WHERE assignment_id=$1 AND date=$2 AND amount_minor=$3 AND note IS $4 AND payment_kind=$5 AND voided_at IS NULL LIMIT 1",
+    [input.assignmentId, input.date, input.amountMinor, input.note ?? null, paymentKind],
   );
   if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
 
@@ -526,11 +528,11 @@ export async function createPersonPayment(input: PersonPaymentInput): Promise<nu
     [input.assignmentId],
   );
   const dueMinor = Math.max(0, earnedMinor - (paidRow?.paid ?? 0));
-  if (input.amountMinor > dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
+  if (paymentKind === "EARNED" && input.amountMinor > dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
 
   const r = await execute(
-    "INSERT INTO person_payments (assignment_id, date, amount_minor, note) VALUES ($1,$2,$3,$4)",
-    [input.assignmentId, input.date, input.amountMinor, input.note ?? null],
+    "INSERT INTO person_payments (assignment_id, date, amount_minor, note, payment_kind) VALUES ($1,$2,$3,$4,$5)",
+    [input.assignmentId, input.date, input.amountMinor, input.note ?? null, paymentKind],
   );
   const paymentId = r.lastInsertId ?? 0;
     const categoryName = ctx.person_type === "EMPLOYEE" ? "Salaries" : "Freelancers";
@@ -609,18 +611,19 @@ async function applySyncedPersonPaymentDouble(input: SyncedPersonPaymentInput): 
       date: string;
       amountMinor: number;
       note: string | null;
+      paymentKind?: "EARNED" | "SPECIAL" | null;
       voidedAt: string | null;
       reversalOfId: number | null;
     }>(
       `SELECT assignment_id AS assignmentId,date,amount_minor AS amountMinor,note,
-              voided_at AS voidedAt,reversal_of_id AS reversalOfId
+              payment_kind AS paymentKind,voided_at AS voidedAt,reversal_of_id AS reversalOfId
          FROM person_payments WHERE id=$1`,
       [input.localId],
     );
     if (!stored) throw new Error("PERSON_PAYMENT_NOT_FOUND");
     if (stored.voidedAt !== null && !isVoid) throw new Error("VOIDED_PERSON_PAYMENT_CANNOT_BE_RESTORED_BY_SYNC");
     if (stored.assignmentId !== input.assignmentId || stored.date !== input.date || stored.amountMinor !== input.amountMinor ||
-      stored.note !== input.note || stored.reversalOfId !== input.reversalOfId) {
+      stored.note !== input.note || (stored.paymentKind ?? "EARNED") !== input.paymentKind || stored.reversalOfId !== input.reversalOfId) {
       throw new Error("PERSON_PAYMENT_IMMUTABLE_BY_SYNC");
     }
     if (isVoid) {
@@ -639,22 +642,22 @@ async function applySyncedPersonPaymentDouble(input: SyncedPersonPaymentInput): 
   }
   if (!isVoid) {
     const twin = await selectOne<{ id: number }>(
-      "SELECT id FROM person_payments WHERE assignment_id=$1 AND date=$2 AND amount_minor=$3 AND note IS $4 AND voided_at IS NULL LIMIT 1",
-      [input.assignmentId, input.date, input.amountMinor, input.note],
+    "SELECT id FROM person_payments WHERE assignment_id=$1 AND date=$2 AND amount_minor=$3 AND note IS $4 AND payment_kind=$5 AND voided_at IS NULL LIMIT 1",
+      [input.assignmentId, input.date, input.amountMinor, input.note, input.paymentKind],
     );
     if (twin) throw new Error("DUPLICATE_PERSON_PAYMENT");
     const ctx = await personPaymentDue(input.assignmentId);
-    if (input.amountMinor > ctx.dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
+    if (input.paymentKind === "EARNED" && input.amountMinor > ctx.dueMinor) throw new Error("PERSON_PAYMENT_EXCEEDS_DUE");
     const category = await selectOne<{ id: number }>(
       "SELECT id FROM expense_categories ORDER BY CASE WHEN name_en=$1 THEN 0 ELSE 1 END, sort_order, id LIMIT 1",
       [ctx.personType === "EMPLOYEE" ? "Salaries" : "Freelancers"],
     );
     if (!category) throw new Error("EXPENSE_CATEGORY_NOT_FOUND");
     const r = await execute(
-      `INSERT INTO person_payments (assignment_id,date,amount_minor,note,created_at,reversal_of_id,sync_uuid,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [input.assignmentId, input.date, input.amountMinor, input.note, input.createdAt ?? input.updatedAt,
-       input.reversalOfId, input.syncUuid, input.updatedAt],
+      `INSERT INTO person_payments (assignment_id,date,amount_minor,note,payment_kind,created_at,reversal_of_id,sync_uuid,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [input.assignmentId, input.date, input.amountMinor, input.note, input.paymentKind,
+       input.createdAt ?? input.updatedAt, input.reversalOfId, input.syncUuid, input.updatedAt],
     );
     const paymentId = r.lastInsertId ?? 0;
     await execute(
@@ -670,10 +673,11 @@ async function applySyncedPersonPaymentDouble(input: SyncedPersonPaymentInput): 
   if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
   const r = await execute(
     `INSERT INTO person_payments
-       (assignment_id,date,amount_minor,note,created_at,voided_at,voided_by,void_reason,reversal_of_id,sync_uuid,updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [input.assignmentId, input.date, input.amountMinor, input.note, input.createdAt ?? input.updatedAt,
-     input.voidedAt, input.voidedBy, input.voidReason, input.reversalOfId, input.syncUuid, input.updatedAt],
+       (assignment_id,date,amount_minor,note,payment_kind,created_at,voided_at,voided_by,void_reason,reversal_of_id,sync_uuid,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [input.assignmentId, input.date, input.amountMinor, input.note, input.paymentKind,
+     input.createdAt ?? input.updatedAt, input.voidedAt, input.voidedBy, input.voidReason,
+     input.reversalOfId, input.syncUuid, input.updatedAt],
   );
   return r.lastInsertId ?? 0;
 }
@@ -684,8 +688,8 @@ export async function deletePersonPayment(id: number): Promise<void> {
     const result = await execute("UPDATE person_payments SET voided_at=datetime('now'), void_reason='Reversed by user' WHERE id=$1 AND voided_at IS NULL", [id]);
     if (result.rowsAffected !== 1) throw new Error("PERSON_PAYMENT_NOT_FOUND");
     const reversal = await execute(
-      `INSERT INTO person_payments (assignment_id,date,amount_minor,note,voided_at,void_reason,reversal_of_id)
-       SELECT assignment_id,date,amount_minor,note,datetime('now'),'Reversal record',id FROM person_payments WHERE id=$1`,
+      `INSERT INTO person_payments (assignment_id,date,amount_minor,note,payment_kind,voided_at,void_reason,reversal_of_id)
+       SELECT assignment_id,date,amount_minor,note,payment_kind,datetime('now'),'Reversal record',id FROM person_payments WHERE id=$1`,
       [id],
     );
     const reversalId = reversal.lastInsertId ?? 0;

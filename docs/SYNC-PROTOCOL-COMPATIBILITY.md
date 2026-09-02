@@ -1,6 +1,6 @@
 # Sync Protocol Compatibility
 
-Current as of v0.7.1 Beta, schema 28.
+Current as of v0.7.1 Beta, schema 29.
 
 NAMAA Finance treats synced financial rows as untrusted input. The authoritative
 compatibility rule is still local validation: protected financial pulls are
@@ -39,7 +39,10 @@ If the optional `sync_peers` table has not been installed, sync continues in
 compatibility mode. This is intentional: existing Supabase workspaces can still
 sync, and unsafe financial rows remain blocked by local Rust validation and
 converted to conflicts. Installing `docs/supabase-0018-sync-peers.sql` enables
-proactive peer blocking.
+proactive peer blocking. Installing
+`docs/supabase-0019-special-person-payments.sql` adds the schema-29
+person-payment kind column used to distinguish earned payments from deliberate
+special payments.
 
 ## Limitations
 

@@ -33,6 +33,7 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 9. `supabase-0014-numbering-safety.sql`
 10. `supabase-0015-contract-sync-security.sql`
 11. `supabase-0018-sync-peers.sql` (optional compatibility metadata for v0.7.1+)
+12. `supabase-0019-special-person-payments.sql`
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by

@@ -141,6 +141,7 @@ export const personPaymentSchema = z.object({
   date: isoDate,
   amountMinor: minor.positive("required"),
   note: z.string().nullish(),
+  paymentKind: z.enum(["EARNED", "SPECIAL"]).default("EARNED"),
 });
 
 export const stageSchema = z.object({
@@ -208,4 +209,6 @@ export type PaymentInput = z.infer<typeof paymentSchema>;
 export type ExpenseInput = z.infer<typeof expenseSchema>;
 export type PersonInput = z.infer<typeof personSchema>;
 export type AssignmentInput = z.infer<typeof assignmentSchema>;
-export type PersonPaymentInput = z.infer<typeof personPaymentSchema>;
+export type PersonPaymentInput = Omit<z.infer<typeof personPaymentSchema>, "paymentKind"> & {
+  paymentKind?: "EARNED" | "SPECIAL";
+};

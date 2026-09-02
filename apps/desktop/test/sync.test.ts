@@ -67,7 +67,7 @@ describe("two-device round-trip", () => {
 
     const peer = remoteRows("sync_peers")[0]!;
     expect(peer.financial_protocol_version).toBe(FINANCIAL_SYNC_PROTOCOL_VERSION);
-    expect(peer.schema_version).toBe(28);
+    expect(peer.schema_version).toBe(29);
     expect(peer.application_version).toBe("0.7.1");
     expect(peer.deleted_at).toBeNull();
   });
@@ -914,6 +914,36 @@ describe("domain-aware assignment and person-payment sync", () => {
     expectRemoteDomainConflict("B", "person_payments", "PERSON_PAYMENT_EXCEEDS_DUE");
     expect(rawOn("B", "SELECT id FROM person_payments")).toHaveLength(0);
     expect(rawOn("B", "SELECT id FROM expenses WHERE person_payment_id IS NOT NULL")).toHaveLength(0);
+  });
+
+  it("accepts a synced special person payment above lifecycle-aware due", async () => {
+    await teamSyncFixture("TEAM-SPECIAL");
+    const assignmentUuid = remoteRows("project_assignments")[0]!.uuid;
+    await makeFakeClient().from("person_payments").upsert([{
+      uuid: "66666666-6666-4666-8666-666666666663",
+      assignment_id: assignmentUuid,
+      date: "2026-07-05",
+      amount_minor: 45_000,
+      note: "special advance",
+      payment_kind: "SPECIAL",
+      created_at: "2099-06-05T00:00:00.000Z",
+      voided_at: null,
+      voided_by: null,
+      void_reason: null,
+      reversal_of_id: null,
+      updated_at: "2099-06-05T00:00:00.000Z",
+      deleted_at: null,
+    }], { onConflict: "uuid" });
+
+    await sync("B");
+
+    const payment = rawOneOn<{ id: number; amount_minor: number; payment_kind: string }>(
+      "B",
+      "SELECT id,amount_minor,payment_kind FROM person_payments WHERE voided_at IS NULL",
+    )!;
+    expect(payment.amount_minor).toBe(45_000);
+    expect(payment.payment_kind).toBe("SPECIAL");
+    expect(rawOn("B", `SELECT id FROM expenses WHERE person_payment_id=${payment.id} AND voided_at IS NULL`)).toHaveLength(1);
   });
 });
 
