@@ -322,6 +322,7 @@ struct PersonPaymentCommandInput {
     date: String,
     amount_minor: i64,
     note: Option<String>,
+    payment_kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -358,6 +359,7 @@ struct SyncedPersonPaymentInput {
     date: String,
     amount_minor: i64,
     note: Option<String>,
+    payment_kind: Option<String>,
     created_at: Option<String>,
     voided_at: Option<String>,
     voided_by: Option<String>,
@@ -2784,10 +2786,15 @@ async fn create_person_payment_transaction(
     if input.amount_minor <= 0 || input.date.trim().is_empty() {
         return Err("invalid person payment".into());
     }
+    let payment_kind = input.payment_kind.as_deref().unwrap_or("EARNED");
+    if payment_kind != "EARNED" && payment_kind != "SPECIAL" {
+        return Err("PERSON_PAYMENT_KIND_INVALID".into());
+    }
     let mut tx = begin_immediate(pool).await?;
     let twin: Option<i64> = sqlx::query_scalar(
-        "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND voided_at IS NULL LIMIT 1",
+        "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND payment_kind=? AND voided_at IS NULL LIMIT 1",
     ).bind(input.assignment_id).bind(&input.date).bind(input.amount_minor).bind(&input.note)
+        .bind(payment_kind)
         .fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?;
     if twin.is_some() {
         return Err("DUPLICATE_PERSON_PAYMENT".into());
@@ -2859,7 +2866,7 @@ async fn create_person_payment_transaction(
     // Floored at zero: an assignment already overpaid owes nothing further, and
     // must not turn a negative balance into fresh headroom.
     let due_minor = (earned_minor - paid_minor).max(0);
-    if input.amount_minor > due_minor {
+    if payment_kind == "EARNED" && input.amount_minor > due_minor {
         return Err("PERSON_PAYMENT_EXCEEDS_DUE".into());
     }
     let category_name = if person_type == "EMPLOYEE" {
@@ -2872,12 +2879,13 @@ async fn create_person_payment_transaction(
     ).bind(category_name).fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?
         .ok_or_else(|| "no expense category configured".to_string())?;
     let payment = sqlx::query(
-        "INSERT INTO person_payments (assignment_id,date,amount_minor,note) VALUES (?,?,?,?)",
+        "INSERT INTO person_payments (assignment_id,date,amount_minor,note,payment_kind) VALUES (?,?,?,?,?)",
     )
     .bind(input.assignment_id)
     .bind(&input.date)
     .bind(input.amount_minor)
     .bind(&input.note)
+    .bind(payment_kind)
     .execute(&mut *tx)
     .await
     .map_err(|e| e.to_string())?;
@@ -2997,10 +3005,14 @@ async fn apply_synced_person_payment_transaction(
     if input.sync_uuid.trim().is_empty() || input.updated_at.trim().is_empty() {
         return Err("SYNC_PERSON_PAYMENT_IDENTITY_REQUIRED".into());
     }
+    let payment_kind = input.payment_kind.as_deref().unwrap_or("EARNED");
+    if payment_kind != "EARNED" && payment_kind != "SPECIAL" {
+        return Err("PERSON_PAYMENT_KIND_INVALID".into());
+    }
     let mut tx = begin_immediate(pool).await?;
     let existing = if let Some(id) = input.local_id {
         sqlx::query(
-            "SELECT assignment_id,date,amount_minor,note,voided_at,reversal_of_id
+            "SELECT assignment_id,date,amount_minor,note,payment_kind,voided_at,reversal_of_id
              FROM person_payments WHERE id=?",
         )
         .bind(id)
@@ -3020,6 +3032,9 @@ async fn apply_synced_person_payment_transaction(
         let stored_date: String = row.try_get("date").map_err(|e| e.to_string())?;
         let stored_amount: i64 = row.try_get("amount_minor").map_err(|e| e.to_string())?;
         let stored_note: Option<String> = row.try_get("note").map_err(|e| e.to_string())?;
+        let stored_payment_kind: String = row
+            .try_get("payment_kind")
+            .unwrap_or_else(|_| "EARNED".to_string());
         let stored_voided: Option<String> = row.try_get("voided_at").map_err(|e| e.to_string())?;
         let stored_reversal: Option<i64> =
             row.try_get("reversal_of_id").map_err(|e| e.to_string())?;
@@ -3030,6 +3045,7 @@ async fn apply_synced_person_payment_transaction(
             || stored_date != input.date
             || stored_amount != input.amount_minor
             || stored_note != input.note
+            || stored_payment_kind != payment_kind
             || stored_reversal != input.reversal_of_id
         {
             return Err("PERSON_PAYMENT_IMMUTABLE_BY_SYNC".into());
@@ -3082,12 +3098,13 @@ async fn apply_synced_person_payment_transaction(
 
     if !is_voided {
         let twin: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND voided_at IS NULL LIMIT 1",
+            "SELECT id FROM person_payments WHERE assignment_id=? AND date=? AND amount_minor=? AND note IS ? AND payment_kind=? AND voided_at IS NULL LIMIT 1",
         )
         .bind(input.assignment_id)
         .bind(&input.date)
         .bind(input.amount_minor)
         .bind(&input.note)
+        .bind(payment_kind)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -3096,20 +3113,21 @@ async fn apply_synced_person_payment_transaction(
         }
         let (due_minor, project_id, currency, person_name, person_type, fx_rate_micro, _) =
             assignment_person_payment_due(&mut tx, input.assignment_id, None).await?;
-        if input.amount_minor > due_minor {
+        if payment_kind == "EARNED" && input.amount_minor > due_minor {
             return Err("PERSON_PAYMENT_EXCEEDS_DUE".into());
         }
         let category_id = linked_expense_category_id(&mut tx, &person_type).await?;
         let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
         let payment = sqlx::query(
             "INSERT INTO person_payments
-               (assignment_id,date,amount_minor,note,created_at,reversal_of_id,sync_uuid,updated_at)
-             VALUES (?,?,?,?,?,?,?,?)",
+               (assignment_id,date,amount_minor,note,payment_kind,created_at,reversal_of_id,sync_uuid,updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?)",
         )
         .bind(input.assignment_id)
         .bind(&input.date)
         .bind(input.amount_minor)
         .bind(&input.note)
+        .bind(payment_kind)
         .bind(created_at)
         .bind(input.reversal_of_id)
         .bind(&input.sync_uuid)
@@ -3155,14 +3173,15 @@ async fn apply_synced_person_payment_transaction(
     let created_at = input.created_at.as_deref().unwrap_or(&input.updated_at);
     let payment = sqlx::query(
         "INSERT INTO person_payments
-           (assignment_id,date,amount_minor,note,created_at,voided_at,voided_by,void_reason,
+           (assignment_id,date,amount_minor,note,payment_kind,created_at,voided_at,voided_by,void_reason,
             reversal_of_id,sync_uuid,updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(input.assignment_id)
     .bind(&input.date)
     .bind(input.amount_minor)
     .bind(&input.note)
+    .bind(payment_kind)
     .bind(created_at)
     .bind(&input.voided_at)
     .bind(&input.voided_by)
@@ -3679,7 +3698,7 @@ async fn delete_person_payment_atomic(
     if result.rows_affected() != 1 {
         return Err("person payment not found".into());
     }
-    let reversal = sqlx::query("INSERT INTO person_payments (assignment_id,date,amount_minor,note,voided_at,void_reason,reversal_of_id) SELECT assignment_id,date,amount_minor,note,datetime('now'),'Reversal record',id FROM person_payments WHERE id=?")
+    let reversal = sqlx::query("INSERT INTO person_payments (assignment_id,date,amount_minor,note,payment_kind,voided_at,void_reason,reversal_of_id) SELECT assignment_id,date,amount_minor,note,payment_kind,datetime('now'),'Reversal record',id FROM person_payments WHERE id=?")
         .bind(payment_id)
         .execute(&mut *tx)
         .await
@@ -5258,14 +5277,14 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 28;
+const CURRENT_SCHEMA_VERSION: i64 = 29;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 /// Migration lineage after the v0.7.0 rebase. The baseline recreates schema 24
 /// and forward-only migrations carry it onward, so these describe the FILE
 /// sequence and are what distinguishes a rebased database from one built by the
 /// retired 0001..0024 development chain.
-const CURRENT_MIGRATION_VERSION: i64 = 6;
+const CURRENT_MIGRATION_VERSION: i64 = 7;
 const BASELINE_MIGRATION_DESCRIPTION: &str = "baseline_schema";
 
 #[derive(Debug, Clone, Serialize)]
@@ -6299,6 +6318,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
+            include_str!("../migrations/0007_special_person_payments.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -6704,6 +6724,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
+            include_str!("../migrations/0007_special_person_payments.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7453,6 +7474,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0004_cancellation_evidence_integrity.sql"),
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
+            include_str!("../migrations/0007_special_person_payments.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7925,6 +7947,7 @@ mod financial_transaction_tests {
                     date: "2026-07-10".into(),
                     amount_minor: 50_001,
                     note: Some("too much".into()),
+                    payment_kind: None,
                 },
             )
             .await;
@@ -7950,6 +7973,7 @@ mod financial_transaction_tests {
                     date: "2026-07-10".into(),
                     amount_minor: 50_000,
                     note: Some("in full".into()),
+                    payment_kind: None,
                 },
             )
             .await
@@ -7963,10 +7987,39 @@ mod financial_transaction_tests {
                     date: "2026-07-11".into(),
                     amount_minor: 1,
                     note: Some("more".into()),
+                    payment_kind: None,
                 },
             )
             .await;
             assert_eq!(again.unwrap_err(), "PERSON_PAYMENT_EXCEEDS_DUE");
+
+            let special = create_person_payment_transaction(
+                &pool,
+                PersonPaymentCommandInput {
+                    assignment_id: assignment,
+                    date: "2026-07-11".into(),
+                    amount_minor: 10_000,
+                    note: Some("special advance".into()),
+                    payment_kind: Some("SPECIAL".into()),
+                },
+            )
+            .await
+            .unwrap();
+            let stored_kind: String =
+                sqlx::query_scalar("SELECT payment_kind FROM person_payments WHERE id=?")
+                    .bind(special)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(stored_kind, "SPECIAL");
+            let linked_expenses: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM expenses WHERE person_payment_id=? AND voided_at IS NULL",
+            )
+            .bind(special)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(linked_expenses, 1);
         });
     }
 
@@ -7998,6 +8051,7 @@ mod financial_transaction_tests {
                     date: "2026-07-12".into(),
                     amount_minor: 40_001,
                     note: None,
+                    payment_kind: None,
                 },
             )
             .await;
@@ -8010,6 +8064,7 @@ mod financial_transaction_tests {
                     date: "2026-07-12".into(),
                     amount_minor: 40_000,
                     note: None,
+                    payment_kind: None,
                 },
             )
             .await
@@ -8028,6 +8083,7 @@ mod financial_transaction_tests {
                     date: "2026-07-13".into(),
                     amount_minor: 1,
                     note: None,
+                    payment_kind: None,
                 },
             )
             .await;
@@ -8153,6 +8209,7 @@ mod financial_transaction_tests {
                     date: "2026-07-05".into(),
                     amount_minor: 10_000,
                     note: Some("remote team payout".into()),
+                    payment_kind: None,
                     created_at: Some("2099-06-03T00:00:00.000Z".into()),
                     voided_at: None,
                     voided_by: None,
@@ -8181,6 +8238,7 @@ mod financial_transaction_tests {
                     date: "2026-07-06".into(),
                     amount_minor: 30_001,
                     note: Some("too much".into()),
+                    payment_kind: None,
                     created_at: None,
                     voided_at: None,
                     voided_by: None,
@@ -9488,6 +9546,12 @@ pub fn run() {
             version: 6,
             description: "sync_domain_conflict_kind",
             sql: include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "special_person_payments",
+            sql: include_str!("../migrations/0007_special_person_payments.sql"),
             kind: MigrationKind::Up,
         },
     ];

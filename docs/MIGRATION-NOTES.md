@@ -1,9 +1,9 @@
 # Migration notes
 
-The current schema identity is **27**, built by five forward-only migration
+The current schema identity is **29**, built by seven forward-only migration
 files. `PRAGMA user_version`, `app_metadata.schema_version`,
-`CURRENT_SCHEMA_VERSION` in `src-tauri/src/lib.rs` (27) and
-`CURRENT_MIGRATION_VERSION` (5, the highest migration file) must always agree;
+`CURRENT_SCHEMA_VERSION` in `src-tauri/src/lib.rs` (29) and
+`CURRENT_MIGRATION_VERSION` (7, the highest migration file) must always agree;
 `test/migrations.test.ts` and `test/release.test.ts` assert it.
 
 | # | File | Schema after | Purpose |
@@ -13,6 +13,8 @@ files. `PRAGMA user_version`, `app_metadata.schema_version`,
 | 3 | `0003_assignment_lifecycle.sql` | 25 | Assignment lifecycle columns and constraints |
 | 4 | `0004_cancellation_evidence_integrity.sql` | 26 | Cancellation evidence integrity |
 | 5 | `0005_audit_version_baseline.sql` | 27 | Truthful audit application version |
+| 6 | `0006_sync_domain_conflict_kind.sql` | 28 | Sync peer protocol metadata and remote-domain conflict classification |
+| 7 | `0007_special_person_payments.sql` | 29 | Explicit earned vs. special person-payment intent |
 
 ## Which databases must be recreated
 
@@ -25,7 +27,7 @@ production database is affected.
 | Pre-rebase (v0.6.x, migration chain `0001_initial`…`0024_*`) | **Recreate.** The plugin rejects the version-1 checksum mismatch and the app will not start. See [DATABASE-REBASE-0.7.0.md](./DATABASE-REBASE-0.7.0.md). |
 | v0.7.0 development database that already recorded migration 5 with the **previous** `0005` checksum | **Recreate.** See below. |
 | v0.7.0 development database that stopped at schema 26 (migration 5 never applied) | Upgrades normally — the corrected `0005` applies cleanly, including when finalized 0.6.x audit rows are present. |
-| Fresh database on this build | Nothing to do: it is created at schema 27. |
+| Fresh database on this build | Nothing to do: it is created at schema 29. |
 
 ### Why the previous `0005` checksum means a reset
 

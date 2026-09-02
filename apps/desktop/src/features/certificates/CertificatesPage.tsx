@@ -308,7 +308,17 @@ export function CertificatesPage() {
           requireReason
           message={`${t("lifecycle.confirmVoidCertificate")} (${deleting.number})`}
           busy={mutations.remove.isPending}
-          onCancel={() => setDeleting(null)}
+          error={
+            mutations.remove.isError
+              ? (mutations.remove.error as Error).message === "ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED"
+                ? t("certificates.voidAllocatedBlocked")
+                : (mutations.remove.error as Error).message
+              : undefined
+          }
+          onCancel={() => {
+            mutations.remove.reset();
+            setDeleting(null);
+          }}
           onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
         />
       )}

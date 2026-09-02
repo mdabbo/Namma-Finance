@@ -1,6 +1,6 @@
 # Two-PC Sync Acceptance Checklist
 
-Current as of v0.7.1 Beta, schema 28.
+Current as of v0.7.1 Beta, schema 29.
 
 This checklist is a manual acceptance procedure for a real Supabase workspace.
 Do not use production customer data. Use two clean Windows PCs, or two isolated
@@ -23,7 +23,9 @@ Supabase URL, anon key, and office login into each app instance manually.
 2. Apply `docs/supabase-schema.sql`.
 3. For an upgraded workspace, apply the forward-only SQL files listed in
    `docs/PHASE3-SETUP.md`, including `docs/supabase-0018-sync-peers.sql` when
-   testing v0.7.1 protocol advertisement.
+   testing v0.7.1 protocol advertisement and
+   `docs/supabase-0019-special-person-payments.sql` when testing schema-29
+   person payments.
 4. Run `docs/supabase-cloud-preflight.sql` and save the result with the test
    evidence.
 5. Create one office login under Supabase Authentication -> Users.
@@ -38,7 +40,7 @@ Supabase URL, anon key, and office login into each app instance manually.
 3. Confirm Settings -> About reports:
    - Application version: `0.7.1`
    - Channel: `Beta`
-   - Schema version: `28`
+   - Schema version: `29`
 4. Configure Settings -> Cloud sync with the test Supabase URL and anon key.
 5. Sign in with the office login.
 6. Press Sync now once and confirm it completes.
@@ -157,6 +159,8 @@ Also verify:
 - No duplicate allocation rows.
 - Sync protocol metadata is present in `sync_peers` when
   `supabase-0018-sync-peers.sql` was applied.
+- Schema-29 special person payments sync when
+  `supabase-0019-special-person-payments.sql` was applied.
 - Any rejected financial remote change is visible as reviewable conflict
   evidence and is not silently applied.
 

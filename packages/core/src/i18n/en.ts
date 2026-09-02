@@ -6,6 +6,7 @@ export const en = {
     archive: "Archive",
     void: "Void",
     voided: "Voided",
+    reverse: "Reverse",
     reversed: "Reversed",
     reason: "Reason",
     reasonPlaceholder: "Explain why — this is kept in the audit history",
@@ -552,6 +553,7 @@ export const en = {
     markApproved: "Mark approved",
     markPaid: "Mark paid",
     correctDetails: "Correct details",
+    voidAllocatedBlocked: "This certificate has payment allocations. Void or edit the payment first, then void the certificate.",
     pdfTitle: "Payment Certificate",
   },
   payments: {
@@ -588,6 +590,11 @@ export const en = {
     newCategory: "New category",
     monthlyTotal: "This month",
     autoTeamPayment: "Automatic — team payment",
+    reverseTeamPayment: "Reverse team payment",
+    confirmReverseTeamPayment:
+      "This expense came from a team payment. Reversing it will void the linked team payment and this expense together.",
+    linkedExpenseUseTeamPayment:
+      "This expense is linked to a team payment. Reverse the team payment instead.",
   },
   costs: {
     certifiedRevenue: "Certified revenue",
@@ -647,6 +654,9 @@ export const en = {
     workProgress: "Work progress",
     payments: "Payments",
     newPayment: "Record payment",
+    paymentKind: "Payment type",
+    paymentKindEarned: "Normal earned payment",
+    paymentKindSpecial: "Special payment / advance",
     duplicatePayment: "This exact payment (same date, amount and note) is already recorded — change the date or note to record it again on purpose.",
     paymentExceedsDue: "Payment cannot exceed the amount currently due ({{due}}).",
     paymentExceedsDueShort: "Payment exceeds the amount currently due.",

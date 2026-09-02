@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Building2, CalendarDays, FolderKanban, Paperclip, Plus, Receipt } from "lucide-react";
+import { Building2, CalendarDays, FolderKanban, Paperclip, Plus, Receipt, RotateCcw } from "lucide-react";
 import { currencyInfo, expenseSchema, type ExpenseInput } from "@mep/core";
 import { useCategories, useExpenseMutations, useExpenses, type ExpenseListItem } from "../../repositories/expenses";
 import { useProjects } from "../../repositories/projects";
 import { useCurrencyRates } from "../../repositories/currencies";
 import { useWorkspaceFinancials } from "../../repositories/financials";
+import { usePeopleMutations } from "../../repositories/people";
 import { DataTable, type Column } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { KpiCard } from "../../components/KpiCard";
@@ -27,6 +28,7 @@ export function ExpensesPage() {
   const { data: categories = [] } = useCategories();
   const { data: financials } = useWorkspaceFinancials();
   const mutations = useExpenseMutations();
+  const peopleMutations = usePeopleMutations();
 
   const [categoryFilter, setCategoryFilter] = useState(0);
   // The project-workspace shortcut lands here with ?projectId=; it seeds the
@@ -92,9 +94,21 @@ export function ExpensesPage() {
       key: "actions",
       header: "",
       sortable: false,
-      width: "120px",
+      width: "170px",
       render: (e) =>
-        e.personPaymentId !== null ? null : (
+        e.personPaymentId !== null ? (
+          <div className="flex justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
+            <Button
+              variant="ghost"
+              className="!text-red-600"
+              title={t("expenses.reverseTeamPayment")}
+              aria-label={t("expenses.reverseTeamPayment")}
+              onClick={() => setDeleting(e)}
+            >
+              <RotateCcw size={14} />
+            </Button>
+          </div>
+        ) : (
           <div className="flex justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
             <Button variant="ghost" onClick={() => setEditing(e)}>{t("common.edit")}</Button>
             <Button variant="ghost" className="!text-red-600" onClick={() => setDeleting(e)}>{t("lifecycle.voidExpense")}</Button>
@@ -214,13 +228,32 @@ export function ExpensesPage() {
 
       {deleting && (
         <ConfirmDialog
-          title={t("lifecycle.voidExpense")}
-          confirmLabel={t("lifecycle.void")}
-          requireReason
-          message={`${t("lifecycle.confirmVoidExpense")} (${deleting.description})`}
-          busy={mutations.remove.isPending}
-          onCancel={() => setDeleting(null)}
-          onConfirm={(reason) => mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) })}
+          title={deleting.personPaymentId !== null ? t("expenses.reverseTeamPayment") : t("lifecycle.voidExpense")}
+          confirmLabel={deleting.personPaymentId !== null ? t("lifecycle.reverse") : t("lifecycle.void")}
+          requireReason={deleting.personPaymentId === null}
+          message={`${deleting.personPaymentId !== null ? t("expenses.confirmReverseTeamPayment") : t("lifecycle.confirmVoidExpense")} (${deleting.description})`}
+          busy={mutations.remove.isPending || peopleMutations.removePersonPayment.isPending}
+          error={
+            mutations.remove.isError
+              ? (mutations.remove.error as Error).message === "EXPENSE_NOT_FOUND_VOIDED_OR_LINKED"
+                ? t("expenses.linkedExpenseUseTeamPayment")
+                : (mutations.remove.error as Error).message
+              : peopleMutations.removePersonPayment.isError
+                ? (peopleMutations.removePersonPayment.error as Error).message
+                : undefined
+          }
+          onCancel={() => {
+            mutations.remove.reset();
+            peopleMutations.removePersonPayment.reset();
+            setDeleting(null);
+          }}
+          onConfirm={(reason) => {
+            if (deleting.personPaymentId !== null) {
+              peopleMutations.removePersonPayment.mutate(deleting.personPaymentId, { onSuccess: () => setDeleting(null) });
+            } else {
+              mutations.remove.mutate({ id: deleting.id, reason }, { onSuccess: () => setDeleting(null) });
+            }
+          }}
         />
       )}
     </div>

@@ -61,6 +61,7 @@ describe("Milestone 6 release integrity", () => {
       "0004_cancellation_evidence_integrity.sql",
       "0005_audit_version_baseline.sql",
       "0006_sync_domain_conflict_kind.sql",
+      "0007_special_person_payments.sql",
     ]);
     const stamped = migrationNames.flatMap((name) => [
       ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")

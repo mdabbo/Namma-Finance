@@ -210,6 +210,7 @@ create table person_payments (
   date text not null,
   amount_minor bigint not null,
   note text,
+  payment_kind text not null default 'EARNED' check (payment_kind in ('EARNED','SPECIAL')),
   created_at text,
   updated_at timestamptz not null,
   deleted_at timestamptz

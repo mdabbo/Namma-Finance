@@ -1,6 +1,6 @@
 # Known limitations
 
-Current as of v0.7.1 (Beta), schema 28. Each entry states what the limitation
+Current as of v0.7.1 (Beta), schema 29. Each entry states what the limitation
 is, why it exists, and what to do about it.
 
 ## Database and migrations
@@ -53,7 +53,9 @@ can read it. Database or volume encryption is a separate deployment option.
 v0.7.1 clients can publish application version, schema version, and financial
 protocol version through the optional `sync_peers` table. Older clients, or
 Supabase projects that have not applied `docs/supabase-0018-sync-peers.sql`,
-cannot provide that proactive signal.
+cannot provide that proactive signal. Supabase projects must also apply
+`docs/supabase-0019-special-person-payments.sql` before syncing schema-29
+clients that create special team-member payments.
 
 This does not permit silent financial corruption: protected financial pulls
 still pass through the local Rust domain validation paths. Invalid incoming

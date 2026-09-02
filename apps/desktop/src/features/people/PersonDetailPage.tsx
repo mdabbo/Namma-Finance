@@ -130,7 +130,7 @@ export function PersonDetailPage() {
             // Terms are final once the work is no longer running: editing the
             // agreed fee of cancelled work would move a frozen accounting base.
             const termsFinal = a.lifecycleStatus !== "ACTIVE" || archived;
-            const canPay = !archived && (position?.dueMinor ?? 0) > 0;
+            const canPay = !archived;
             const money = (minor: number) => fmt.money(minor, a.currency, { compactFraction: true });
             const figure = (value: number | undefined, className?: string) =>
               value === undefined
@@ -150,7 +150,7 @@ export function PersonDetailPage() {
                   </div>
                   <div className="flex gap-1">
                     {canPay && (
-                      <Button variant="ghost" onClick={() => setPaymentModal({ assignment: a, amountMinor: position?.dueMinor })}>
+                      <Button variant="ghost" onClick={() => setPaymentModal({ assignment: a, amountMinor: position?.dueMinor ?? 0 })}>
                         <Plus size={14} /> {t("people.newPayment")}
                       </Button>
                     )}
@@ -532,7 +532,12 @@ function PersonPaymentForm({
 }) {
   const { t } = useTranslation();
   const fmt = useFormat();
-  const [form, setForm] = useState({ date: todayIso(), amountMinor: initialAmountMinor ?? 0, note: initialNote ?? "" });
+  const [form, setForm] = useState({
+    date: todayIso(),
+    amountMinor: initialAmountMinor ?? 0,
+    note: initialNote ?? "",
+    paymentKind: "EARNED" as "EARNED" | "SPECIAL",
+  });
   const [errors, setErrors] = useState<Record<string, string>>({});
   // same-tick double-click latch: isPending flips only on the next render,
   // which is too late to stop a fast second click from double-recording
@@ -543,7 +548,7 @@ function PersonPaymentForm({
 
   function submit() {
     if (firing.current) return;
-    if (dueMinor !== undefined && form.amountMinor > dueMinor) {
+    if (form.paymentKind === "EARNED" && dueMinor !== undefined && form.amountMinor > dueMinor) {
       setErrors({ amountMinor: t("people.paymentExceedsDue", { due: fmt.money(dueMinor, assignment.currency) }) });
       return;
     }
@@ -570,6 +575,12 @@ function PersonPaymentForm({
         </Field>
         <Field label={t("common.amount")} error={errors.amountMinor}>
           <MoneyInput currency={assignment.currency} valueMinor={form.amountMinor} onChange={(v) => setForm((f) => ({ ...f, amountMinor: v ?? 0 }))} />
+        </Field>
+        <Field label={t("people.paymentKind")} className="col-span-2">
+          <Select value={form.paymentKind} onChange={(e) => setForm((f) => ({ ...f, paymentKind: e.target.value as "EARNED" | "SPECIAL" }))}>
+            <option value="EARNED">{t("people.paymentKindEarned")}</option>
+            <option value="SPECIAL">{t("people.paymentKindSpecial")}</option>
+          </Select>
         </Field>
         <Field label={t("common.notes")} className="col-span-2">
           <Input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
