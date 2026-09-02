@@ -1,15 +1,18 @@
+import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, ArrowLeft, Building2, Mail, MapPin, Phone, ReceiptText } from "lucide-react";
+import { Archive, ArrowRight, ArrowLeft, Building2, Mail, MapPin, Pencil, Phone, ReceiptText } from "lucide-react";
 import { computeClientFinancials } from "@mep/core";
-import { useClient } from "../../repositories/clients";
+import { clientCascadeInfo, useClient, useClientMutations } from "../../repositories/clients";
 import { useProjectsByClient } from "../../repositories/projects";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useBaseMoney } from "../../lib/baseCurrency";
-import { Badge, Card, EmptyState } from "../../components/ui";
+import { Badge, Button, Card, EmptyState, PageHeader } from "../../components/ui";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { KpiCard } from "../../components/KpiCard";
 import { readModelDisplay as readModelAmount } from "../../lib/readModel";
 import { Banknote, Briefcase, Wallet } from "lucide-react";
+import { ClientForm } from "./ClientForm";
 
 export function ClientDetailPage() {
   const { id } = useParams();
@@ -20,6 +23,9 @@ export function ClientDetailPage() {
   const { data: client } = useClient(clientId);
   const { data: projects = [] } = useProjectsByClient(clientId);
   const { data: financials } = useWorkspaceFinancials();
+  const mutations = useClientMutations();
+  const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState<{ details: string[] } | null>(null);
 
   if (!client) return <EmptyState message={t("common.loading")} />;
 
@@ -32,12 +38,34 @@ export function ClientDetailPage() {
         <BackIcon size={15} /> {t("clients.title")}
       </button>
 
-      <div className="mb-4 flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">{client.name}</h1>
-          {client.company && <p className="text-sm text-slate-500">{client.company}</p>}
-        </div>
-      </div>
+      <PageHeader
+        title={client.name}
+        description={client.company}
+        actions={
+          <>
+            <Button onClick={() => setEditing(true)}>
+              <Pencil size={15} aria-hidden="true" />
+              {t("common.edit")}
+            </Button>
+            <Button
+              onClick={async () => {
+                const info = await clientCascadeInfo(client.id);
+                setDeleting({
+                  details: [
+                    `${info.projects} ${t("clients.projects")}`,
+                    `${info.contracts} ${t("contracts.title")}`,
+                    `${info.certificates} ${t("certificates.title")}`,
+                    `${info.payments} ${t("payments.title")}`,
+                  ],
+                });
+              }}
+            >
+              <Archive size={15} aria-hidden="true" />
+              {t("lifecycle.archiveClient")}
+            </Button>
+          </>
+        }
+      />
 
       <div className="mb-4 grid grid-cols-4 gap-3">
         <KpiCard label={t("cash.contractValueExcludingVat")} value={readModelAmount(rollup, (r) => base.format(r.contractValueEgp))} icon={Briefcase} />
@@ -103,6 +131,41 @@ export function ClientDetailPage() {
           )}
         </Card>
       </div>
+
+      {editing && (
+        <ClientForm
+          initial={client}
+          busy={mutations.update.isPending}
+          onClose={() => setEditing(false)}
+          onSubmit={(input) => mutations.update.mutate({ id: client.id, input }, { onSuccess: () => setEditing(false) })}
+        />
+      )}
+
+      {deleting && (
+        <ConfirmDialog
+          title={t("lifecycle.archiveClient")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          message={`${t("lifecycle.confirmArchiveClient")} (${client.name})`}
+          details={deleting.details}
+          busy={mutations.remove.isPending}
+          onCancel={() => {
+            mutations.remove.reset();
+            setDeleting(null);
+          }}
+          onConfirm={() =>
+            mutations.remove.mutate(
+              { id: client.id },
+              {
+                onSuccess: () => {
+                  setDeleting(null);
+                  navigate("/projects/clients");
+                },
+              },
+            )
+          }
+        />
+      )}
     </div>
   );
 }

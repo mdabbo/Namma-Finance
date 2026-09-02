@@ -17,7 +17,7 @@ import {
   type DrawingLine,
   type PercentMilestone,
 } from "@mep/core";
-import { Button, Card, DateInput, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
+import { Alert, Button, Card, DateInput, Field, Input, Modal, Select, Textarea, cx } from "../../components/ui";
 import { MoneyInput } from "../../components/MoneyInput";
 import { bpToInput, parseToBp, useFormat } from "../../lib/format";
 import { useStagesByProject } from "../../repositories/stages";
@@ -33,9 +33,11 @@ interface ContractFormProps {
   onSubmit: (input: ContractInput, revision?: RevisionMetadata) => void;
   onClose: () => void;
   busy?: boolean;
+  hasFinancialHistory?: boolean;
+  error?: string;
 }
 
-export function ContractForm({ projectId, currency, initial, onSubmit, onClose, busy }: ContractFormProps) {
+export function ContractForm({ projectId, currency, initial, onSubmit, onClose, busy, hasFinancialHistory = false, error }: ContractFormProps) {
   const { t } = useTranslation();
   const fmt = useFormat();
   const { data: stages = [] } = useStagesByProject(projectId);
@@ -104,6 +106,19 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
     () => deriveContractFigures({ valueMinor: form.valueMinor, vatBp: form.vatBp, retentionBp: form.retentionBp }),
     [form.valueMinor, form.vatBp, form.retentionBp],
   );
+  const protectedTermsChanged = !!initial && (
+    initial.valueMinor !== form.valueMinor ||
+    initial.vatBp !== form.vatBp ||
+    initial.retentionBp !== form.retentionBp ||
+    initial.withholdingBp !== form.withholdingBp ||
+    initial.advanceMinor !== form.advanceMinor ||
+    initial.advanceRecoveryMethod !== form.advanceRecoveryMethod ||
+    initial.paymentTermsDays !== form.paymentTermsDays
+  );
+  const revisionRequired = protectedTermsChanged && hasFinancialHistory;
+  const mutationError = error === "CONTRACT_REVISION_REQUIRED"
+    ? t("contracts.revisionRequired")
+    : error;
 
   function rateField(label: string, key: "vatBp" | "retentionBp" | "withholdingBp" | "performanceBondBp") {
     return (
@@ -128,6 +143,14 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
       setErrors({ milestones: t("contracts.milestonesMustTotal") });
       return;
     }
+    if (revisionRequired && !revisionEffectiveDate) {
+      setErrors({ revisionEffectiveDate: t("validation.required") });
+      return;
+    }
+    if (revisionRequired && !revisionReason.trim()) {
+      setErrors({ revisionReason: t("contracts.revisionRequired") });
+      return;
+    }
     const parsed = contractSchema.safeParse({
       ...form,
       projectId,
@@ -147,7 +170,7 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
       setErrors(errs);
       return;
     }
-    onSubmit(parsed.data, initial ? { reason: revisionReason, effectiveDate: revisionEffectiveDate } : undefined);
+    onSubmit(parsed.data, protectedTermsChanged ? { reason: revisionReason.trim(), effectiveDate: revisionEffectiveDate } : undefined);
   }
 
   const milestoneTotalBp = milestonesTotalBp(milestones);
@@ -159,6 +182,16 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
         <p>{t("validation.malformed_json")} ({corruptFields.join(", ")})</p>
         <Button className="mt-2" onClick={()=>{setCorruptFields([]);if(!attachmentParse.ok)setAttachmentsRaw(null);setErrors((current)=>({...current,structured:""}));}}>{t("validation.repair_structured")}</Button>
       </Card>}
+      {mutationError && (
+        <Alert tone="danger" className="mb-3">
+          {mutationError}
+        </Alert>
+      )}
+      {protectedTermsChanged && (
+        <Alert title={t("contracts.revisionRequired")} tone={revisionRequired ? "warning" : "info"} className="mb-3">
+          {revisionRequired ? t("contracts.revisionRequiredHint") : t("contracts.protectedRevisionHint")}
+        </Alert>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <Field label={t("contracts.number")} error={errors.number}>
           <Input value={form.number} readOnly className="tnum" />
@@ -228,10 +261,10 @@ export function ContractForm({ projectId, currency, initial, onSubmit, onClose, 
         </Field>
         {initial && (
           <>
-            <Field label={t("contracts.revisionEffectiveDate")}>
+            <Field label={t("contracts.revisionEffectiveDate")} error={errors.revisionEffectiveDate}>
               <DateInput value={revisionEffectiveDate} onChange={(e) => setRevisionEffectiveDate(e.target.value)} />
             </Field>
-            <Field label={t("contracts.revisionReason")} className="col-span-2">
+            <Field label={t("contracts.revisionReason")} error={errors.revisionReason} className="col-span-2">
               <Input value={revisionReason} placeholder={t("contracts.revisionReasonHint")} onChange={(e) => setRevisionReason(e.target.value)} />
             </Field>
           </>
