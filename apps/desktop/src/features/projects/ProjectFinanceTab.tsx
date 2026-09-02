@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Ban, Plus } from "lucide-react";
 import type { CertificateStatus } from "@mep/core";
 import { type WorkspaceFinancials } from "../../repositories/financials";
 import { type ExpenseListItem } from "../../repositories/expenses";
 import { type PaymentListItem } from "../../repositories/payments";
+import { useCertificateMutations } from "../../repositories/certificates";
 import { DataTable, type Column } from "../../components/DataTable";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { Badge, Button, Select, cx } from "../../components/ui";
 import { useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
@@ -35,9 +37,11 @@ export function ProjectFinance({
   const fmt = useFormat();
   const base = useBaseMoney();
   const navigate = useNavigate();
+  const certificateMutations = useCertificateMutations();
   const [certificateStatus, setCertificateStatus] = useState<
     CertificateStatus | ""
   >("");
+  const [voidingCertificate, setVoidingCertificate] = useState<(typeof certificates)[number] | null>(null);
   const [paymentKind, setPaymentKind] = useState("");
   const [expenseCategory, setExpenseCategory] = useState("");
 
@@ -146,6 +150,26 @@ export function ProjectFinance({
           )}
         </div>
       ),
+    },
+    {
+      key: "actions",
+      header: t("common.actions"),
+      sortable: false,
+      width: "100px",
+      render: (row) => (
+        <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
+          <Button
+            variant="ghost"
+            className="!text-red-600"
+            title={t("lifecycle.voidCertificate")}
+            onClick={() => setVoidingCertificate(row)}
+          >
+            <Ban size={15} aria-hidden="true" />
+            {t("lifecycle.void")}
+          </Button>
+        </div>
+      ),
+      align: "end",
     },
   ];
 
@@ -446,6 +470,33 @@ export function ProjectFinance({
           loading={financialsPending}
           onRowClick={() => navigate(`/finance/receivables?projectId=${projectId}`)}
           emptyMessage={t("projects.emptyReceivables")}
+        />
+      )}
+
+      {voidingCertificate && (
+        <ConfirmDialog
+          title={t("lifecycle.voidCertificate")}
+          confirmLabel={t("lifecycle.void")}
+          requireReason
+          message={`${t("lifecycle.confirmVoidCertificate")} (${voidingCertificate.certificate.number})`}
+          busy={certificateMutations.remove.isPending}
+          error={
+            certificateMutations.remove.isError
+              ? (certificateMutations.remove.error as Error).message === "ALLOCATED_CERTIFICATE_CANNOT_BE_VOIDED"
+                ? t("certificates.voidAllocatedBlocked")
+                : (certificateMutations.remove.error as Error).message
+              : undefined
+          }
+          onCancel={() => {
+            certificateMutations.remove.reset();
+            setVoidingCertificate(null);
+          }}
+          onConfirm={(reason) =>
+            certificateMutations.remove.mutate(
+              { id: voidingCertificate.certificate.id, reason },
+              { onSuccess: () => setVoidingCertificate(null) },
+            )
+          }
         />
       )}
     </section>

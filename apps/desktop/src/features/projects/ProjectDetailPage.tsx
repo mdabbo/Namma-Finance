@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, Pencil, Plus } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Pencil, Plus } from "lucide-react";
 import type { Contract } from "@mep/core";
 import { contractCascadeInfo, useContractMutations, useContractsByProject } from "../../repositories/contracts";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useExpensesByProject } from "../../repositories/expenses";
 import { useAssignmentsByProject } from "../../repositories/people";
 import { useProject, useProjectMutations } from "../../repositories/projects";
+import { projectCascadeInfo } from "../../repositories/projects";
 import { usePaymentsByProject } from "../../repositories/payments";
 import { useProjectAuditRecords, type AuditRecord } from "../../repositories/audit";
 import { Badge, Button, EmptyState, PageHeader, cx } from "../../components/ui";
@@ -45,6 +46,9 @@ export function ProjectDetailPage() {
     null,
   );
   const [editingProject, setEditingProject] = useState(false);
+  const [deletingProject, setDeletingProject] = useState<{
+    details: string[];
+  } | null>(null);
   const [deletingContract, setDeletingContract] = useState<{
     contract: Contract;
     details: string[];
@@ -72,6 +76,12 @@ export function ProjectDetailPage() {
   function openActivity(record: AuditRecord) {
     const destination = projectActivityDestination(record.entityType);
     goTo(destination.tab, destination.financeView);
+  }
+
+  function contractHasFinancialHistory(contractId: number): boolean {
+    const state = financials?.contractStates.get(contractId);
+    return (state?.certificates.some((row) => row.certificate.status !== "DRAFT") ?? false)
+      || payments.some((payment) => payment.contractId === contractId);
   }
 
   return (
@@ -111,6 +121,22 @@ export function ProjectDetailPage() {
               <Button onClick={() => setEditingProject(true)}>
                 <Pencil size={15} aria-hidden="true" />
                 {t("projects.editProject")}
+              </Button>
+              <Button
+                onClick={async () => {
+                  const info = await projectCascadeInfo(project.id);
+                  setDeletingProject({
+                    details: [
+                      `${info.contracts} ${t("contracts.title")}`,
+                      `${info.certificates} ${t("certificates.title")}`,
+                      `${info.payments} ${t("payments.title")}`,
+                      `${info.expenses} ${t("expenses.title")}`,
+                    ],
+                  });
+                }}
+              >
+                <Archive size={15} aria-hidden="true" />
+                {t("lifecycle.archiveProject")}
               </Button>
               <Button variant="primary" onClick={() => setContractModal("new")}>
                 <Plus size={15} aria-hidden="true" />
@@ -213,7 +239,10 @@ export function ProjectDetailPage() {
         <ProjectForm
           initial={project}
           busy={projectMutations.update.isPending}
-          onClose={() => setEditingProject(false)}
+          onClose={() => {
+            projectMutations.update.reset();
+            setEditingProject(false);
+          }}
           onSubmit={(input, revision) =>
             projectMutations.update.mutate(
               { id: project.id, input, revision },
@@ -228,11 +257,23 @@ export function ProjectDetailPage() {
           projectId={projectId}
           currency={project.currency}
           initial={contractModal === "new" ? null : contractModal}
+          hasFinancialHistory={contractModal !== "new" && contractModal !== null ? contractHasFinancialHistory(contractModal.id) : false}
+          error={
+            contractMutations.create.isError
+              ? (contractMutations.create.error as Error).message
+              : contractMutations.update.isError
+                ? (contractMutations.update.error as Error).message
+                : undefined
+          }
           busy={
             contractMutations.create.isPending ||
             contractMutations.update.isPending
           }
-          onClose={() => setContractModal(null)}
+          onClose={() => {
+            contractMutations.create.reset();
+            contractMutations.update.reset();
+            setContractModal(null);
+          }}
           onSubmit={(input, revision) => {
             if (contractModal === "new") {
               contractMutations.create.mutate(input, {
@@ -248,6 +289,33 @@ export function ProjectDetailPage() {
         />
       )}
 
+      {deletingProject && (
+        <ConfirmDialog
+          title={t("lifecycle.archiveProject")}
+          tone="neutral"
+          confirmLabel={t("lifecycle.archive")}
+          requireReason
+          message={`${t("lifecycle.confirmArchiveProject")} (${project.name})`}
+          details={deletingProject.details}
+          busy={projectMutations.remove.isPending}
+          onCancel={() => {
+            projectMutations.remove.reset();
+            setDeletingProject(null);
+          }}
+          onConfirm={(reason) =>
+            projectMutations.remove.mutate(
+              { id: project.id, reason },
+              {
+                onSuccess: () => {
+                  setDeletingProject(null);
+                  navigate("/projects");
+                },
+              },
+            )
+          }
+        />
+      )}
+
       {deletingContract && (
         <ConfirmDialog
           title={t("lifecycle.archiveContract")}
@@ -256,7 +324,10 @@ export function ProjectDetailPage() {
           message={`${t("lifecycle.confirmArchiveContract")} (${deletingContract.contract.number})`}
           details={deletingContract.details}
           busy={contractMutations.remove.isPending}
-          onCancel={() => setDeletingContract(null)}
+          onCancel={() => {
+            contractMutations.remove.reset();
+            setDeletingContract(null);
+          }}
           onConfirm={() =>
             contractMutations.remove.mutate({ id: deletingContract.contract.id }, {
               onSuccess: () => setDeletingContract(null),

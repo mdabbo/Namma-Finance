@@ -4,8 +4,8 @@ vi.mock("../src/lib/db", async () => await import("./db-harness"));
 
 import { execute, rawOne, resetDb } from "./db-harness";
 import { createClient, deleteClient } from "../src/repositories/clients";
-import { createProject } from "../src/repositories/projects";
-import { createContract } from "../src/repositories/contracts";
+import { createProject, deleteProject } from "../src/repositories/projects";
+import { createContract, deleteContract } from "../src/repositories/contracts";
 import { createCertificate, deleteCertificate, nextCertificateSeq } from "../src/repositories/certificates";
 
 /**
@@ -91,6 +91,26 @@ describe("void and archive keep history with a recorded reason", () => {
     );
     expect(row?.archived).toBeTruthy();
     expect(row?.reason).toBe("Merged into parent account");
+  });
+
+  it("archives a project without deleting it and stores the reason", async () => {
+    const { projectId } = await workspace();
+    await deleteProject(projectId, "Project cancelled by client");
+    const row = rawOne<{ reason: string; archived: string | null }>(
+      `SELECT archive_reason AS reason, archived_at AS archived FROM projects WHERE id=${projectId}`,
+    );
+    expect(row?.archived).toBeTruthy();
+    expect(row?.reason).toBe("Project cancelled by client");
+  });
+
+  it("archives a contract without deleting it and stores the reason", async () => {
+    const { contractId } = await workspace();
+    await deleteContract(contractId, "Replaced by a new signed agreement");
+    const row = rawOne<{ reason: string; archived: string | null }>(
+      `SELECT archive_reason AS reason, archived_at AS archived FROM contracts WHERE id=${contractId}`,
+    );
+    expect(row?.archived).toBeTruthy();
+    expect(row?.reason).toBe("Replaced by a new signed agreement");
   });
 
   it("falls back to a default reason when none is supplied", async () => {
