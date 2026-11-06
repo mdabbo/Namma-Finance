@@ -135,4 +135,23 @@ describe("quality workflow", () => {
     expect(jobs).toEqual(["unit", "rust", "e2e", "build"]);
     expect([...jobsBlock.matchAll(/^ {4}timeout-minutes: \d+$/gm)]).toHaveLength(jobs.length);
   });
+
+  /**
+   * CI used `dtolnay/rust-toolchain@stable`, so the Rust gate compiled with
+   * whatever stable was on the day a job ran: a green run could not be
+   * reproduced later, and a toolchain release could turn the gate red with no
+   * commit of ours involved. rust-toolchain.toml pins the version for every
+   * local cargo call; CI must install that same version, never a moving one.
+   */
+  it("builds Rust with the pinned toolchain, not whatever stable is today", () => {
+    const toolchainFile = readFileSync(join(root, "rust-toolchain.toml"), "utf8");
+    const pinned = /^channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$/m.exec(toolchainFile)?.[1];
+    expect(pinned, "rust-toolchain.toml must pin an exact x.y.z version").toBeDefined();
+
+    expect(workflow).not.toMatch(/dtolnay\/rust-toolchain@stable/);
+    const installs = [...workflow.matchAll(/uses: dtolnay\/rust-toolchain@\S+[\s\S]*?toolchain:\s*"([^"]+)"/g)];
+    // The Rust quality job and the desktop build both compile Rust.
+    expect(installs.map((match) => match[1])).toEqual([pinned, pinned]);
+    expect([...workflow.matchAll(/dtolnay\/rust-toolchain@/g)]).toHaveLength(installs.length);
+  });
 });

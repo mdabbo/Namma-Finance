@@ -1,0 +1,19 @@
+# The Rust toolchain this repository is built and tested with.
+#
+# CI used `dtolnay/rust-toolchain@stable`, which resolves to whatever Rust
+# stable happens to be on the day a job runs. That makes the Rust gate
+# non-reproducible: a toolchain release can turn `cargo clippy -D warnings` or
+# `cargo test` red with no commit of ours involved, and a green run from last
+# month cannot be reproduced today. Financial code whose audit evidence is "the
+# gates were green on this commit" needs the compiler to be part of that commit.
+#
+# rustup reads this file for any cargo invocation inside the repository, so
+# local builds and CI agree without anyone passing a +toolchain flag.
+#
+# Keep the version here in step with `.github/workflows/quality.yml`, which
+# installs the same version explicitly so CI downloads exactly one toolchain.
+# Bumping Rust is a deliberate two-line change, reviewed like any other.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
