@@ -44,15 +44,15 @@ export interface SettingsSection {
 }
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  { id: "general", labelKey: "settings.general", full: false },
+  { id: "general", labelKey: "settings.appearanceTitle", full: false },
   { id: "company", labelKey: "settings.companyProfile", full: true },
-  { id: "finance", labelKey: "nav.finance", full: true },
-  { id: "numbering", labelKey: "settings.numberingTitle", full: true },
+  { id: "finance", labelKey: "settings.currencyTitle", full: true },
+  { id: "numbering", labelKey: "settings.documentNumberingTitle", full: true },
   { id: "categories", labelKey: "settings.expenseCategories", full: true },
-  { id: "backup", labelKey: "settings.dataAndBackup", full: true },
+  { id: "backup", labelKey: "settings.backupRestore", full: true },
   { id: "sync", labelKey: "settings.syncTitle", full: false },
   { id: "security", labelKey: "settings.securityTitle", full: false },
-  { id: "data-tools", labelKey: "settings.dataTools", full: true },
+  { id: "data-tools", labelKey: "settings.importUtilities", full: true },
   { id: "advanced", labelKey: "settings.advanced", full: false },
   { id: "audit", labelKey: "nav.audit", full: true },
 ] as const;
@@ -73,8 +73,10 @@ export interface SettingsGroup {
 }
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
-  { id: "general", labelKey: "settings.groups.general", sectionIds: ["general", "company"] },
-  { id: "finance", labelKey: "settings.groups.finance", sectionIds: ["finance", "numbering", "categories"] },
+  // Appearance stays first: /settings redirects to /settings/general, the
+  // only section every role can open, so it must also be the first item.
+  { id: "general", labelKey: "settings.groups.office", sectionIds: ["general", "company"] },
+  { id: "finance", labelKey: "settings.groups.financialRules", sectionIds: ["finance", "numbering", "categories"] },
   { id: "data", labelKey: "settings.groups.data", sectionIds: ["backup", "sync", "data-tools", "audit"] },
   { id: "system", labelKey: "settings.groups.system", sectionIds: ["security", "advanced"] },
 ] as const;

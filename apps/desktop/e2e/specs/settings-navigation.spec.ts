@@ -40,7 +40,7 @@ test("shows exactly one Settings navigation", async ({ page }) => {
   expect(landmarks.filter((name) => name === "Section navigation")).toHaveLength(0);
 
   // Each section appears once in the whole page, not twice.
-  for (const label of ["Company profile", "Numbering", "Data & Backup", "Audit Log"]) {
+  for (const label of ["Company profile", "Document numbering", "Backup & restore", "Audit Log"]) {
     const links = page.getByRole("link", { name: label, exact: true });
     if (await links.count()) expect(await links.count(), label).toBe(1);
   }
@@ -50,28 +50,27 @@ test("groups the sections and highlights the active one", async ({ page }) => {
   await page.goto("/#/settings/numbering");
   const nav = page.getByRole("navigation", { name: SETTINGS_NAV });
 
-  // Group headings are plain text; the same words also name links (General,
-  // Finance), so match the heading elements rather than any text node.
-  for (const group of ["General", "Finance", "Data", "System"]) {
+  // Group headings are plain text, so match the heading elements.
+  for (const group of ["Office", "Financial rules", "Data", "System"]) {
     await expect(nav.locator("p", { hasText: new RegExp(`^${group}$`) }), group).toHaveCount(1);
   }
 
   // The active section is marked for assistive technology, not colour alone.
   await expect(nav.locator("[aria-current='page']")).toHaveCount(1);
-  await expect(nav.locator("[aria-current='page']")).toHaveText("Numbering");
+  await expect(nav.locator("[aria-current='page']")).toHaveText("Document numbering");
 });
 
 test("keeps every settings URL addressable and shows one section at a time", async ({ page }) => {
   const sections: [string, string][] = [
-    ["general", "General"],
+    ["general", "Appearance & language"],
     ["company", "Company profile"],
-    ["finance", "Finance"],
-    ["numbering", "Numbering"],
+    ["finance", "Currency & FX"],
+    ["numbering", "Document numbering"],
     ["categories", "Expense categories"],
-    ["backup", "Data & Backup"],
+    ["backup", "Backup & restore"],
     ["sync", "Cloud sync"],
     ["security", "Security"],
-    ["data-tools", "Data Tools"],
+    ["data-tools", "Import & utilities"],
     ["advanced", "Advanced"],
     ["audit", "Audit Log"],
   ];
@@ -133,7 +132,7 @@ test("Arabic mirrors the settings navigation", async ({ page }) => {
   await expect(nav).toHaveCount(1);
   // The document mirrors, so the sidebar sits on the right.
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-  for (const group of ["عام", "الشؤون المالية", "البيانات", "النظام"]) {
+  for (const group of ["المكتب", "القواعد المالية", "البيانات", "النظام"]) {
     await expect(nav.locator("p", { hasText: new RegExp(`^${group}$`) }), group).toHaveCount(1);
   }
 });
@@ -143,4 +142,36 @@ test("settings layout at 1366x768", async ({ page }, testInfo) => {
   await page.goto("/#/settings/general");
   await settle(page);
   await expect(page).toHaveScreenshot("settings-navigation-1366.png", { fullPage: true });
+});
+
+test("no settings group heading repeats one of its own section names", async ({ page }) => {
+  // The old menu read "General > General", "Finance > Finance" and
+  // "Data > Data & Backup", which put the same word in the breadcrumb, the
+  // group heading, the link and the page title at once.
+  //
+  // Both sides are read from the page rather than listed here. An earlier
+  // version hardcoded the group names and so kept passing when a group was
+  // renamed back to "General" — it was comparing against a stale list.
+  //
+  // The unit suite asserts the label KEYS differ; this asserts the rendered
+  // STRINGS do, which two different keys could still collide on.
+  await resetWorkspace("en");
+  await completeOnboarding();
+  await page.goto("/#/settings/general");
+
+  const nav = page.getByRole("navigation", { name: SETTINGS_NAV });
+  await expect(nav).toBeVisible();
+  const normalise = (value: string) => value.trim().toLowerCase();
+  // Group headings are plain <p> elements; sections are links.
+  const headings = (await nav.locator("p").allInnerTexts()).map(normalise).filter(Boolean);
+  const links = (await nav.getByRole("link").allInnerTexts()).map(normalise).filter(Boolean);
+
+  // Guard against a vacuous pass: with either side empty the check below
+  // proves nothing.
+  expect(headings.length, "settings navigation rendered no group headings").toBeGreaterThan(2);
+  expect(links.length, "settings navigation rendered no section links").toBeGreaterThan(5);
+
+  for (const heading of headings) {
+    expect(links, `group "${heading}" must not also name a section`).not.toContain(heading);
+  }
 });

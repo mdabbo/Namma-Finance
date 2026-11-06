@@ -40,11 +40,24 @@ describe("settings navigation model", () => {
 
   it("uses the approved grouping", () => {
     expect(SETTINGS_GROUPS.map((group) => [group.id, [...group.sectionIds]])).toEqual([
+      // Appearance leads the Office group because /settings redirects to
+      // /settings/general, the only section an ENGINEER may open.
       ["general", ["general", "company"]],
       ["finance", ["finance", "numbering", "categories"]],
       ["data", ["backup", "sync", "data-tools", "audit"]],
       ["system", ["security", "advanced"]],
     ]);
+  });
+
+  it("never gives a group the same label as one of its sections", () => {
+    // The menu used to read "General > General" and "Finance > Finance", which
+    // put one word in the breadcrumb, the group heading, the link and the page
+    // title at once. Label keys are compared, so a future rename that
+    // reintroduces the clash fails here rather than in review.
+    const sectionLabels = new Set(SETTINGS_SECTIONS.map((section) => section.labelKey));
+    for (const group of SETTINGS_GROUPS) {
+      expect(sectionLabels.has(group.labelKey), group.id).toBe(false);
+    }
   });
 
   it("addresses every section by its own URL", () => {

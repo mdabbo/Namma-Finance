@@ -827,11 +827,23 @@ export const en = {
     securityTitle: "Security",
     sectionNavigation: "Settings sections",
     groups: {
-      general: "General",
-      finance: "Finance",
+      office: "Office",
+      financialRules: "Financial rules",
       data: "Data",
       system: "System",
     },
+    // Section labels. None may repeat its group's label: when they collide the
+    // same word lands in the breadcrumb, the group heading, the link and the
+    // page title at once.
+    appearanceTitle: "Appearance & language",
+    appearanceNote: "How this app looks and which language it speaks. Applies to this computer only.",
+    currencyTitle: "Currency & FX",
+    currencyNote: "The base currency every figure is consolidated into, and the exchange rates used to convert the rest.",
+    documentNumberingTitle: "Document numbering",
+    backupRestore: "Backup & restore",
+    importUtilities: "Import & utilities",
+    companyProfileHint: "Appears on certificates, reports and printed documents.",
+    categoriesNote: "The categories available when recording an expense.",
     companyName: "Company name",
     companyAddress: "Address",
     companyPhone: "Phone",
