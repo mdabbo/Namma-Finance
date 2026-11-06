@@ -54,8 +54,12 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust-toolchain.toml, so CI installs exactly one
+      # toolchain and the Rust gate is reproducible rather than tracking
+      # whatever stable is on the day. Bump both together.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.1"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -130,7 +134,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to match rust-toolchain.toml (see the Rust quality job).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
