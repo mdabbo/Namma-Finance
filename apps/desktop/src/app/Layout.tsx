@@ -30,7 +30,7 @@ import {
   breadcrumbsForPath,
   type NavigationSectionId,
 } from "./navigation";
-import logoUrl from "../assets/namaa-logo.png";
+import { BrandMark } from "../components/BrandMark";
 
 const NAV_ICONS: Record<NavigationSectionId, LucideIcon> = {
   overview: LayoutDashboard,
@@ -73,10 +73,14 @@ export function Layout() {
     <div className="flex h-screen overflow-hidden">
       <aside className="flex w-56 shrink-0 flex-col border-e border-border-subtle bg-surface">
         <div className="flex items-center gap-2.5 px-4 py-4">
-          <img src={logoUrl} alt="NAMAA" className="h-10 w-10 shrink-0" />
+          <BrandMark className="h-8 w-auto shrink-0" />
           <div>
-            <p className="text-sm font-semibold leading-tight">{t("common.appName")}</p>
-            <p className="text-[10px] italic text-slate-400">{t("common.tagline")}</p>
+            <p className="font-head text-[13px] font-bold leading-[1.15] tracking-tight">
+              {t("common.appName")}
+            </p>
+            <p className="mt-0.5 font-head text-[8px] font-medium uppercase leading-[1.25] tracking-[0.08em] text-muted">
+              {t("common.tagline")}
+            </p>
           </div>
         </div>
         <nav className="mt-2 flex-1 space-y-0.5 px-2">

@@ -89,7 +89,7 @@ export function FinanceOverviewPage() {
             action={
               <Link
                 to="/projects"
-                className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-3 text-sm font-medium text-white shadow-sm hover:bg-brand-700"
+                className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-3 text-sm font-medium text-white shadow-sm hover:bg-brand-700 dark:text-brand-950"
               >
                 {t("dashboard.setup.contract")}
               </Link>

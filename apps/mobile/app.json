@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "NAMAA Finance",
+    "name": "DABWORKS Finance",
     "slug": "namaa-finance",
     "version": "0.7.1",
     "orientation": "portrait",
@@ -11,7 +11,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

@@ -66,14 +66,14 @@ export function CashflowView() {
       <Card className="p-4">
         <ResponsiveContainer width="100%" height={260}>
           <ComposedChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--ui-border-subtle)" />
             <XAxis dataKey="month" tick={{ fontSize: 11 }} reversed={i18n.dir() === "rtl"} />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => new Intl.NumberFormat("en", { notation: "compact" }).format(Number(v))} orientation={i18n.dir() === "rtl" ? "right" : "left"} />
             <Tooltip formatter={(v) => new Intl.NumberFormat().format(Number(v))} />
             <Legend />
-            <Bar dataKey="in" name={t("cash.totalActualCashIn")} fill="#2563eb" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="out" name={t("dashboard.cashOut")} fill="#f59e0b" radius={[3, 3, 0, 0]} />
-            <Line type="monotone" dataKey="cumulative" name={t("reports.cumulative")} stroke="#10b981" strokeWidth={2} dot={false} />
+            <Bar dataKey="in" name={t("cash.totalActualCashIn")} fill="var(--color-brand-600)" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="out" name={t("dashboard.cashOut")} fill="var(--ui-accent)" radius={[3, 3, 0, 0]} />
+            <Line type="monotone" dataKey="cumulative" name={t("reports.cumulative")} stroke="var(--ui-success)" strokeWidth={2} dot={false} />
           </ComposedChart>
         </ResponsiveContainer>
       </Card>

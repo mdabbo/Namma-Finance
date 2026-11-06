@@ -180,7 +180,7 @@ function assertNoInvariantViolations(ws: Awaited<ReturnType<typeof loadWorkspace
   }
 }
 
-describe("NAMAA Finance — 10 projects × 20 people lifecycle simulation", () => {
+describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", () => {
   beforeAll(() => resetDb());
 
   it("sequential lifecycle: complete stages → certificates → pay → team payables stay consistent", async () => {

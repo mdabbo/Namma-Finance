@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createHashRouter, Navigate, RouterProvider, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import "./fonts";
 import "./styles.css";
 import { initI18n } from "./lib/i18n";
 import { applyTheme, loadSettings } from "./lib/settings";

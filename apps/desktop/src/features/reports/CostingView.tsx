@@ -76,7 +76,7 @@ export function CostingView() {
                 </td>
                 <td className="text-end tnum">{base.format(r.revenueEgp)}</td>
                 <td className="text-end tnum">{base.format(r.directCostEgp)}</td>
-                <td className="text-end tnum text-indigo-600 dark:text-indigo-400">{base.format(r.laborCostEgp)}</td>
+                <td className="text-end tnum text-brand-700 dark:text-brand-300">{base.format(r.laborCostEgp)}</td>
                 <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(r.overheadEgp)}</td>
                 <td className="text-end tnum">{base.format(r.trueCostEgp)}</td>
                 <td className={cx("text-end tnum font-semibold", r.fullyLoadedProfitEgp >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>

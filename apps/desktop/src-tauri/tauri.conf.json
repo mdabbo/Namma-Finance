@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "NAMAA Finance",
+  "productName": "DABWORKS Finance",
   "version": "0.7.1",
   "identifier": "com.mepfinance.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "NAMAA Finance",
+        "title": "DABWORKS Finance",
         "width": 1400,
         "height": 900,
         "minWidth": 1100,

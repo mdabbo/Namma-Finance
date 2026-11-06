@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
   status: { fontSize: 11, fontWeight: "700" },
   value: { fontSize: 17, fontWeight: "700", color: colors.text },
   barTrack: { height: 8, borderRadius: 4, backgroundColor: colors.border, overflow: "hidden" },
-  barCertified: { position: "absolute", left: 0, top: 0, bottom: 0, backgroundColor: "#93c5fd", borderRadius: 4 },
+  barCertified: { position: "absolute", left: 0, top: 0, bottom: 0, backgroundColor: "#8eaacd", borderRadius: 4 },
   barCollected: { position: "absolute", left: 0, top: 0, bottom: 0, backgroundColor: colors.brand, borderRadius: 4 },
   ratios: { flexDirection: "row", justifyContent: "space-between" },
   ratio: { fontSize: 11, color: colors.subtle },

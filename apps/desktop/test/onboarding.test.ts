@@ -48,7 +48,7 @@ describe("Milestone 6 onboarding model", () => {
 
     const midway = onboardingStatus({
       ...baseInputs,
-      companyName: "NAMAA Engineering",
+      companyName: "DABWORKS Engineering",
       currencyConfirmed: true,
       numberingConfirmed: true,
       clientCount: 1,
@@ -58,7 +58,7 @@ describe("Milestone 6 onboarding model", () => {
 
     const done = onboardingStatus({
       ...baseInputs,
-      companyName: "NAMAA Engineering",
+      companyName: "DABWORKS Engineering",
       currencyConfirmed: true,
       numberingConfirmed: true,
       clientCount: 1,

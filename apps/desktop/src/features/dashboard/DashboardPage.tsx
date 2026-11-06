@@ -67,8 +67,8 @@ const ATTENTION_STYLES: Record<AttentionTone, { icon: string; hover: string }> =
     hover: "hover:border-amber-200 dark:hover:border-amber-900",
   },
   info: {
-    icon: "bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300",
-    hover: "hover:border-blue-200 dark:hover:border-blue-900",
+    icon: "bg-brand-50 text-brand-600 dark:bg-brand-950/60 dark:text-brand-300",
+    hover: "hover:border-brand-200 dark:hover:border-brand-900",
   },
   success: {
     icon: "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300",
@@ -416,14 +416,14 @@ export function DashboardPage() {
                   <Bar
                     dataKey="cashIn"
                     name={t("dashboard.cashIn")}
-                    fill="#2563eb"
+                    fill="var(--color-brand-600)"
                     radius={[4, 4, 0, 0]}
                     maxBarSize={26}
                   />
                   <Bar
                     dataKey="cashOut"
                     name={t("dashboard.cashOut")}
-                    fill="#94a3b8"
+                    fill="var(--ui-accent)"
                     radius={[4, 4, 0, 0]}
                     maxBarSize={26}
                   />
@@ -463,21 +463,21 @@ export function DashboardPage() {
                   <Bar
                     dataKey="progress"
                     name={t("dashboard.progress")}
-                    fill="#64748b"
+                    fill="var(--ui-muted)"
                     radius={3}
                     barSize={6}
                   />
                   <Bar
                     dataKey="certified"
                     name={t("projects.certified")}
-                    fill="#60a5fa"
+                    fill="var(--color-brand-600)"
                     radius={3}
                     barSize={6}
                   />
                   <Bar
                     dataKey="collected"
                     name={t("dashboard.collected")}
-                    fill="#10b981"
+                    fill="var(--ui-success)"
                     radius={3}
                     barSize={6}
                   />

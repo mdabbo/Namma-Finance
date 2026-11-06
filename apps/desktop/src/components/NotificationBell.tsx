@@ -9,7 +9,7 @@ const KIND_DOT: Record<NotificationKind, string> = {
   OVERDUE: "bg-red-500",
   DUE_SOON: "bg-amber-500",
   READY_TO_COLLECT: "bg-emerald-500",
-  TEAM_PAYABLE: "bg-sky-500",
+  TEAM_PAYABLE: "bg-brand-500",
   BOND_EXPIRY: "bg-purple-500",
   RECURRING_DUE: "bg-slate-400",
 };

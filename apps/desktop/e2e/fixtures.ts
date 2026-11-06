@@ -26,7 +26,7 @@ export async function resetWorkspace(language: "en" | "ar" = "en"): Promise<void
 
 /** Mark onboarding complete so specs can reach the populated dashboard. */
 export async function completeOnboarding(): Promise<void> {
-  await sql("execute", "UPDATE settings SET value='NAMAA Engineering' WHERE key='company_name'", []);
+  await sql("execute", "UPDATE settings SET value='DABWORKS Engineering' WHERE key='company_name'", []);
   for (const key of ["onboarding_currency_done", "onboarding_numbering_done"]) {
     await sql("execute", "INSERT INTO settings(key,value) VALUES($1,'true')", [key]);
   }
