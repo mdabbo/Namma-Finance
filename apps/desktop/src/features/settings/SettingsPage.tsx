@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { NavLink, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, CloudUpload, DatabaseBackup, FlaskConical, Hash, Languages, Coins, Info, Lock, Tags, Plus, RefreshCw, Trash2, UsersRound, Wrench } from "lucide-react";
+import { CloudUpload, DatabaseBackup, FlaskConical, Coins, Info, Lock, Plus, RefreshCw, Trash2, UsersRound, Wrench } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useRole, type Role } from "../../lib/roles";
@@ -28,6 +28,20 @@ import {
 import { AuditSection } from "../audit/AuditPage";
 import { ImportWizard } from "../reports/ImportWizard";
 import { PaymentIntegrityView } from "../reports/PaymentIntegrityView";
+
+/**
+ * One line under each settings page title saying what the page is for. Keys
+ * are section ids from SETTINGS_SECTIONS; a section with no entry simply shows
+ * no description.
+ */
+const SECTION_NOTES: Record<string, string | undefined> = {
+  general: "settings.appearanceNote",
+  company: "settings.companyProfileNote",
+  finance: "settings.currencyNote",
+  numbering: "settings.numberingNote",
+  categories: "settings.categoriesNote",
+  sync: "settings.syncNote",
+};
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -67,10 +81,12 @@ export function SettingsPage() {
         aria-label={t("settings.sectionNavigation")}
         className="w-full shrink-0 lg:sticky lg:top-4 lg:w-56"
       >
-        <ul className="space-y-4">
+        <ul className="space-y-3">
           {groups.map((group) => (
             <li key={group.id}>
-              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+              {/* Filled band + indented children: two signals that this is a
+                  heading and the rows under it are not. */}
+              <p className="mb-1 rounded-[var(--radius-control)] bg-border-subtle px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
                 {t(group.labelKey)}
               </p>
               <ul className="space-y-0.5">
@@ -79,10 +95,12 @@ export function SettingsPage() {
                     <NavLink
                       to={settingsSectionPath(item.id)}
                       className={({ isActive }) => cx(
-                        "block rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
+                        "block rounded-[var(--radius-control)] py-1.5 pe-3 ps-5 text-sm font-medium transition-colors",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
                         isActive
-                          ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
+                          // brand-50 measured 1.01:1 against the canvas - no visible
+                          // highlight at all. These separate the active row from it.
+                          ? "bg-brand-200 font-semibold text-brand-800 dark:bg-surface-subtle dark:text-brand-100"
                           : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
                       )}
                     >
@@ -97,12 +115,14 @@ export function SettingsPage() {
       </nav>
 
       <div className="min-w-0 flex-1">
-      <PageHeader title={activeLabel ? t(activeLabel) : t("settings.title")} />
+      <PageHeader
+        title={activeLabel ? t(activeLabel) : t("settings.title")}
+        description={SECTION_NOTES[section] ? t(SECTION_NOTES[section]) : undefined}
+      />
 
       <div className="max-w-4xl space-y-4">
         {section === "company" && (
           <Card className="p-5">
-            <SectionTitle icon={<Building2 size={16} />} title={t("settings.companyProfile")} />
             <div className="grid grid-cols-3 gap-4">
               {([
                 ["companyName", "settings.companyName"],
@@ -120,13 +140,11 @@ export function SettingsPage() {
                 </Field>
               ))}
             </div>
-            <p className="mt-2 text-xs text-slate-400">{t("settings.companyProfileNote")}</p>
           </Card>
         )}
 
         {section === "general" && (
         <Card className="p-5">
-          <SectionTitle icon={<Languages size={16} />} title={t("settings.general")} />
           <div className="grid grid-cols-3 gap-4">
             <Field label={t("settings.language")}>
               <Select
@@ -152,8 +170,6 @@ export function SettingsPage() {
 
         {section === "numbering" && (
         <Card className="p-5">
-          <SectionTitle icon={<Hash size={16} />} title={t("settings.numberingTitle")} />
-          <p className="mb-3 text-xs text-slate-400">{t("settings.numberingNote")}</p>
           <div className="grid grid-cols-3 gap-4">
             <Field label={t("settings.projectCodePrefix")}>
               <Input
@@ -261,7 +277,6 @@ export function SettingsPage() {
 
         {section === "categories" && (
         <Card className="p-5">
-          <SectionTitle icon={<Tags size={16} />} title={t("settings.expenseCategories")} />
           <div className="space-y-2">
             {categories.map((cat) => (
               <div key={cat.id} className={cx("flex items-center gap-3", !cat.isActive && "opacity-50")}>

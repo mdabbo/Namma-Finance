@@ -122,14 +122,14 @@ test("switches between light and dark themes", async ({ page }) => {
  */
 test("deep-links a settings section and keeps reports free of technical tools", async ({ page }) => {
   await page.goto("/#/settings/numbering");
-  await expect(page.getByRole("heading", { name: "Numbering" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Document numbering" })).toBeVisible();
 
   // Bare /settings resolves to the first section rather than a dead route.
   await page.goto("/#/settings");
   await expect(page).toHaveURL(/#\/settings\/general/);
 
   await page.goto("/#/settings/data-tools");
-  await expect(page.getByRole("heading", { name: "Data Tools" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Import & utilities" })).toBeVisible();
 
   // Reports carries reporting only.
   await page.goto("/#/reports");

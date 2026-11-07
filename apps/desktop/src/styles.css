@@ -3,17 +3,41 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "Segoe UI Variable", "Segoe UI", Tahoma, system-ui, sans-serif;
-  --color-brand-50: #eff6ff;
-  --color-brand-100: #dbeafe;
-  --color-brand-200: #bfdbfe;
-  --color-brand-300: #93c5fd;
-  --color-brand-400: #60a5fa;
-  --color-brand-500: #3b82f6;
-  --color-brand-600: #2563eb;
-  --color-brand-700: #1d4ed8;
-  --color-brand-800: #1e40af;
-  --color-brand-900: #1e3a8a;
+  /* Brand package: Montserrat headings, Inter body, Tajawal Arabic. Bundled
+     locally — the CSP forbids remote font origins, so the package's Google
+     Fonts link cannot be used. Tajawal follows Inter in the body stack so
+     Arabic glyphs resolve without a separate rule. */
+  --font-sans: "Inter", "Tajawal", "Segoe UI Variable", "Segoe UI", Tahoma, system-ui, sans-serif;
+  --font-head: "Montserrat", "Tajawal", "Segoe UI Variable", "Segoe UI", Tahoma, sans-serif;
+
+  /* DABWORKS Deep Navy #0B2545, pinned at brand-600 because that is what the
+     primary button, links and active navigation render. The brand's own
+     .btn-primary is orange on white, which measures 3.0:1 — below the 4.5:1
+     this app holds elsewhere — so navy carries the actions and orange stays
+     the accent. */
+  --color-brand-50: #f2f6fa;
+  --color-brand-100: #dee7f2;
+  --color-brand-200: #becfe4;
+  --color-brand-300: #8eaacd;
+  --color-brand-400: #4671a4;
+  --color-brand-500: #224672;
+  /* Theme-aware: navy on light, steel-blue on dark. On a navy dark
+     surface the brand navy is invisible, so these two steps flip. 700 is
+     LIGHTER than 600 in dark mode so hover still reads as a lift. */
+  --color-brand-600: var(--ui-brand-600);
+  --color-brand-700: var(--ui-brand-700);
+  --color-brand-800: #06162b;
+  --color-brand-900: #05101e;
+  --color-brand-950: #040b13;
+
+  /* DAB Orange. --color-accent is the identity colour and is used as a FILL
+     (the logo slash, progress bars, chart series, active indicators).
+     --color-accent-text is a darkened orange for small text and icons on light
+     surfaces, where #f36c21 only reaches 3.0:1. */
+  --color-accent: var(--ui-accent);
+  --color-accent-strong: var(--ui-accent-strong);
+  --color-accent-text: var(--ui-accent-text);
+
   --color-canvas: var(--ui-canvas);
   --color-surface: var(--ui-surface);
   --color-surface-subtle: var(--ui-surface-subtle);
@@ -25,34 +49,54 @@
 
 :root {
   color-scheme: light;
-  --ui-canvas: #f6f8fb;
+  --ui-canvas: #f3f5f8; /* DAB Mist */
   --ui-surface: #ffffff;
-  --ui-surface-subtle: #f8fafc;
-  --ui-foreground: #172033;
-  --ui-muted: #64748b;
-  --ui-border-subtle: #e8edf3;
-  --ui-border-strong: #cbd5e1;
+  --ui-surface-subtle: #f8f9fb;
+  --ui-foreground: #1c2433; /* DAB Ink */
+  --ui-muted: #5c6673;
+  --ui-border-subtle: #e3e7ec;
+  --ui-border-strong: #c9ced6; /* DAB Stone */
+  --ui-brand-600: #0b2545; /* DAB Deep Navy */
+  --ui-brand-700: #081e37;
+  --ui-accent: #f36c21; /* DAB Orange */
+  --ui-accent-strong: #d95a12;
+  --ui-accent-text: #c64f0c;
+  /* The logo's navy counter-form; white on dark so the mark inverts. */
+  --ui-logo: #0b2545;
   --ui-success: #047857;
   --ui-warning: #b45309;
   --ui-danger: #b91c1c;
-  --ui-info: #1d4ed8;
+  --ui-info: #0b2545;
   --radius-control: 0.625rem;
   --radius-panel: 0.875rem;
   --radius-overlay: 1rem;
-  --shadow-panel: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.03);
-  --shadow-overlay: 0 24px 60px rgb(15 23 42 / 0.2);
+  --shadow-panel: 0 1px 2px rgb(11 37 69 / 0.06), 0 1px 3px rgb(11 37 69 / 0.04);
+  --shadow-overlay: 0 24px 60px rgb(11 37 69 / 0.24);
 }
 .dark {
   color-scheme: dark;
-  --ui-canvas: #0b1120;
-  --ui-surface: #111827;
-  --ui-surface-subtle: #172033;
-  --ui-foreground: #e5e7eb;
-  --ui-muted: #94a3b8;
-  --ui-border-subtle: #253147;
-  --ui-border-strong: #475569;
-  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.2);
-  --shadow-overlay: 0 24px 60px rgb(0 0 0 / 0.5);
+  --ui-canvas: #0a1626;
+  --ui-surface: #0b2545; /* DAB Deep Navy */
+  --ui-surface-subtle: #12304f;
+  --ui-foreground: #edf1f6;
+  --ui-muted: #c9ced6; /* DAB Stone */
+  --ui-border-subtle: #1c3c5e;
+  --ui-border-strong: #2e537a;
+  --ui-brand-600: #8eaacd;
+  --ui-brand-700: #a9c0dc;
+  /* Orange clears 4.5:1 on navy, so the brand colour itself carries here. */
+  --ui-accent: #f36c21;
+  --ui-accent-strong: #ff8442;
+  --ui-accent-text: #f36c21;
+  --ui-logo: #ffffff;
+  /* The semantic tones need their own dark values: the light ones are chosen
+     for contrast against mist and go muddy on navy. */
+  --ui-success: #10b981;
+  --ui-warning: #f59e0b;
+  --ui-danger: #f87171;
+  --ui-info: #4671a4;
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.25);
+  --shadow-overlay: 0 24px 60px rgb(0 0 0 / 0.55);
 }
 
 body {
@@ -85,11 +129,11 @@ textarea {
 }
 
 .heading-page {
-  @apply text-xl font-semibold tracking-tight text-foreground;
+  @apply font-head text-xl font-semibold tracking-tight text-foreground;
 }
 
 .heading-section {
-  @apply text-sm font-semibold text-foreground;
+  @apply font-head text-sm font-semibold text-foreground;
 }
 
 .text-supporting {
@@ -101,7 +145,7 @@ textarea {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-slate-300 dark:bg-slate-700 rounded-full border-2 border-solid border-transparent bg-clip-padding;
+  @apply bg-border-strong rounded-full border-2 border-solid border-transparent bg-clip-padding;
 }
 ::-webkit-scrollbar-track {
   background: transparent;

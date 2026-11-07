@@ -5,7 +5,7 @@ import { verifyLockPassword } from "../lib/lock";
 import { syncSignIn } from "../lib/sync/client";
 import { loadSettings } from "../lib/settings";
 import { Button, Input } from "./ui";
-import logoUrl from "../assets/namaa-logo.png";
+import { BrandMark } from "./BrandMark";
 
 /** Launch gate: local password, with the cloud login as the recovery key. */
 export function LockScreen({ onUnlock }: { onUnlock: () => void }) {
@@ -47,8 +47,8 @@ export function LockScreen({ onUnlock }: { onUnlock: () => void }) {
   }
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center gap-5 bg-slate-100 dark:bg-slate-950">
-      <img src={logoUrl} alt="NAMAA" className="h-16 w-16" />
+    <div className="flex h-screen flex-col items-center justify-center gap-5 bg-canvas">
+      <BrandMark className="h-14 w-auto" />
       <div className="w-80 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-4 flex items-center justify-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300">
           <Lock size={15} /> {recovery ? t("lock.recoveryTitle") : t("lock.title")}

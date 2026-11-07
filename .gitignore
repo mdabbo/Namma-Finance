@@ -15,3 +15,6 @@ playwright-report/
 recovered-data.db
 *.db
 !**/migrations/*.sql
+
+# CI installers downloaded for local verification (~10MB each)
+artifacts/

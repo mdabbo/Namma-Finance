@@ -1,4 +1,4 @@
-# NAMAA Finance
+# DABWORKS Finance
 
 Project Financial Management System for an MEP engineering design office
 (HVAC · Plumbing · Fire Fighting · Electrical · BIM). Bilingual (العربية/English),

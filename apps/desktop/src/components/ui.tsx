@@ -31,7 +31,9 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md" | "lg";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: "bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:bg-brand-800 disabled:bg-brand-300",
+  primary:
+    "bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:bg-brand-800 disabled:bg-brand-300 " +
+    "dark:text-brand-950 dark:active:bg-brand-200 dark:disabled:bg-brand-500 dark:disabled:text-brand-300",
   secondary:
     "border border-border-strong bg-surface text-slate-700 hover:bg-surface-subtle active:bg-slate-100 dark:text-slate-200 dark:active:bg-slate-700",
   ghost: "text-slate-600 hover:bg-slate-200/60 active:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700/60",
@@ -191,7 +193,7 @@ type BadgeTone = "neutral" | "info" | "success" | "warning" | "danger";
 
 const BADGE_TONES: Record<BadgeTone, string> = {
   neutral: "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200",
-  info: "bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300",
+  info: "bg-brand-50 text-brand-700 dark:bg-brand-950/60 dark:text-brand-300",
   success: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
   warning: "bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
   danger: "bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300",
@@ -230,7 +232,7 @@ export function Alert({
   className?: string;
 }) {
   const styles = {
-    info: "border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200",
+    info: "border-brand-200 bg-brand-50 text-brand-900 dark:border-brand-900 dark:bg-brand-950/40 dark:text-brand-200",
     success:
       "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200",
     warning:
@@ -544,7 +546,7 @@ export function RatioBar({
           style={{ width: `${pct2}%` }}
         />
       )}
-      <div className="absolute inset-y-0 start-0 rounded-full bg-brand-600" style={{ width: `${pct}%` }} />
+      <div className="absolute inset-y-0 start-0 rounded-full bg-accent" style={{ width: `${pct}%` }} />
     </div>
   );
 }

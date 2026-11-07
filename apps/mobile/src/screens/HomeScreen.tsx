@@ -127,7 +127,7 @@ const styles = StyleSheet.create({
   currencyCode: { fontWeight: "700", color: colors.text, fontSize: 13 },
   currencyFigures: { color: colors.subtle, fontSize: 12 },
   alertGreen: { borderColor: "#a7f3d0", backgroundColor: "#ecfdf5" },
-  alertBlue: { borderColor: "#bfdbfe", backgroundColor: "#eff6ff" },
+  alertBlue: { borderColor: "#becfe4", backgroundColor: "#f2f6fa" },
   alertRed: { borderColor: "#fecaca", backgroundColor: "#fef2f2" },
   alertRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   alertText: { flex: 1 },

@@ -54,7 +54,7 @@ export function OnboardingPanel({
   return (
     <Card className="mx-auto mt-8 max-w-3xl overflow-hidden">
       <div className="border-b border-border-subtle bg-gradient-to-r from-brand-50 to-surface px-6 py-5 dark:bg-slate-900 dark:bg-none">
-        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
+        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm dark:text-brand-950">
           <BriefcaseBusiness size={20} aria-hidden="true" />
         </div>
         <h2 className="text-xl font-semibold tracking-tight">{t("onboarding.title")}</h2>
@@ -112,7 +112,7 @@ export function OnboardingPanel({
                   )}
                   <Link
                     to={onboardingDestination(id, firstProjectId)}
-                    className="inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-2.5 text-xs font-medium text-white shadow-sm hover:bg-brand-700"
+                    className="inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-2.5 text-xs font-medium text-white shadow-sm hover:bg-brand-700 dark:text-brand-950"
                   >
                     <Plus size={14} aria-hidden="true" />
                     {t("dashboard.setup.start")}
@@ -180,7 +180,7 @@ export function OnboardingResumeCard({
           action={
             <Link
               to="/finance/certificates"
-              className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-3 text-sm font-medium text-white shadow-sm hover:bg-brand-700"
+              className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-control)] bg-brand-600 px-3 text-sm font-medium text-white shadow-sm hover:bg-brand-700 dark:text-brand-950"
             >
               <Plus size={15} aria-hidden="true" />
               {t("dashboard.setup.certificate")}

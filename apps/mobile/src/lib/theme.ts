@@ -1,16 +1,17 @@
-/** Shared look for the mobile screens — matches the desktop's brand blue. */
+/** Shared look for the mobile screens — mirrors the desktop DABWORKS tokens. */
 export const colors = {
-  brand: "#2563eb",
-  bg: "#f1f5f9",
+  brand: "#0b2545",
+  bg: "#f3f5f8",
   card: "#ffffff",
-  text: "#0f172a",
-  subtle: "#64748b",
-  faint: "#94a3b8",
+  text: "#1c2433",
+  subtle: "#5c6673",
+  faint: "#99a2ae",
   green: "#059669",
   amber: "#d97706",
+  accent: "#f36c21", // DAB Orange
   red: "#dc2626",
-  border: "#e2e8f0",
-  chipBg: "#eff6ff",
+  border: "#e3e7ec",
+  chipBg: "#f2f6fa",
 };
 
 export const card = {
