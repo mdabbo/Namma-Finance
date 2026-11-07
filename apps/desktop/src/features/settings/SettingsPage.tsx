@@ -81,10 +81,12 @@ export function SettingsPage() {
         aria-label={t("settings.sectionNavigation")}
         className="w-full shrink-0 lg:sticky lg:top-4 lg:w-56"
       >
-        <ul className="space-y-4">
+        <ul className="space-y-3">
           {groups.map((group) => (
             <li key={group.id}>
-              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+              {/* Filled band + indented children: two signals that this is a
+                  heading and the rows under it are not. */}
+              <p className="mb-1 rounded-[var(--radius-control)] bg-border-subtle px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
                 {t(group.labelKey)}
               </p>
               <ul className="space-y-0.5">
@@ -93,10 +95,12 @@ export function SettingsPage() {
                     <NavLink
                       to={settingsSectionPath(item.id)}
                       className={({ isActive }) => cx(
-                        "block rounded-[var(--radius-control)] px-3 py-1.5 text-sm font-medium transition-colors",
+                        "block rounded-[var(--radius-control)] py-1.5 pe-3 ps-5 text-sm font-medium transition-colors",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
                         isActive
-                          ? "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-200"
+                          // brand-50 measured 1.01:1 against the canvas - no visible
+                          // highlight at all. These separate the active row from it.
+                          ? "bg-brand-200 font-semibold text-brand-800 dark:bg-surface-subtle dark:text-brand-100"
                           : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
                       )}
                     >

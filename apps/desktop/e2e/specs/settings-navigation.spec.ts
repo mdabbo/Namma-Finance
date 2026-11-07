@@ -51,7 +51,7 @@ test("groups the sections and highlights the active one", async ({ page }) => {
   const nav = page.getByRole("navigation", { name: SETTINGS_NAV });
 
   // Group headings are plain text, so match the heading elements.
-  for (const group of ["Office", "Financial rules", "Data", "System"]) {
+  for (const group of ["Workspace", "Financial rules", "Data", "System"]) {
     await expect(nav.locator("p", { hasText: new RegExp(`^${group}$`) }), group).toHaveCount(1);
   }
 
@@ -132,7 +132,7 @@ test("Arabic mirrors the settings navigation", async ({ page }) => {
   await expect(nav).toHaveCount(1);
   // The document mirrors, so the sidebar sits on the right.
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-  for (const group of ["المكتب", "القواعد المالية", "البيانات", "النظام"]) {
+  for (const group of ["مساحة العمل", "القواعد المالية", "البيانات", "النظام"]) {
     await expect(nav.locator("p", { hasText: new RegExp(`^${group}$`) }), group).toHaveCount(1);
   }
 });

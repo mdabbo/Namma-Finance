@@ -75,7 +75,7 @@ export interface SettingsGroup {
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   // Appearance stays first: /settings redirects to /settings/general, the
   // only section every role can open, so it must also be the first item.
-  { id: "general", labelKey: "settings.groups.office", sectionIds: ["general", "company"] },
+  { id: "general", labelKey: "settings.groups.workspace", sectionIds: ["general", "company"] },
   { id: "finance", labelKey: "settings.groups.financialRules", sectionIds: ["finance", "numbering", "categories"] },
   { id: "data", labelKey: "settings.groups.data", sectionIds: ["backup", "sync", "data-tools", "audit"] },
   { id: "system", labelKey: "settings.groups.system", sectionIds: ["security", "advanced"] },

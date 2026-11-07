@@ -874,7 +874,7 @@ export const ar: Dictionary = {
     securityTitle: "الأمان",
     sectionNavigation: "أقسام الإعدادات",
     groups: {
-      office: "المكتب",
+      workspace: "مساحة العمل",
       financialRules: "القواعد المالية",
       data: "البيانات",
       system: "النظام",

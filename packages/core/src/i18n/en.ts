@@ -827,7 +827,7 @@ export const en = {
     securityTitle: "Security",
     sectionNavigation: "Settings sections",
     groups: {
-      office: "Office",
+      workspace: "Workspace",
       financialRules: "Financial rules",
       data: "Data",
       system: "System",
