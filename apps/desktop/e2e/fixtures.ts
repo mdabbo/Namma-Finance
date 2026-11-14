@@ -46,6 +46,11 @@ export async function queryOne<T = Record<string, unknown>>(
 }
 
 /** Wait for the workspace to finish its first data load. */
+/** Run one write against the workspace database (settings, reference data). */
+export async function execute(statement: string, params: unknown[] = []): Promise<void> {
+  await sql("execute", statement, params);
+}
+
 export async function ready(page: Page): Promise<void> {
   await expect(page.getByRole("navigation", { name: /breadcrumb|مسار/i })).toBeVisible();
 }

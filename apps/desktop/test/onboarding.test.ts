@@ -20,6 +20,7 @@ import { deleteProject } from "../src/repositories/projects";
 import { deleteClient } from "../src/repositories/clients";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
 import { loadSettings } from "../src/lib/settings";
+import { EGP_VALUATION } from "@mep/core";
 
 describe("Milestone 6 onboarding model", () => {
   const baseInputs = {
@@ -102,7 +103,7 @@ describe("Milestone 6 demo workspace", () => {
     expect(await listPayments()).toHaveLength(1);
     expect(await listExpenses()).toHaveLength(2);
 
-    const workspace = await loadWorkspaceFinancials();
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects).toHaveLength(2);
     const overdueCount = workspace.projects.reduce(
       (total, project) => total + project.overdueCertificates,
@@ -116,7 +117,7 @@ describe("Milestone 6 demo workspace", () => {
     expect(await listCertificates()).toHaveLength(0);
     expect(await listPayments()).toHaveLength(0);
     expect(await listExpenses()).toHaveLength(0);
-    expect((await loadWorkspaceFinancials()).projects).toHaveLength(0);
+    expect((await loadWorkspaceFinancials(EGP_VALUATION)).projects).toHaveLength(0);
   });
 
   it("can be reloaded after removal without number collisions", async () => {
@@ -146,7 +147,7 @@ describe("Milestone 6 demo workspace", () => {
     expect((await loadSettings()).demoWorkspace).toBe("");
     expect(await listExpenses()).toHaveLength(0);
     expect(await listCertificates()).toHaveLength(0);
-    expect((await loadWorkspaceFinancials()).projects).toHaveLength(0);
+    expect((await loadWorkspaceFinancials(EGP_VALUATION)).projects).toHaveLength(0);
   });
 
   it("joins a concurrent load instead of seeding a second unremovable workspace", async () => {

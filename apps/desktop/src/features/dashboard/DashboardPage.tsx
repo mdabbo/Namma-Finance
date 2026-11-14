@@ -122,21 +122,23 @@ export function DashboardPage() {
     const overview = computeDashboardOverview(
       financials.projects,
       financials.allExpenses,
+      financials.valuation,
     );
+    // Already in the reporting currency: the workspace was valued per source
+    // record when it was loaded. Converting here is what once turned a
+    // SAR 325,000 contract into SAR 317,031.19.
     return {
-      contractValue: base.convert(overview.contractValueEgp),
-      totalCashIn: base.convert(overview.totalCashInEgp),
-      outstanding: base.convert(overview.outstandingReceivablesEgp),
-      netCash: base.convert(overview.netCashPositionEgp),
+      contractValue: overview.contractValueEgp,
+      totalCashIn: overview.totalCashInEgp,
+      outstanding: overview.outstandingReceivablesEgp,
+      netCash: overview.netCashPositionEgp,
     };
-    // `base.code` changes the EGP-to-reporting-currency conversion.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [financials, base.code]);
+  }, [financials]);
 
   const monthly = useMemo(
     () =>
       financials
-        ? buildMonthlyCashSeries(financials.cashIn, financials.allExpenses)
+        ? buildMonthlyCashSeries(financials.cashIn, financials.allExpenses, financials.valuation)
         : [],
     [financials],
   );
@@ -166,7 +168,7 @@ export function DashboardPage() {
       projects: financials.projects,
       readyToInvoiceEgp: financials.readyToCollect.map((item) => item.readyEgp),
       teamPaymentsDueEgp: financials.teamPayables.map((item) => item.dueEgp),
-    });
+    }, financials.valuation);
 
     return [
       {
@@ -176,7 +178,7 @@ export function DashboardPage() {
           count: summary.overdueCertificates.count,
         }),
         count: summary.overdueCertificates.count,
-        amount: base.convert(summary.overdueCertificates.amountEgp),
+        amount: summary.overdueCertificates.amountEgp,
         to: DASHBOARD_ATTENTION_ROUTES.overdue,
         icon: AlarmClock,
         tone: "danger" as const,
@@ -188,7 +190,7 @@ export function DashboardPage() {
           count: summary.readyToInvoice.count,
         }),
         count: summary.readyToInvoice.count,
-        amount: base.convert(summary.readyToInvoice.amountEgp),
+        amount: summary.readyToInvoice.amountEgp,
         to: DASHBOARD_ATTENTION_ROUTES.readyToInvoice,
         icon: FileCheck2,
         tone: "success" as const,
@@ -200,7 +202,7 @@ export function DashboardPage() {
           count: summary.unallocatedPayments.count,
         }),
         count: summary.unallocatedPayments.count,
-        amount: base.convert(summary.unallocatedPayments.amountEgp),
+        amount: summary.unallocatedPayments.amountEgp,
         to: DASHBOARD_ATTENTION_ROUTES.unallocated,
         icon: WalletCards,
         tone: "warning" as const,
@@ -212,7 +214,7 @@ export function DashboardPage() {
           count: summary.teamPaymentsDue.count,
         }),
         count: summary.teamPaymentsDue.count,
-        amount: base.convert(summary.teamPaymentsDue.amountEgp),
+        amount: summary.teamPaymentsDue.amountEgp,
         to: DASHBOARD_ATTENTION_ROUTES.teamPayments,
         icon: HandCoins,
         tone: "info" as const,
@@ -222,7 +224,10 @@ export function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [financials, money, base.code, t]);
 
-  if (workspace.isLoading || clients.isLoading || settingsQuery.isLoading) {
+  // isPending, not isLoading: the workspace waits for the reporting currency
+  // to be known, and a query waiting on its inputs is not "loading" yet has
+  // no data either.
+  if (workspace.isPending || clients.isLoading || settingsQuery.isLoading) {
     return <LoadingState label={t("common.loading")} className="min-h-[50vh]" />;
   }
   if (workspace.isError || clients.isError || !financials || !money) {
@@ -285,8 +290,8 @@ export function DashboardPage() {
   const currencyScale = minorPerMajor(base.code);
   const cashChart = monthly.map((point) => ({
     month: point.month,
-    cashIn: base.convert(point.cashInEgp) / currencyScale,
-    cashOut: base.convert(point.cashOutEgp) / currencyScale,
+    cashIn: point.cashInEgp / currencyScale,
+    cashOut: point.cashOutEgp / currencyScale,
   }));
   const healthChart = healthProjects.map((project) => ({
     name:

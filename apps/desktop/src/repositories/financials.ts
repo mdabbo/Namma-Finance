@@ -11,7 +11,7 @@ import {
   laborCostMinor,
   parseMilestones,
   resolveEffectiveFxSnapshot,
-  toEgpPiasters,
+  EGP_VALUATION,
   type Contract,
   type ContractState,
   type Expense,
@@ -21,7 +21,9 @@ import {
   type ProjectCostProfile,
   type AssignmentLifecycle,
   type ProjectCashValuationEgp,
+  type CurrencyValuation,
 } from "@mep/core";
+import { useReportingValuation } from "../lib/baseCurrency";
 import { select } from "../lib/db";
 import { todayIso } from "../lib/format";
 import { mapProject, type ProjectRow } from "./projects";
@@ -116,6 +118,14 @@ export interface TeamAccountItem {
 }
 
 export interface WorkspaceFinancials {
+  /**
+   * The valuation every consolidated figure below was built with. Anything
+   * derived further from this workspace must use THIS valuation — a second one
+   * would add two currencies together. Fields named `…Egp` hold amounts in
+   * `valuation.currency`; they are already in the reporting currency and must
+   * not be converted again.
+   */
+  valuation: CurrencyValuation;
   projects: ProjectFinancials[];
   contractStates: Map<number, ContractState>;
   allExpenses: Expense[];
@@ -157,7 +167,10 @@ async function financialReadRevision(read: FinancialSelect): Promise<number> {
 }
 
 /** One calculation pass. The public loader verifies that its source revision stayed stable. */
-async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<WorkspaceFinancials> {
+async function loadWorkspaceFinancialsOnce(
+  read: FinancialSelect,
+  valuation: CurrencyValuation,
+): Promise<WorkspaceFinancials> {
   const today = todayIso();
   const [projectRows, contractRows, certRows, paymentRows, allocations, expenses, revisionFxRows] = await Promise.all([
     read<ProjectRow>("SELECT p.*, c.name AS client_name FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.archived_at IS NULL"),
@@ -255,7 +268,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
             currency: project.currency,
             fxRateMicro: project.fxRateMicro,
           },
-      }),
+      }, valuation),
     );
   }
   const projectFinancials = projects.map((project) => computeProjectFinancials(
@@ -264,6 +277,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       .map((contract) => contractStates.get(contract.id)!),
     expenses.filter((expense) => expense.projectId === project.id),
     cashValuationByProject.get(project.id)!,
+    valuation,
   ));
 
   const cashIn = payments.flatMap((p) => {
@@ -279,7 +293,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       date: p.date,
       kind: p.kind,
       projectId: project.id,
-      egpMinor: toEgpPiasters(p.amountMinor, fx.currency, fx.fxRateMicro),
+      egpMinor: valuation.value(p.amountMinor, fx.currency, fx.fxRateMicro),
     }];
   });
   const cashInByProjectEgp = new Map<number, number>();
@@ -290,7 +304,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       currency: project.currency,
       fxRateMicro: project.fxRateMicro,
     };
-    const amountEgp = toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
+    const amountEgp = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
     cashInByProjectEgp.set(project.id, (cashInByProjectEgp.get(project.id) ?? 0) + amountEgp);
   }
 
@@ -329,7 +343,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
         currency: project.currency,
         achievedTitles: ready.achievedTitles,
         readyMinor: ready.readyMinor,
-        readyEgp: toEgpPiasters(ready.readyMinor, project.currency, project.fxRateMicro),
+        readyEgp: valuation.value(ready.readyMinor, project.currency, project.fxRateMicro),
       });
     }
   }
@@ -387,7 +401,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
       paidOutMinor: payout.paidOutMinor,
       earnedAtCancellationMinor: a.earned_minor_at_cancellation,
     });
-    const toEgp = (minor: number) => toEgpPiasters(minor, a.currency, a.fx_rate_micro);
+    const toEgp = (minor: number) => valuation.value(minor, a.currency, a.fx_rate_micro);
     teamAccounts.push({
       assignmentId: a.id,
       projectId: project.id,
@@ -446,7 +460,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
   for (const row of laborRows) {
     const costMinor = laborCostMinor(row.minutes, row.hourly_rate_minor);
     if (costMinor === 0) continue;
-    const egp = toEgpPiasters(costMinor, row.currency, rateByCurrency.get(row.currency) ?? 1_000_000);
+    const egp = valuation.value(costMinor, row.currency, rateByCurrency.get(row.currency) ?? 1_000_000);
     laborByProjectEgp.set(row.project_id, (laborByProjectEgp.get(row.project_id) ?? 0) + egp);
   }
 
@@ -457,7 +471,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
      WHERE e.project_id IS NOT NULL AND e.person_payment_id IS NULL
        AND e.voided_at IS NULL AND e.archived_at IS NULL AND p.archived_at IS NULL`,
   )) {
-    const egp = toEgpPiasters(row.amount_minor, row.currency, row.fx_rate_micro);
+    const egp = valuation.value(row.amount_minor, row.currency, row.fx_rate_micro);
     nonTeamExpenseByProject.set(row.project_id, (nonTeamExpenseByProject.get(row.project_id) ?? 0) + egp);
   }
   const costsByProject = new Map<number, ProjectCostProfile>();
@@ -475,6 +489,7 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
   }
 
   return {
+    valuation,
     projects: projectFinancials,
     contractStates,
     allExpenses: expenses,
@@ -489,24 +504,53 @@ async function loadWorkspaceFinancialsOnce(read: FinancialSelect): Promise<Works
 
 export async function loadWorkspaceFinancialsConsistently(
   read: FinancialSelect,
+  valuation: CurrencyValuation,
   maxAttempts = 3,
 ): Promise<WorkspaceFinancials> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const before = await financialReadRevision(read);
-    const workspace = await loadWorkspaceFinancialsOnce(read);
+    const workspace = await loadWorkspaceFinancialsOnce(read, valuation);
     const after = await financialReadRevision(read);
     if (before === after) return workspace;
   }
   throw new Error("FINANCIAL_SNAPSHOT_BUSY");
 }
 
-/** Load a revision-consistent financial snapshot from the pooled SQLite connection. */
-export function loadWorkspaceFinancials(): Promise<WorkspaceFinancials> {
-  return loadWorkspaceFinancialsConsistently(select);
+/**
+ * For callers that read only `contractStates`. Those are in each contract's
+ * own currency and do not depend on the valuation, so the pivot is as good as
+ * any — but the choice is spelled out rather than defaulted.
+ */
+export const CONTRACT_STATES_ONLY: CurrencyValuation = EGP_VALUATION;
+
+/**
+ * Load a revision-consistent financial snapshot from the pooled SQLite
+ * connection, valued for reporting in `valuation.currency`.
+ */
+export function loadWorkspaceFinancials(valuation: CurrencyValuation): Promise<WorkspaceFinancials> {
+  return loadWorkspaceFinancialsConsistently(select, valuation);
 }
 
+/**
+ * The workspace in the user's reporting currency.
+ *
+ * The currency and its rate are part of the query key, so figures valued for
+ * one currency are never shown under another's symbol while a refetch is in
+ * flight: changing the reporting currency is a different query, not a stale
+ * one.
+ */
 export function useWorkspaceFinancials() {
-  return useQuery({ queryKey: ["financials"], queryFn: loadWorkspaceFinancials });
+  const reporting = useReportingValuation();
+  return useQuery({
+    queryKey: ["financials", reporting.currency, reporting.fxRateMicro],
+    enabled: reporting.settled,
+    queryFn: () => {
+      // Settled without a valuation means the reporting currency has no rate.
+      // Guessing one would silently misvalue every foreign amount.
+      if (!reporting.valuation) throw new Error("REPORTING_CURRENCY_RATE_MISSING");
+      return loadWorkspaceFinancials(reporting.valuation);
+    },
+  });
 }
 
 /** Contract state for a single contract (certificate editor, contract card). */
@@ -514,7 +558,7 @@ export function useContractState(contractId: number) {
   return useQuery({
     queryKey: ["financials", "contract", contractId],
     queryFn: async () => {
-      const ws = await loadWorkspaceFinancials();
+      const ws = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
       return ws.contractStates.get(contractId) ?? null;
     },
   });

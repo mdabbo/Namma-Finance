@@ -8,10 +8,12 @@ interface CertificateDocumentProps {
   cert: CertificateListItem;
   contract: Contract;
   breakdown: CertificateBreakdown;
+  /** The office issuing the certificate — see lib/issuer.ts. Never the product name by default. */
+  issuerName: string;
 }
 
 /** Print-ready certificate document in the active UI language. */
-export function CertificateDocument({ cert, contract, breakdown }: CertificateDocumentProps) {
+export function CertificateDocument({ cert, contract, breakdown, issuerName }: CertificateDocumentProps) {
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
   const currency = cert.currency;
@@ -25,7 +27,7 @@ export function CertificateDocument({ cert, contract, breakdown }: CertificateDo
       <div className="mb-6 flex items-start justify-between border-b-2 border-slate-800 pb-4">
         <div>
           <h1 className="text-2xl font-bold">{t("certificates.pdfTitle")}</h1>
-          <p className="mt-1 text-slate-600">{t("common.appName")}</p>
+          <p className="mt-1 text-slate-600">{issuerName}</p>
         </div>
         <div className="text-end">
           <p className="text-lg font-bold tnum">{cert.number}</p>
@@ -80,8 +82,11 @@ export function CertificateDocument({ cert, contract, breakdown }: CertificateDo
       </table>
 
       <div className="mt-14 grid grid-cols-2 gap-12">
-        {[t("common.appName"), t("clients.single")].map((party) => (
-          <div key={party} className="text-center">
+        {[
+          { role: "issuer", party: issuerName },
+          { role: "client", party: t("clients.single") },
+        ].map(({ role, party }) => (
+          <div key={role} className="text-center">
             <div className="mb-10 text-sm font-semibold text-slate-600">{party}</div>
             <div className="border-t border-slate-400 pt-1 text-xs text-slate-500">{t("common.date")} / ______________</div>
           </div>

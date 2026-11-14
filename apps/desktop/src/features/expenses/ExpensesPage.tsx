@@ -16,7 +16,7 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import type { SavedViewFilters } from "../../lib/savedViews";
-import { expenseSectionKpis, parseFinanceScope, resetFinanceScopeParams } from "../finance/financeSectionModel";
+import { NO_EXPENSE_KPIS, expenseSectionKpis, parseFinanceScope, resetFinanceScopeParams } from "../finance/financeSectionModel";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function ExpensesPage() {
@@ -40,11 +40,16 @@ export function ExpensesPage() {
   const [deleting, setDeleting] = useState<ExpenseListItem | null>(null);
   const { data: projects = [] } = useProjects();
 
-  const kpis = expenseSectionKpis(
-    financials?.allExpenses ?? [],
-    typeof projectFilter === "number" ? projectFilter : null,
-    todayIso(),
-  );
+  // Valued with the workspace's own valuation; until it has loaded there is
+  // nothing to value, rather than something to value in a guessed currency.
+  const kpis = financials
+    ? expenseSectionKpis(
+      financials.allExpenses,
+      typeof projectFilter === "number" ? projectFilter : null,
+      todayIso(),
+      financials.valuation,
+    )
+    : NO_EXPENSE_KPIS;
 
   const catName = (e: ExpenseListItem) => (i18n.language === "ar" ? e.categoryAr : e.categoryEn);
 

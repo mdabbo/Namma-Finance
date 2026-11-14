@@ -8,6 +8,7 @@ import {
   paymentSectionKpis,
   type ProjectMoneyFacts,
 } from "../src/features/finance/financeSectionModel";
+import { EGP_VALUATION } from "@mep/core";
 
 function projectFacts(overrides: Partial<ProjectMoneyFacts> & { id: number }): ProjectMoneyFacts {
   return {
@@ -114,14 +115,14 @@ describe("Milestone 5 finance section", () => {
       { date: "2026-07-11", projectId: null, amountMinor: 100_00, currency: "USD", fxRateMicro: 50_000_000 },
       { date: "2026-05-01", projectId: 3, amountMinor: 2_000, currency: "EGP", fxRateMicro: 1_000_000 },
     ];
-    expect(expenseSectionKpis(expenses, null, "2026-07-28")).toEqual({
+    expect(expenseSectionKpis(expenses, null, "2026-07-28", EGP_VALUATION)).toEqual({
       totalEgp: 10_000 + 500_000 + 2_000,
       monthEgp: 10_000 + 500_000,
       overheadEgp: 500_000,
       projectEgp: 12_000,
     });
     // Project scope: overhead rows drop out entirely.
-    expect(expenseSectionKpis(expenses, 3, "2026-07-28")).toEqual({
+    expect(expenseSectionKpis(expenses, 3, "2026-07-28", EGP_VALUATION)).toEqual({
       totalEgp: 12_000,
       monthEgp: 10_000,
       overheadEgp: 0,

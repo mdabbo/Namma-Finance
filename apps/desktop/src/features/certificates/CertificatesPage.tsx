@@ -11,6 +11,8 @@ import { KpiCard } from "../../components/KpiCard";
 import { PrintPortal } from "../../components/PrintPortal";
 import { Badge, Button, PageHeader, Select } from "../../components/ui";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
+import { documentIssuerName } from "../../lib/issuer";
+import { useSettings } from "../../lib/settings";
 import type { SavedViewFilters } from "../../lib/savedViews";
 import { readModelDisplay, readModelExport } from "../../lib/readModel";
 import { useBaseMoney } from "../../lib/baseCurrency";
@@ -33,6 +35,7 @@ const CERTIFICATE_STATUSES: readonly CertificateStatus[] = ["DRAFT", "SUBMITTED"
 export function CertificatesPage() {
   const { t } = useTranslation();
   const fmt = useFormat();
+  const { data: settings } = useSettings();
   const [searchParams, setSearchParams] = useSearchParams();
   const base = useBaseMoney();
   const scope = parseFinanceScope(searchParams, "certificates");
@@ -336,7 +339,12 @@ export function CertificatesPage() {
 
       {printing && printingState && printingContract && (
         <PrintPortal onDone={() => setPrinting(null)}>
-          <CertificateDocument cert={printing} contract={printingContract} breakdown={printingState.breakdown} />
+          <CertificateDocument
+            cert={printing}
+            contract={printingContract}
+            breakdown={printingState.breakdown}
+            issuerName={documentIssuerName(settings?.companyName, t("common.appName"))}
+          />
         </PrintPortal>
       )}
     </div>

@@ -13,6 +13,7 @@ import { createCertificate, listCertificates } from "../src/repositories/certifi
 import { createExpense, listExpenses } from "../src/repositories/expenses";
 import { createPayment, listPayments } from "../src/repositories/payments";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 beforeEach(() => resetDb());
 
@@ -134,7 +135,7 @@ describe("archived projects leave every finance surface together", () => {
     expect(expenses).toHaveLength(1);
     expect(expenses[0]!.projectId).toBeNull();
 
-    const workspace = await loadWorkspaceFinancials();
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects).toHaveLength(0);
     expect(workspace.cashIn).toHaveLength(0);
     expect(workspace.allExpenses.map((expense) => expense.projectId)).toEqual([null]);

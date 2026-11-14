@@ -1,11 +1,20 @@
 import type { Expense, Project, ProjectAssignment, PersonPayment } from "../domain/types";
 import { isBillable } from "../domain/types";
-import { ratioBp, toEgpPiasters } from "../money/money";
+import { ratioBp } from "../money/money";
+import type { CurrencyValuation } from "../money/currencyValuation";
 import type { ContractState } from "./contract";
 
 /**
- * Cross-currency rollups. Everything here is consolidated to EGP piasters
- * using each project's / expense's stored FX rate.
+ * Cross-currency rollups.
+ *
+ * Every consolidated figure is a sum of source amounts valued by the caller's
+ * `CurrencyValuation` — see money/currencyValuation.ts for why the currency decision is made
+ * per record rather than after summing.
+ *
+ * NAMING: the consolidated fields still carry an `Egp` suffix from when the
+ * pivot was the only valuation. They hold amounts in `valuation.currency`:
+ * EGP piasters under EGP_VALUATION, the reporting currency's minor units
+ * otherwise. Never convert them again.
  */
 
 export interface ProjectFinancials {
@@ -71,6 +80,7 @@ export function computeProjectFinancials(
   contractStates: ContractState[],
   projectExpenses: Expense[],
   cashValuation: ProjectCashValuationEgp,
+  valuation: CurrencyValuation,
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
   const certifiedBase = sum(contractStates.map((c) => c.certifiedBaseMinor));
@@ -85,20 +95,20 @@ export function computeProjectFinancials(
   const remainingUncertified = sum(contractStates.map((c) => c.remainingUncertifiedMinor));
   const retentionHeld = sum(contractStates.map((c) => c.retentionHeldMinor));
 
-  const toEgp = (minor: number) => toEgpPiasters(minor, project.currency, project.fxRateMicro);
+  const toEgp = (minor: number) => valuation.value(minor, project.currency, project.fxRateMicro);
   const certificateEgp = (
     pick: (state: ContractState["certificates"][number]) => number,
     billableOnly: boolean,
   ) => sum(contractStates.flatMap((contractState) =>
     contractState.certificates
       .filter((state) => !billableOnly || isBillable(state.certificate.status))
-      .map((state) => toEgpPiasters(
+      .map((state) => valuation.value(
         pick(state),
         state.certificate.currencySnapshot ?? project.currency,
         state.certificate.fxRateMicroSnapshot ?? project.fxRateMicro,
       )),
   ));
-  const expensesEgp = sum(projectExpenses.map((e) => toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro)));
+  const expensesEgp = sum(projectExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
   const revenueEgp = certificateEgp((state) => state.breakdown.baseMinor, true);
   const invoicedAmountEgp = certificateEgp((state) => state.breakdown.netPayableMinor, true);
   const outstandingEgp = certificateEgp((state) => state.unpaidMinor, true);
@@ -189,8 +199,12 @@ export interface DashboardKpis {
   overdueCertificates: number;
 }
 
-export function computeDashboardKpis(projects: ProjectFinancials[], allExpenses: Expense[]): DashboardKpis {
-  const expensesEgp = sum(allExpenses.map((e) => toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro)));
+export function computeDashboardKpis(
+  projects: ProjectFinancials[],
+  allExpenses: Expense[],
+  valuation: CurrencyValuation,
+): DashboardKpis {
+  const expensesEgp = sum(allExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
   const revenueEgp = sum(projects.map((p) => p.revenueEgp));
   const profitEgp = revenueEgp - expensesEgp;
   return {

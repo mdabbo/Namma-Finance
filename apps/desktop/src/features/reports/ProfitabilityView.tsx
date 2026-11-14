@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { computeProfitability, toEgpPiasters, withAllocatedOverhead, type OverheadRule } from "@mep/core";
+import { computeProfitability, withAllocatedOverhead, type OverheadRule } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useSettings, useUpdateSetting } from "../../lib/settings";
 import { useBaseMoney } from "../../lib/baseCurrency";
@@ -21,7 +21,7 @@ export function ProfitabilityView() {
     if (!financials) return [];
     const overheadTotal = financials.allExpenses
       .filter((e) => e.projectId === null)
-      .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);
+      .reduce((s, e) => s + financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro), 0);
     return computeProfitability(financials.projects, overheadTotal, rule).map((row) => ({
       ...row,
       costs: financials.costsByProject.get(row.projectId)!,

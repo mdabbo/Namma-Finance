@@ -24,12 +24,12 @@ export function reconcileMilestoneCertificates(contractId?: number): Promise<num
 }
 
 async function reconcileImpl(contractId?: number): Promise<number> {
-  const { loadWorkspaceFinancials } = await import("./financials");
+  const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
   const { nextCertificateSeq } = await import("./certificates");
   const { loadSettings } = await import("../lib/settings");
   const { reserveNextNumberWithinExistingLock } = await import("./numbering");
   const certificatePrefix = (await loadSettings()).certificateNumberPrefix;
-  const ws = await loadWorkspaceFinancials();
+  const ws = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
   let created = 0;
 
   for (const state of ws.contractStates.values()) {

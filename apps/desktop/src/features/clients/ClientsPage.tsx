@@ -33,7 +33,7 @@ export function ClientsPage() {
   // Consolidated columns sort on exact EGP piasters and export major units of
   // the reporting currency, which the header names.
   const exportBase = (egpMinor: number) =>
-    minorToInput(base.convert(egpMinor), currencyInfo(base.code).exponent);
+    minorToInput(egpMinor, currencyInfo(base.code).exponent);
 
   const columns: Column<ClientListItem>[] = [
     { key: "name", header: t("common.name"), value: (c) => c.name, render: (c) => <span className="font-medium">{c.name}</span> },

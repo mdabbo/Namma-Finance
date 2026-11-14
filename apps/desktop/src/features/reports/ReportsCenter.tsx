@@ -9,7 +9,6 @@ import {
   isBillable,
   laborCostMinor,
   minutesToHours,
-  toEgpPiasters,
 } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useClients } from "../../repositories/clients";
@@ -19,6 +18,7 @@ import { useExpenses } from "../../repositories/expenses";
 import { listAllAssignments, listAllPersonPayments, usePeople } from "../../repositories/people";
 import { listTimeEntries } from "../../repositories/timeEntries";
 import { useSettings } from "../../lib/settings";
+import { documentIssuerName } from "../../lib/issuer";
 import { useBaseMoney } from "../../lib/baseCurrency";
 import { minorToInput, todayIso, useFormat } from "../../lib/format";
 import { exportCsv, exportXlsx } from "../../lib/export";
@@ -67,7 +67,7 @@ export function ReportsCenter() {
    * string. Same rows, one flag.
    */
   const moneyFor = (mode: RowMode) => (egp: number) =>
-    mode === "print" ? base.format(egp) : Number(minorToInput(base.convert(egp), currencyInfo(base.code).exponent));
+    mode === "print" ? base.format(egp) : Number(minorToInput(egp, currencyInfo(base.code).exponent));
 
   /** The same rule for amounts reported in their own source currency. */
   const sourceMoneyFor = (mode: RowMode) => (amountMinor: number, currency: string) =>
@@ -187,7 +187,7 @@ export function ReportsCenter() {
       case "profitability": {
         const overhead = financials.allExpenses
           .filter((e) => e.projectId === null)
-          .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);
+          .reduce((s, e) => s + financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro), 0);
         return computeProfitability(financials.projects, overhead, settings?.overheadRule ?? "REVENUE").map((r, i) => ({
           "#": i + 1,
           [t("projects.single")]: `${r.projectCode} ${r.projectName}`,
@@ -210,7 +210,7 @@ export function ReportsCenter() {
               projectName: project?.name ?? "",
               clientName: clients.find((c) => c.id === project?.clientId)?.name ?? "",
               dueDate: certificateDueDate(cs.certificate, state.contract.paymentTermsDays),
-              unpaidEgp: project ? toEgpPiasters(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
+              unpaidEgp: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
             }));
         });
         const summary = computeAging(inputs, todayIso());
@@ -232,7 +232,7 @@ export function ReportsCenter() {
             sum +
             state.certificates
               .filter((cs) => isBillable(cs.certificate.status) && inYear(cs.certificate.date))
-              .reduce((s, cs) => s + (project ? toEgpPiasters(cs.breakdown.baseMinor, project.currency, project.fxRateMicro) : cs.breakdown.baseMinor), 0)
+              .reduce((s, cs) => s + (project ? financials.valuation.value(cs.breakdown.baseMinor, project.currency, project.fxRateMicro) : cs.breakdown.baseMinor), 0)
           );
         }, 0);
         const cashByKind = (kind: "CERTIFICATE" | "ADVANCE" | "RETENTION_RELEASE") =>
@@ -244,7 +244,7 @@ export function ReportsCenter() {
           const key = i18n.language === "ar"
             ? expenses.find((x) => x.id === e.id)?.categoryAr ?? "?"
             : expenses.find((x) => x.id === e.id)?.categoryEn ?? "?";
-          byCategory.set(key, (byCategory.get(key) ?? 0) + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro));
+          byCategory.set(key, (byCategory.get(key) ?? 0) + financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro));
         }
         const totalExpenses = [...byCategory.values()].reduce((a, b) => a + b, 0);
         const rows: Record<string, unknown>[] = [
@@ -315,7 +315,7 @@ export function ReportsCenter() {
             <div className="mb-4 flex items-baseline justify-between border-b-2 border-slate-800 pb-2">
               <h1 className="text-xl font-bold">{printing.title}</h1>
               <p className="text-slate-500">
-                {t("common.appName")} · {t("reports.generatedOn")} <span className="tnum">{fmt.date(todayIso())}</span>
+                {documentIssuerName(settings?.companyName, t("common.appName"))} · {t("reports.generatedOn")} <span className="tnum">{fmt.date(todayIso())}</span>
               </p>
             </div>
             <table className="w-full border-collapse">

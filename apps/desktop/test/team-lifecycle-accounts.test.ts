@@ -19,6 +19,7 @@ import {
   listAssignmentsByPerson,
 } from "../src/repositories/people";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 beforeEach(() => resetDb());
 
@@ -68,7 +69,7 @@ async function collect(contractId: number, grossMinor: number, tag: string) {
 }
 
 const accountOf = async (assignmentId: number) =>
-  (await loadWorkspaceFinancials()).teamAccounts.find((a) => a.assignmentId === assignmentId);
+  (await loadWorkspaceFinancials(EGP_VALUATION)).teamAccounts.find((a) => a.assignmentId === assignmentId);
 
 describe("Milestone 3 — lifecycle-aware team accounts and payments", () => {
   // (1)
@@ -177,7 +178,7 @@ describe("Milestone 3 — lifecycle-aware team accounts and payments", () => {
     expect(
       assignmentRaisesAlerts({ archived: true, personArchived: false, dueMinor: account.dueMinor }),
     ).toBe(false);
-    const workspaceState = await loadWorkspaceFinancials();
+    const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspaceState.teamPayables.some((item) => item.assignmentId === assignmentId)).toBe(false);
     await expect(
       createPersonPayment({ assignmentId, date: "2026-07-13", amountMinor: 1_000, note: "after archive" }),
@@ -196,7 +197,7 @@ describe("Milestone 3 — lifecycle-aware team accounts and payments", () => {
     // Person Detail (and its statement) derive the same position from the same
     // inputs through the shared core selector.
     const assignment = (await listAssignmentsByPerson(personId)).find((a) => a.id === assignmentId)!;
-    const financials = await loadWorkspaceFinancials();
+    const financials = await loadWorkspaceFinancials(EGP_VALUATION);
     const account = financials.teamAccounts.find((a) => a.assignmentId === assignmentId)!;
     const selector = assignmentCostPosition({
       lifecycle: assignment.lifecycleStatus,

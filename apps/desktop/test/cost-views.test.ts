@@ -12,6 +12,7 @@ import { reconcileMilestoneCertificates } from "../src/repositories/milestoneCer
 import { setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment } from "../src/repositories/payments";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 describe("Milestone 6 repository cost views", () => {
   beforeEach(() => resetDb());
@@ -49,7 +50,7 @@ describe("Milestone 6 repository cost views", () => {
       fxRateMicro: 1_000_000, scope: null, progressNote: null,
     });
 
-    let profile = (await loadWorkspaceFinancials()).costsByProject.get(projectId)!;
+    let profile = (await loadWorkspaceFinancials(EGP_VALUATION)).costsByProject.get(projectId)!;
     expect(profile.committedCostEgp).toBe(20_000_00);
     expect(profile.accruedCostEgp).toBe(0);
     expect(profile.actualPaidCostEgp).toBe(0);
@@ -62,7 +63,7 @@ describe("Milestone 6 repository cost views", () => {
     await reconcileMilestoneCertificates(contractId);
     const certificateId = raw<{ id: number }>("SELECT id FROM payment_certificates WHERE deleted_at IS NULL")[0]!.id;
     await setCertificateStatus(certificateId, "APPROVED");
-    const state = (await loadWorkspaceFinancials()).contractStates.get(contractId)!;
+    const state = (await loadWorkspaceFinancials(EGP_VALUATION)).contractStates.get(contractId)!;
     const payable = state.certificates.find((row) => row.certificate.id === certificateId)!.unpaidMinor;
     await createPayment(
       { contractId, kind: "CERTIFICATE", number: "RCPT-1", date: "2026-03-01", amountMinor: payable,
@@ -70,7 +71,7 @@ describe("Milestone 6 repository cost views", () => {
       [{ certificateId, amountMinor: payable }],
     );
 
-    let workspace = await loadWorkspaceFinancials();
+    let workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     profile = workspace.costsByProject.get(projectId)!;
     expect(profile.actualCashInEgp).toBe(payable);
     expect(profile.accruedCostEgp).toBe(20_000_00);
@@ -89,7 +90,7 @@ describe("Milestone 6 repository cost views", () => {
     });
 
     await createPersonPayment({ assignmentId, date: "2026-03-02", amountMinor: 5_000_00, note: "First fee" });
-    workspace = await loadWorkspaceFinancials();
+    workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     profile = workspace.costsByProject.get(projectId)!;
     expect(profile.actualPaidCostEgp).toBe(5_000_00);
     expect(profile.accruedCostEgp).toBe(15_000_00);
@@ -102,7 +103,7 @@ describe("Milestone 6 repository cost views", () => {
     });
 
     rawExec(`UPDATE project_assignments SET archived_at='2026-03-03' WHERE id=${assignmentId}`);
-    profile = (await loadWorkspaceFinancials()).costsByProject.get(projectId)!;
+    profile = (await loadWorkspaceFinancials(EGP_VALUATION)).costsByProject.get(projectId)!;
     expect(profile.actualPaidCostEgp).toBe(5_000_00);
     expect(profile.accruedCostEgp).toBe(15_000_00);
     expect(profile.committedCostEgp).toBe(20_000_00);
@@ -122,7 +123,7 @@ describe("Milestone 6 repository cost views", () => {
     await createPayment({ contractId, kind: "CERTIFICATE", number: "UNALLOCATED", date: "2026-03-01",
       amountMinor: 1_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null }, []);
 
-    const ws = await loadWorkspaceFinancials();
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
     const profile = ws.costsByProject.get(projectId)!;
     expect(profile.actualCashInEgp).toBe(1_000_00);
     expect(profile.cashProfitEgp).toBe(1_000_00);

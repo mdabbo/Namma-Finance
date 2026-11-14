@@ -1,6 +1,6 @@
 import type { CertificateStatus, Expense, ProjectStatus } from "../domain/types";
 import { isBillable } from "../domain/types";
-import { toEgpPiasters } from "../money/money";
+import type { CurrencyValuation } from "../money/currencyValuation";
 import type { ProjectFinancials } from "./aggregate";
 import type { ContractState } from "./contract";
 
@@ -52,7 +52,10 @@ export interface DashboardAttentionInput {
 }
 
 /** Derive alert counts and amounts without allowing the view to control financial facts. */
-export function computeDashboardAttention(input: DashboardAttentionInput): DashboardAttentionSummary {
+export function computeDashboardAttention(
+  input: DashboardAttentionInput,
+  valuation: CurrencyValuation,
+): DashboardAttentionSummary {
   let overdueCount = 0;
   let overdueAmountEgp = 0;
   let unallocatedCount = 0;
@@ -61,7 +64,7 @@ export function computeDashboardAttention(input: DashboardAttentionInput): Dashb
     for (const certificate of state.certificates) {
       if (!certificate.overdue || certificate.unpaidMinor <= 0) continue;
       overdueCount += 1;
-      overdueAmountEgp += toEgpPiasters(
+      overdueAmountEgp += valuation.value(
         certificate.unpaidMinor,
         certificate.certificate.currencySnapshot ?? projectCurrency,
         certificate.certificate.fxRateMicroSnapshot ?? projectFxRateMicro,
@@ -85,16 +88,20 @@ export function computeDashboardAttention(input: DashboardAttentionInput): Dashb
   };
 }
 
-/** Derive the overview facts from EGP-valued core aggregates only. */
+/**
+ * Derive the overview facts from core aggregates only. `projects` must have
+ * been built with the same valuation, or the totals mix two currencies.
+ */
 export function computeDashboardOverview(
   projects: ProjectFinancials[],
   expenses: Expense[],
+  valuation: CurrencyValuation,
 ): DashboardOverview {
   const contractValueEgp = sum(projects.map((project) => project.contractValueEgp));
   const totalCashInEgp = sum(projects.map((project) => project.totalActualCashInEgp));
   const outstandingReceivablesEgp = sum(projects.map((project) => project.outstandingEgp));
   const cashOutEgp = sum(expenses.map((expense) =>
-    toEgpPiasters(expense.amountMinor, expense.currency, expense.fxRateMicro)));
+    valuation.value(expense.amountMinor, expense.currency, expense.fxRateMicro)));
   return {
     contractValueEgp,
     totalCashInEgp,
@@ -139,6 +146,7 @@ export interface MonthlyCashPoint {
 export function buildMonthlyCashSeries(
   cashIn: readonly DashboardCashIn[],
   expenses: readonly Expense[],
+  valuation: CurrencyValuation,
 ): MonthlyCashPoint[] {
   const buckets = new Map<string, { cashInEgp: number; cashOutEgp: number }>();
   const bucket = (date: string) => {
@@ -149,7 +157,7 @@ export function buildMonthlyCashSeries(
   };
   for (const payment of cashIn) bucket(payment.date).cashInEgp += payment.egpMinor;
   for (const expense of expenses) {
-    bucket(expense.date).cashOutEgp += toEgpPiasters(
+    bucket(expense.date).cashOutEgp += valuation.value(
       expense.amountMinor,
       expense.currency,
       expense.fxRateMicro,
@@ -217,7 +225,10 @@ export interface ReceivableCertificate {
  * its own commercial FX snapshot. The workspace receivables surface and the
  * dashboard overdue alert both derive from this single selection.
  */
-export function selectOpenReceivables(contracts: readonly FinanceContractInput[]): ReceivableCertificate[] {
+export function selectOpenReceivables(
+  contracts: readonly FinanceContractInput[],
+  valuation: CurrencyValuation,
+): ReceivableCertificate[] {
   const rows: ReceivableCertificate[] = [];
   for (const { state, projectCurrency, projectFxRateMicro } of contracts) {
     for (const certificate of state.certificates) {
@@ -234,7 +245,7 @@ export function selectOpenReceivables(contracts: readonly FinanceContractInput[]
         overdue: certificate.overdue,
         currency,
         unpaidMinor: certificate.unpaidMinor,
-        unpaidEgp: toEgpPiasters(
+        unpaidEgp: valuation.value(
           certificate.unpaidMinor,
           currency,
           certificate.certificate.fxRateMicroSnapshot ?? projectFxRateMicro,

@@ -9,6 +9,7 @@ import {
   selectOpenReceivables,
   selectUpcomingCollections,
 } from "../src";
+import { EGP_VALUATION } from "../src/money/currencyValuation";
 
 const expense = (
   amountMinor: number,
@@ -54,7 +55,7 @@ describe("dashboard financial model", () => {
     expect(computeDashboardOverview(projects, [
       expense(1_000_00),
       expense(100_00, "USD", 50_000_000),
-    ])).toEqual({
+    ], EGP_VALUATION)).toEqual({
       contractValueEgp: 30_000_00,
       totalCashInEgp: 10_000_00,
       certificateCollectionsEgp: 7_500_00,
@@ -83,7 +84,7 @@ describe("dashboard financial model", () => {
         unallocatedCustomerCreditEgp: 400_00,
       },
     ] as ProjectFinancials[];
-    const overview = computeDashboardOverview(projects, []);
+    const overview = computeDashboardOverview(projects, [], EGP_VALUATION);
 
     expect(overview.totalCashInEgp).toBe(6_000_00);
     expect(overview.certificateCollectionsEgp).toBe(1_000_00);
@@ -91,7 +92,7 @@ describe("dashboard financial model", () => {
     // Components account for the total exactly — nothing lost, nothing counted twice.
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
     // Net cash position stays total actual cash in less actual cash out.
-    expect(computeDashboardOverview(projects, [expense(2_500_00)]).netCashPositionEgp)
+    expect(computeDashboardOverview(projects, [expense(2_500_00)], EGP_VALUATION).netCashPositionEgp)
       .toBe(6_000_00 - 2_500_00);
   });
 
@@ -99,6 +100,7 @@ describe("dashboard financial model", () => {
     expect(buildMonthlyCashSeries(
       [{ date: "2026-05-03", egpMinor: 6_000_00 }],
       [expense(100_00, "USD", 50_000_000)],
+      EGP_VALUATION,
     )).toEqual([{
       month: "2026-05",
       cashInEgp: 6_000_00,
@@ -142,7 +144,7 @@ describe("dashboard financial model", () => {
       projects: [{ unallocatedCustomerCreditEgp: 50_00 } as ProjectFinancials],
       readyToInvoiceEgp: [25_00, 75_00],
       teamPaymentsDueEgp: [40_00],
-    });
+    }, EGP_VALUATION);
     expect(summary).toEqual({
       overdueCertificates: { count: 1, amountEgp: 100_00 },
       readyToInvoice: { count: 2, amountEgp: 100_00 },
@@ -193,7 +195,7 @@ describe("dashboard financial model", () => {
   } as never];
 
   it("selects billable unpaid certificates at their historical FX as receivables", () => {
-    const receivables = selectOpenReceivables(receivableFixture());
+    const receivables = selectOpenReceivables(receivableFixture(), EGP_VALUATION);
     expect(receivables.map((row) => row.certificateId)).toEqual([1, 2]);
     expect(receivables[0]).toMatchObject({
       certificateNumber: "PC-1",
@@ -209,7 +211,7 @@ describe("dashboard financial model", () => {
   });
 
   it("forecasts upcoming collections inside the horizon without double-counting overdue", () => {
-    const receivables = selectOpenReceivables(receivableFixture());
+    const receivables = selectOpenReceivables(receivableFixture(), EGP_VALUATION);
     const upcoming = selectUpcomingCollections(receivables, "2026-07-01", 60);
     expect(upcoming.horizonEndIso).toBe("2026-08-30");
     expect(upcoming.items.map((row) => row.certificateId)).toEqual([2]);

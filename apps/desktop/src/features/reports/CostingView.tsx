@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
-import { computeCosting, computeProfitability, toEgpPiasters } from "@mep/core";
+import { computeCosting, computeProfitability } from "@mep/core";
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useTimeEntries } from "../../repositories/timeEntries";
 import { useSettings } from "../../lib/settings";
@@ -35,7 +35,7 @@ export function CostingView() {
     if (!financials) return [];
     const overheadTotal = financials.allExpenses
       .filter((e) => e.projectId === null)
-      .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);
+      .reduce((s, e) => s + financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro), 0);
     const profitability = computeProfitability(financials.projects, overheadTotal, settings?.overheadRule ?? "REVENUE");
     return computeCosting(profitability, financials.laborByProjectEgp);
   }, [financials, settings?.overheadRule]);
