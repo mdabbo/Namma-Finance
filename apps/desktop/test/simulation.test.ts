@@ -20,6 +20,7 @@ import { setCertificateStatus } from "../src/repositories/certificates";
 import { createPayment } from "../src/repositories/payments";
 import { reconcileMilestoneCertificates } from "../src/repositories/milestoneCertificates";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 /** Deterministic PRNG so any failure reproduces exactly. */
 function mulberry32(seed: number) {
@@ -58,7 +59,7 @@ async function completeStage(projectId: number, stageId: number, name: string, o
 /** Mirror the Mark-paid flow: approve then fully pay the certificate's net payable. */
 async function payCertificate(contractId: number, certId: number): Promise<void> {
   await setCertificateStatus(certId, "APPROVED");
-  const ws = await loadWorkspaceFinancials();
+  const ws = await loadWorkspaceFinancials(EGP_VALUATION);
   const state = ws.contractStates.get(contractId)!;
   const cs = state.certificates.find((c) => c.certificate.id === certId)!;
   if (cs.unpaidMinor <= 0) return;
@@ -194,7 +195,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
       }
     }
 
-    let ws = await loadWorkspaceFinancials();
+    let ws = await loadWorkspaceFinancials(EGP_VALUATION);
     assertNoInvariantViolations(ws);
 
     // pay every draft certificate that now exists
@@ -207,7 +208,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
       }
     }
 
-    ws = await loadWorkspaceFinancials();
+    ws = await loadWorkspaceFinancials(EGP_VALUATION);
     assertNoInvariantViolations(ws);
 
     // (6) team payables: a paid milestone must release the team members' share
@@ -225,7 +226,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
     }
 
     // (7) dashboard KPIs are finite and internally consistent
-    const kpis = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const kpis = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
     for (const [k, v] of Object.entries(kpis)) {
       expect(Number.isFinite(v), `dashboard KPI ${k} is not finite`).toBe(true);
     }
@@ -258,7 +259,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
       reconcileMilestoneCertificates(b.contractId),
     ]);
 
-    const ws = await loadWorkspaceFinancials();
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
     assertNoInvariantViolations(ws);
 
     // exactly 5 certificates — one per achieved milestone, no duplicates, no losses
@@ -288,7 +289,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
     }
     await Promise.all(burst);
 
-    let ws = await loadWorkspaceFinancials();
+    let ws = await loadWorkspaceFinancials(EGP_VALUATION);
     assertNoInvariantViolations(ws);
     // exactly 5 live certs per contract — no duplicates from the storm
     for (const b of built) {
@@ -304,7 +305,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
         }
       }
     }
-    ws = await loadWorkspaceFinancials();
+    ws = await loadWorkspaceFinancials(EGP_VALUATION);
     assertNoInvariantViolations(ws);
     for (const b of built) {
       const states = [...ws.contractStates.values()].filter((s) => s.contract.projectId === b.projectId) as ContractState[];

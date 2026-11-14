@@ -10,6 +10,7 @@ import { createContract, updateContract } from "../src/repositories/contracts";
 import { createCertificate } from "../src/repositories/certificates";
 import { createPayment } from "../src/repositories/payments";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 describe("Milestone 7 cash-in and revenue definitions", () => {
   beforeEach(() => resetDb());
@@ -41,7 +42,7 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     await createPayment({ contractId, kind: "RETENTION_RELEASE", number: "RET-1", date: "2026-04-01",
       amountMinor: 2_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null }, []);
 
-    const workspace = await loadWorkspaceFinancials();
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     const state = workspace.contractStates.get(contractId)!;
     const project = workspace.projects.find((row) => row.project.id === projectId)!;
     expect(state.billableRevenueMinor).toBe(70_000_00);
@@ -59,7 +60,7 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     expect(workspace.costsByProject.get(projectId)!.recognizedRevenueEgp).toBe(50_000_00);
 
     rawExec(`UPDATE contracts SET archived_at='2026-05-01' WHERE id=${contractId}`);
-    const activeScope = await loadWorkspaceFinancials();
+    const activeScope = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(activeScope.cashIn).toHaveLength(0);
     expect(activeScope.projects.find((row) => row.project.id === projectId)!.totalActualCashInMinor).toBe(0);
   });
@@ -96,8 +97,8 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     await createPayment({ contractId, kind: "RETENTION_RELEASE", number: "RET-1", date: "2026-04-01",
       amountMinor: 3_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null }, []);
 
-    const workspace = await loadWorkspaceFinancials();
-    const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses);
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
+    const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION);
 
     expect(overview.certificateCollectionsEgp).toBe(15_000_00);
     expect(overview.advanceReceivedEgp).toBe(10_000_00);
@@ -153,8 +154,8 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
       amountMinor: 40_000_00, method: "BANK_TRANSFER", bank: null, reference: null, notes: null },
     [{ certificateId, amountMinor: 40_000_00 }]);
 
-    const workspace = await loadWorkspaceFinancials();
-    const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses);
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
+    const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION);
 
     // 40,000.00 USD at 60 EGP/USD — the rate when the money actually arrived,
     // not the 50 captured on the certificate.
@@ -185,8 +186,9 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     [{ certificateId, amountMinor: 10_000_00 }]);
 
     const overview = computeDashboardOverview(
-      (await loadWorkspaceFinancials()).projects,
-      (await loadWorkspaceFinancials()).allExpenses,
+      (await loadWorkspaceFinancials(EGP_VALUATION)).projects,
+      (await loadWorkspaceFinancials(EGP_VALUATION)).allExpenses,
+      EGP_VALUATION,
     );
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
     expect(overview.certificateCollectionsEgp + overview.unallocatedCustomerCreditEgp)

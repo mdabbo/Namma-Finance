@@ -285,8 +285,8 @@ async function assignmentEarnedMinor(id: number): Promise<number> {
     "SELECT COALESCE(SUM(amount_minor),0) AS paid FROM person_payments WHERE assignment_id=$1 AND voided_at IS NULL",
     [id],
   );
-  const { loadWorkspaceFinancials } = await import("./financials");
-  const workspace = await loadWorkspaceFinancials();
+  const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
+  const workspace = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
   const states = [...workspace.contractStates.values()].filter(
     (state) => state.contract.projectId === assignment.projectId,
   );
@@ -327,9 +327,9 @@ function validateSyncedAssignmentInput(input: SyncedAssignmentInput): void {
 }
 
 async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number, cutoffDate: string): Promise<number> {
-  const { loadWorkspaceFinancials } = await import("./financials");
+  const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
   const { allocate } = await import("@mep/core");
-  const workspace = await loadWorkspaceFinancials();
+  const workspace = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
   const states = [...workspace.contractStates.values()].filter((state) => state.contract.projectId === projectId);
   const stages: Array<{ weight: number; paid: boolean }> = [];
   const paidForCertificate = async (certificateId: number) => {

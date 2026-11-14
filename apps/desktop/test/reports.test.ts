@@ -21,6 +21,7 @@ import { createExpense } from "../src/repositories/expenses";
 import { createRecurring } from "../src/repositories/recurring";
 import { reconcileMilestoneCertificates } from "../src/repositories/milestoneCertificates";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 const CURRENCIES = [
   { code: "EGP", fx: 1_000_000 },
@@ -95,7 +96,7 @@ async function buildRichWorkspace(seed?: number, projectCount = 12): Promise<voi
       });
       // pay APPROVED and PAID certs (PAID fully, APPROVED partially)
       if (state === "APPROVED" || state === "PAID") {
-        const ws = await loadWorkspaceFinancials();
+        const ws = await loadWorkspaceFinancials(EGP_VALUATION);
         const cs = ws.contractStates.get(contractId)!.certificates.find((x) => x.certificate.id === certId)!;
         const pay = state === "PAID" ? cs.unpaidMinor : Math.round(cs.unpaidMinor * 0.5);
         if (pay > 0) {
@@ -155,8 +156,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
   });
 
   it("dashboard KPIs are finite and reconcile with per-project figures", async () => {
-    const ws = await loadWorkspaceFinancials();
-    const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+    const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
 
     for (const [key, v] of Object.entries(k)) {
       expect(Number.isFinite(v), `KPI ${key} not finite`).toBe(true);
@@ -179,8 +180,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
   });
 
   it("dashboard monthly series and category breakdown sum to the totals", async () => {
-    const ws = await loadWorkspaceFinancials();
-    const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+    const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
 
     // replicate the dashboard's monthly bucketing exactly
     let revenue = 0, cashIn = 0, expenses = 0;
@@ -199,8 +200,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
   });
 
   it("profitability report: overhead allocates exactly and ties back to the dashboard profit", async () => {
-    const ws = await loadWorkspaceFinancials();
-    const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+    const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
     const totalOverhead = ws.allExpenses
       .filter((e) => e.projectId === null)
       .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);
@@ -223,8 +224,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
   });
 
   it("aging report: buckets sum to the grand total and equal the dashboard outstanding", async () => {
-    const ws = await loadWorkspaceFinancials();
-    const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+    const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
     const today = "2026-07-19";
 
     const items: AgingInput[] = [];
@@ -255,7 +256,7 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
   });
 
   it("cash-flow report: month identities hold and cumulative is a running sum", async () => {
-    const ws = await loadWorkspaceFinancials();
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
     const recurring = raw<{ amount_minor: number }>("SELECT amount_minor FROM recurring_expenses WHERE is_active = 1");
 
     const actualOut = ws.allExpenses.map((e) => ({ date: e.date, egpMinor: toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro) }));
@@ -291,13 +292,13 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
     const work: Promise<unknown>[] = [];
     for (let k = 0; k < 5; k++) {
       work.push(reconcileMilestoneCertificates());
-      work.push(loadWorkspaceFinancials());
+      work.push(loadWorkspaceFinancials(EGP_VALUATION));
       for (const c of contracts) work.push(reconcileMilestoneCertificates(c.id));
     }
     await Promise.all(work);
 
-    const ws = await loadWorkspaceFinancials();
-    const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+    const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+    const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
     expect(Number.isFinite(k.profitEgp)).toBe(true);
     expect(k.outstandingEgp).toBeGreaterThanOrEqual(0);
     // no contract grew duplicate live certificates during the storm
@@ -310,8 +311,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
 
 /** Universal accounting identities that must hold for ANY workspace. */
 async function assertUniversalIdentities(label: string): Promise<void> {
-  const ws = await loadWorkspaceFinancials();
-  const k = computeDashboardKpis(ws.projects, ws.allExpenses);
+  const ws = await loadWorkspaceFinancials(EGP_VALUATION);
+  const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
   const totalOverhead = ws.allExpenses
     .filter((e) => e.projectId === null)
     .reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0);

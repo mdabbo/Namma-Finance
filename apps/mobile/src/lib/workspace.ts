@@ -8,6 +8,7 @@ import {
   computeTeamPayout,
   parseMilestones,
   toEgpPiasters,
+  EGP_VALUATION,
   type Contract,
   type ContractState,
   type DashboardKpis,
@@ -308,16 +309,18 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
       allocations,
       billableCertificateIds,
       resolveFx: () => ({ currency: project.currency, fxRateMicro: project.fxRateMicro }),
-    });
+    }, EGP_VALUATION);
     return computeProjectFinancials(
       project,
       projectContracts.map((c) => contractStates.get(c.id)!),
       expenses.filter((e) => e.projectId === project.id),
       cashValuation,
+      EGP_VALUATION,
     );
   });
 
-  const kpis = computeDashboardKpis(projectFinancials, expenses);
+  // The mobile workspace reports in EGP, the pivot itself.
+  const kpis = computeDashboardKpis(projectFinancials, expenses, EGP_VALUATION);
 
   const byCurrencyMap = new Map<string, { value: number; collected: number; outstanding: number }>();
   for (const p of projectFinancials) {

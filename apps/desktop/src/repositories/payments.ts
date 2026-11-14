@@ -173,8 +173,8 @@ export async function validateSyncedAllocation(
     [paymentId],
   );
   if (!payment || payment.kind !== "CERTIFICATE") throw new Error("ALLOCATION_REQUIRES_ACTIVE_CERTIFICATE_PAYMENT");
-  const { loadWorkspaceFinancials } = await import("./financials");
-  const state = await loadWorkspaceFinancials().then((workspace) => workspace.contractStates.get(payment.contractId));
+  const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
+  const state = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY).then((workspace) => workspace.contractStates.get(payment.contractId));
   const certificate = state?.certificates.find((item) => item.certificate.id === certificateId);
   if (!certificate) {
     const foreign = await selectOne<{ contractId: number }>(
@@ -311,8 +311,8 @@ async function validatePaymentWrite(
   if(contractDate.signedDate && input.date<contractDate.signedDate)throw new Error("PAYMENT_BEFORE_CONTRACT_DATE");
   if (input.kind !== "CERTIFICATE" && allocations.length > 0) throw new Error("ALLOCATIONS_REQUIRE_CERTIFICATE_PAYMENT");
   const seen = new Set<number>();
-  const { loadWorkspaceFinancials } = await import("./financials");
-  const workspace = await loadWorkspaceFinancials();
+  const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
+  const workspace = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
   const contractState = workspace.contractStates.get(input.contractId);
   if (!contractState) throw new Error("CONTRACT_NOT_FOUND");
   const certificateStates = new Map(contractState.certificates.map((state) => [state.certificate.id, state]));

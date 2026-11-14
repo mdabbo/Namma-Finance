@@ -15,6 +15,7 @@ import {
   loadWorkspaceFinancialsConsistently,
   type FinancialSelect,
 } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 beforeEach(() => resetDb());
 
@@ -139,7 +140,7 @@ describe("dashboard financial hardening", () => {
       notes: null,
     }, []);
 
-    const workspace = await loadWorkspaceFinancials();
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects[0]).toMatchObject({
       revenueEgp: 510_000,
       totalActualCashInEgp: 510_000,
@@ -169,10 +170,10 @@ describe("dashboard financial hardening", () => {
     });
     await deleteProject(projectId);
 
-    const workspace = await loadWorkspaceFinancials();
+    const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects).toHaveLength(0);
     expect(workspace.allExpenses).toHaveLength(0);
-    expect(computeDashboardOverview(workspace.projects, workspace.allExpenses).cashOutEgp).toBe(0);
+    expect(computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION).cashOutEgp).toBe(0);
   });
 
   it("retries when a financial mutation commits during a pooled read", async () => {
@@ -188,7 +189,7 @@ describe("dashboard financial hardening", () => {
       return harnessSelect<T>(sql, params);
     };
 
-    const workspace = await loadWorkspaceFinancialsConsistently(read);
+    const workspace = await loadWorkspaceFinancialsConsistently(read, EGP_VALUATION);
     expect(workspace.projects).toHaveLength(1);
     expect(projectReads).toBe(2);
     expect(revisionRead).toBe(4);
@@ -204,7 +205,7 @@ describe("dashboard financial hardening", () => {
       }
       return harnessSelect<T>(sql, params);
     };
-    await expect(loadWorkspaceFinancialsConsistently(read, 2))
+    await expect(loadWorkspaceFinancialsConsistently(read, EGP_VALUATION, 2))
       .rejects.toThrow("FINANCIAL_SNAPSHOT_BUSY");
   });
 });

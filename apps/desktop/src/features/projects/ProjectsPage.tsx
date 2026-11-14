@@ -90,7 +90,7 @@ export function ProjectsPage() {
       // spreadsheet would sum as a real contract value.
       exportValue: (p) =>
         readModelExport(finOf(p.id), (fin) =>
-          minorToInput(base.convert(fin.contractValueEgp), currencyInfo(base.code).exponent)),
+          minorToInput(fin.contractValueEgp, currencyInfo(base.code).exponent)),
       render: (p) => (
         <span className="tnum">
           {readModelDisplay(finOf(p.id), (fin) => base.format(fin.contractValueEgp))}

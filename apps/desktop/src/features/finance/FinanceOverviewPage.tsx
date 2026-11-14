@@ -42,8 +42,8 @@ export function FinanceOverviewPage() {
 
   const model = useMemo(() => {
     if (!financials) return null;
-    const overview = computeDashboardOverview(financials.projects, financials.allExpenses);
-    const receivables = selectOpenReceivables(financeContractInputs(financials));
+    const overview = computeDashboardOverview(financials.projects, financials.allExpenses, financials.valuation);
+    const receivables = selectOpenReceivables(financeContractInputs(financials), financials.valuation);
     const overdueEgp = receivables
       .filter((item) => item.overdue)
       .reduce((total, item) => total + item.unpaidEgp, 0);
@@ -55,7 +55,7 @@ export function FinanceOverviewPage() {
     };
   }, [financials]);
 
-  if (workspace.isLoading) {
+  if (workspace.isPending) {
     return <LoadingState label={t("common.loading")} className="min-h-[50vh]" />;
   }
   if (workspace.isError || !financials || !model) {

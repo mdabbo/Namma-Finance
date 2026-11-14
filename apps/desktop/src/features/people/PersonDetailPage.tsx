@@ -27,6 +27,8 @@ import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, Select
 import { MoneyInput } from "../../components/MoneyInput";
 import { PrintPortal } from "../../components/PrintPortal";
 import { todayIso, useFormat } from "../../lib/format";
+import { documentIssuerName } from "../../lib/issuer";
+import { useSettings } from "../../lib/settings";
 import { UNKNOWN_AMOUNT } from "../../lib/readModel";
 
 export function PersonDetailPage() {
@@ -34,6 +36,7 @@ export function PersonDetailPage() {
   const personId = Number(id);
   const { t, i18n } = useTranslation();
   const fmt = useFormat();
+  const { data: settings } = useSettings();
   const navigate = useNavigate();
 
   const { data: person } = usePerson(personId);
@@ -289,7 +292,7 @@ export function PersonDetailPage() {
             <div className="mb-6 flex items-start justify-between border-b-2 border-slate-800 pb-4">
               <div>
                 <h1 className="text-2xl font-bold">{t("people.statement")}</h1>
-                <p className="mt-1 text-slate-600">{t("common.appName")}</p>
+                <p className="mt-1 text-slate-600">{documentIssuerName(settings?.companyName, t("common.appName"))}</p>
               </div>
               <div className="text-end">
                 <p className="text-lg font-bold">{person.name}</p>

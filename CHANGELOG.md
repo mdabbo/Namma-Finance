@@ -27,6 +27,19 @@ All notable changes to NAMAA Finance are documented here. Versions follow Semant
   rejected the incoming row.
 - Sync fails closed with `SYNC_PROTOCOL_UPGRADE_REQUIRED` when a known active
   peer advertises an unsupported financial sync protocol.
+- Consolidated figures no longer drift for amounts already in the reporting
+  currency. A SAR 325,000 contract on a SAR dashboard read SAR 317,031.19: it
+  was converted to EGP at the rate stored on its project and back at the
+  current rate. Each source amount is now valued once, per record — at face
+  value when it is already in the reporting currency, through the EGP pivot
+  otherwise — so totals no longer move with the central-bank rate and the
+  displayed parts sum exactly to the displayed total. EGP reports are unchanged.
+  This restores behaviour first fixed in July 2026 and lost when the dashboard
+  calculations were centralised; **consolidated totals for non-EGP reporting
+  currencies will differ from those shown by earlier 0.7.x builds.**
+- Printed payment certificates, team statements and reports name the office
+  (the company name from Settings) as the issuing party. They previously
+  printed the product name, including above the issuer's signature line.
 
 ## [0.7.0] - 2026-08-31
 

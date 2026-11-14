@@ -5,6 +5,7 @@ import {
   type Payment,
   type PaymentAllocation,
 } from "../src";
+import { EGP_VALUATION } from "../src/money/currencyValuation";
 
 /**
  * The dashboard shows total cash in beside the four components that make it up,
@@ -45,7 +46,7 @@ describe("project cash valuation", () => {
       allocations: [allocation(1, 1, 10, 60_000)],
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("EGP", 1_000_000),
-    });
+    }, EGP_VALUATION);
 
     expect(valuation.certificateCollectionsEgp).toBe(60_000);
     expect(valuation.unallocatedCustomerCreditEgp).toBe(40_000);
@@ -66,7 +67,7 @@ describe("project cash valuation", () => {
       allocations: [allocation(1, 1, 10, 60_000), allocation(2, 1, 99, 25_000)],
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("EGP", 1_000_000),
-    });
+    }, EGP_VALUATION);
     expect(valuation.certificateCollectionsEgp).toBe(60_000);
     // The draft's 25 000 stays customer credit rather than becoming a collection.
     expect(valuation.unallocatedCustomerCreditEgp).toBe(40_000);
@@ -84,7 +85,7 @@ describe("project cash valuation", () => {
       billableCertificateIds: new Set([10]),
       // A rate chosen so neither half converts to a whole piaster cleanly.
       resolveFx: atRate("USD", 47_333_333),
-    });
+    }, EGP_VALUATION);
     expect(
       valuation.certificateCollectionsEgp + valuation.unallocatedCustomerCreditEgp,
     ).toBe(valuation.totalActualCashInEgp);
@@ -96,7 +97,7 @@ describe("project cash valuation", () => {
       allocations: [allocation(1, 1, 10, 80_000)],
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("EGP", 1_000_000),
-    });
+    }, EGP_VALUATION);
     expect(valuation.certificateCollectionsEgp).toBe(50_000);
     expect(valuation.unallocatedCustomerCreditEgp).toBe(0);
     expect(valuation.totalActualCashInEgp).toBe(50_000);
@@ -111,7 +112,7 @@ describe("project cash valuation", () => {
       allocations: [allocation(1, 1, 10, 55_555)],
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("USD", 48_000_000),
-    });
+    }, EGP_VALUATION);
     expect(
       dashboardCashInComponentsReconcile({
         contractValueEgp: 0,

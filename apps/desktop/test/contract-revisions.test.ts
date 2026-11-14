@@ -9,6 +9,7 @@ import { createContract, listContractRevisions, updateContract } from "../src/re
 import { createCertificate, getCertificate, setCertificateStatus } from "../src/repositories/certificates";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
 import type { ContractInput } from "@mep/core";
+import { EGP_VALUATION } from "@mep/core";
 
 beforeEach(() => resetDb());
 
@@ -31,15 +32,15 @@ describe("Milestone 4 contract revisions", () => {
   it("preserves an approved certificate when VAT and retention change", async () => {
     const { contractId, terms } = await fixture();
     const oldId = await createCertificate(1, { contractId, number: "PC-OLD", date: "2026-01-15", submissionDate: "2026-01-15", dueDateOverride: null, description: null, grossMinor: 200_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
-    const before = (await loadWorkspaceFinancials()).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === oldId)!.breakdown;
+    const before = (await loadWorkspaceFinancials(EGP_VALUATION)).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === oldId)!.breakdown;
 
     const revised = { ...terms, valueMinor: 1_200_000, vatBp: 1_500, retentionBp: 750 };
     await updateContract(contractId, revised, { effectiveDate: "2026-02-01", reason: "Approved variation and tax update" });
-    const after = (await loadWorkspaceFinancials()).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === oldId)!.breakdown;
+    const after = (await loadWorkspaceFinancials(EGP_VALUATION)).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === oldId)!.breakdown;
     expect(after).toEqual(before);
 
     const newId = await createCertificate(2, { contractId, number: "PC-NEW", date: "2026-03-01", submissionDate: "2026-03-01", dueDateOverride: null, description: null, grossMinor: 200_000, discountMinor: 0, manualAdvanceRecoveryMinor: null, status: "APPROVED" });
-    const next = (await loadWorkspaceFinancials()).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === newId)!;
+    const next = (await loadWorkspaceFinancials(EGP_VALUATION)).contractStates.get(contractId)!.certificates.find((c) => c.certificate.id === newId)!;
     expect(next.certificate.vatBpSnapshot).toBe(1_500);
     expect(next.certificate.retentionBpSnapshot).toBe(750);
     expect(next.breakdown.vatMinor).toBe(30_000);

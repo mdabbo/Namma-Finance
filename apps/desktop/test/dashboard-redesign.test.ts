@@ -7,6 +7,7 @@ import {
   buildMonthlyCashSeries,
   selectProjectHealth,
 } from "../src/features/dashboard/dashboardModel";
+import { EGP_VALUATION } from "@mep/core";
 
 function expense(
   date: string,
@@ -77,6 +78,7 @@ describe("Milestone 3 dashboard model", () => {
         expense("2026-05-10", 40_00),
         expense("2026-04-12", 100_00, "USD", 50_000_000),
       ],
+      EGP_VALUATION,
     );
 
     expect(series).toEqual([

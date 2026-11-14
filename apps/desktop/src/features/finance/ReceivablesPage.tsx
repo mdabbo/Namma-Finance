@@ -44,7 +44,7 @@ export function ReceivablesPage() {
   }, [searchParams, setSearchParams]);
 
   const receivables = useMemo(
-    () => (financials ? selectOpenReceivables(financeContractInputs(financials)) : []),
+    () => (financials ? selectOpenReceivables(financeContractInputs(financials), financials.valuation) : []),
     [financials],
   );
   const scoped = receivables.filter((item) =>
@@ -160,7 +160,7 @@ export function ReceivablesPage() {
       header: `${t("financeSection.consolidated")} (${base.code})`,
       value: (row) => row.unpaidEgp,
       exportValue: (row) =>
-        minorToInput(base.convert(row.unpaidEgp), currencyInfo(base.code).exponent),
+        minorToInput(row.unpaidEgp, currencyInfo(base.code).exponent),
       render: (row) => <span className="tnum">{base.format(row.unpaidEgp)}</span>,
       align: "end",
     },
@@ -224,7 +224,7 @@ export function ReceivablesPage() {
         rows={scoped}
         columns={columns}
         rowKey={(row) => row.certificateId}
-        loading={workspace.isLoading}
+        loading={workspace.isPending}
         emptyMessage={t("financeSection.emptyReceivables")}
         density="compact"
         initialSort={{ key: "dueDate", dir: "asc" }}

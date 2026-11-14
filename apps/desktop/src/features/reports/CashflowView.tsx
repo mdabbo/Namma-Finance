@@ -6,7 +6,6 @@ import {
   buildCashflow,
   isBillable,
   recurringExpenseSchema,
-  toEgpPiasters,
   type RecurringExpense,
   type RecurringExpenseInput,
 } from "@mep/core";
@@ -28,7 +27,7 @@ export function CashflowView() {
     if (!financials) return [];
     const actualOut = financials.allExpenses.map((e) => ({
       date: e.date,
-      egpMinor: toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro),
+      egpMinor: financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro),
     }));
     const openReceivables = [...financials.contractStates.values()].flatMap((state) => {
       const project = financials.projects.find((p) => p.project.id === state.contract.projectId)?.project;
@@ -36,7 +35,7 @@ export function CashflowView() {
         .filter((cs) => isBillable(cs.certificate.status) && cs.unpaidMinor > 0)
         .map((cs) => ({
           dueDate: cs.dueDate,
-          unpaidEgp: project ? toEgpPiasters(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
+          unpaidEgp: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
         }));
     });
     return buildCashflow({
@@ -45,7 +44,7 @@ export function CashflowView() {
       openReceivables,
       recurring: recurring
         .filter((r) => r.isActive)
-        .map((r) => ({ egpMinor: toEgpPiasters(r.amountMinor, r.currency, r.fxRateMicro), dayOfMonth: r.dayOfMonth })),
+        .map((r) => ({ egpMinor: financials.valuation.value(r.amountMinor, r.currency, r.fxRateMicro), dayOfMonth: r.dayOfMonth })),
       todayIso: todayIso(),
       monthsBack: 6,
       monthsForward: 6,
@@ -54,9 +53,9 @@ export function CashflowView() {
 
   const chartData = rows.map((r) => ({
     month: r.month,
-    in: base.convert(r.inActual + r.inForecast) / 100,
-    out: -(base.convert(r.outActual + r.outForecast) / 100),
-    cumulative: base.convert(r.cumulative) / 100,
+    in: (r.inActual + r.inForecast) / 100,
+    out: -((r.outActual + r.outForecast) / 100),
+    cumulative: r.cumulative / 100,
   }));
 
   return (

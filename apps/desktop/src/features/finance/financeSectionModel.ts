@@ -1,7 +1,7 @@
 import {
-  toEgpPiasters,
   type ContractState,
   type FinanceContractInput,
+  type CurrencyValuation,
 } from "@mep/core";
 
 /**
@@ -212,13 +212,17 @@ export interface ExpenseSectionKpis {
   projectEgp: number;
 }
 
+/** The KPI strip before any workspace has loaded: nothing to value yet. */
+export const NO_EXPENSE_KPIS: ExpenseSectionKpis = { totalEgp: 0, monthEgp: 0, overheadEgp: 0, projectEgp: 0 };
+
 export function expenseSectionKpis(
   expenses: readonly ExpenseMoneyFacts[],
   projectId: number | null,
   todayIso: string,
+  valuation: CurrencyValuation,
 ): ExpenseSectionKpis {
   const own = expenses.filter((expense) => inProjectScope(expense.projectId, projectId));
-  const egp = (expense: ExpenseMoneyFacts) => toEgpPiasters(expense.amountMinor, expense.currency, expense.fxRateMicro);
+  const egp = (expense: ExpenseMoneyFacts) => valuation.value(expense.amountMinor, expense.currency, expense.fxRateMicro);
   return {
     totalEgp: sum(own.map(egp)),
     monthEgp: sum(own.filter((expense) => sameMonth(expense.date, todayIso)).map(egp)),

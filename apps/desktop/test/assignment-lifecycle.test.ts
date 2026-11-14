@@ -21,6 +21,7 @@ import {
   listAssignmentsByProject,
 } from "../src/repositories/people";
 import { loadWorkspaceFinancials } from "../src/repositories/financials";
+import { EGP_VALUATION } from "@mep/core";
 
 /**
  * Milestone 2: an assignment's lifecycle decides how its money is treated, and
@@ -81,22 +82,22 @@ async function collect(contractId: number, grossMinor: number, number: string) {
 }
 
 async function position(assignmentId: number) {
-  const workspaceState = await loadWorkspaceFinancials();
+  const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
   return workspaceState.teamAccounts.find((account) => account.assignmentId === assignmentId);
 }
 
 async function alerts(assignmentId: number) {
-  const workspaceState = await loadWorkspaceFinancials();
+  const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
   return workspaceState.teamPayables.filter((item) => item.assignmentId === assignmentId);
 }
 
 async function committedEgp(projectId: number) {
-  const workspaceState = await loadWorkspaceFinancials();
+  const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
   return workspaceState.costsByProject.get(projectId)?.committedCostEgp ?? 0;
 }
 
 async function accruedEgp(projectId: number) {
-  const workspaceState = await loadWorkspaceFinancials();
+  const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
   return workspaceState.costsByProject.get(projectId)?.accruedCostEgp ?? 0;
 }
 
@@ -341,16 +342,16 @@ describe("project cost reconciles across lifecycles", () => {
 
   it("keeps the dashboard team-payment alert count in step with what is owed", async () => {
     const { contractId, assignmentId } = await workspace();
-    const workspaceBefore = await loadWorkspaceFinancials();
+    const workspaceBefore = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspaceBefore.teamPayables).toHaveLength(0);
 
     await collect(contractId, 200_000, "PC-1");
-    const workspaceAfter = await loadWorkspaceFinancials();
+    const workspaceAfter = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspaceAfter.teamPayables).toHaveLength(1);
     expect(workspaceAfter.teamPayables[0]).toMatchObject({ assignmentId, dueMinor: 60_000 });
 
     await deleteAssignment(assignmentId);
-    expect((await loadWorkspaceFinancials()).teamPayables).toHaveLength(0);
+    expect((await loadWorkspaceFinancials(EGP_VALUATION)).teamPayables).toHaveLength(0);
   });
 });
 

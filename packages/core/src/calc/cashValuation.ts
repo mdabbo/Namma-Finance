@@ -1,10 +1,10 @@
 import type { Payment, PaymentAllocation } from "../domain/types";
-import { toEgpPiasters } from "../money/money";
+import type { CurrencyValuation } from "../money/currencyValuation";
 import type { ProjectCashValuationEgp } from "./aggregate";
 
 /**
- * Value one project's incoming cash in EGP piasters, split into the four
- * components the dashboard reports beside the headline total.
+ * Value one project's incoming cash in the caller's valuation currency, split
+ * into the four components the dashboard reports beside the headline total.
  *
  * The split has to be exact. The dashboard shows the total and its parts side
  * by side, so a shortfall or an overlap is visible as money that appeared or
@@ -51,6 +51,7 @@ export interface ProjectCashValuationInput {
 
 export function computeProjectCashValuation(
   input: ProjectCashValuationInput,
+  valuation: CurrencyValuation,
 ): ProjectCashValuationEgp {
   const allocatedByPayment = new Map<number, number>();
   for (const allocation of input.allocations) {
@@ -61,7 +62,7 @@ export function computeProjectCashValuation(
     );
   }
 
-  const valuation: ProjectCashValuationEgp = {
+  const result: ProjectCashValuationEgp = {
     certificateCollectionsEgp: 0,
     advanceReceivedEgp: 0,
     retentionReleasedEgp: 0,
@@ -71,12 +72,12 @@ export function computeProjectCashValuation(
 
   for (const payment of input.payments) {
     const fx = input.resolveFx(payment);
-    const paymentEgp = toEgpPiasters(payment.amountMinor, fx.currency, fx.fxRateMicro);
-    valuation.totalActualCashInEgp += paymentEgp;
+    const paymentEgp = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
+    result.totalActualCashInEgp += paymentEgp;
     if (payment.kind === "ADVANCE") {
-      valuation.advanceReceivedEgp += paymentEgp;
+      result.advanceReceivedEgp += paymentEgp;
     } else if (payment.kind === "RETENTION_RELEASE") {
-      valuation.retentionReleasedEgp += paymentEgp;
+      result.retentionReleasedEgp += paymentEgp;
     } else {
       // Clamped: an allocation total above the receipt would otherwise make the
       // derived remainder negative and overstate collections.
@@ -84,11 +85,11 @@ export function computeProjectCashValuation(
         payment.amountMinor,
         Math.max(0, allocatedByPayment.get(payment.id) ?? 0),
       );
-      const collectedEgp = toEgpPiasters(allocatedMinor, fx.currency, fx.fxRateMicro);
-      valuation.certificateCollectionsEgp += collectedEgp;
-      valuation.unallocatedCustomerCreditEgp += paymentEgp - collectedEgp;
+      const collectedEgp = valuation.value(allocatedMinor, fx.currency, fx.fxRateMicro);
+      result.certificateCollectionsEgp += collectedEgp;
+      result.unallocatedCustomerCreditEgp += paymentEgp - collectedEgp;
     }
   }
 
-  return valuation;
+  return result;
 }

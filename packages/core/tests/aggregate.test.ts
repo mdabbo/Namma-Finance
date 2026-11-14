@@ -8,6 +8,7 @@ import {
   computeProjectFinancials,
 } from "../src/calc/aggregate";
 import { suggestAllocation } from "../src/calc/allocation";
+import { EGP_VALUATION } from "../src/money/currencyValuation";
 
 const TODAY = "2026-07-15";
 
@@ -125,7 +126,7 @@ describe("project financials with FX consolidation", () => {
     const p = project({ currency: "USD", fxRateMicro: 48_000_000 }); // 48 EGP/USD
     const c = contract({ valueMinor: 10_000_000 }); // 100,000 USD
     const certs = [cert({ grossMinor: 5_000_000 })]; // 50,000 USD certified
-    const fin = computeProjectFinancials(p, [stateOf(c, certs)], [], NO_CASH);
+    const fin = computeProjectFinancials(p, [stateOf(c, certs)], [], NO_CASH, EGP_VALUATION);
     expect(fin.contractValueEgp).toBe(480_000_000); // 4,800,000.00 EGP in piasters
     expect(fin.revenueEgp).toBe(240_000_000);
     expect(fin.certifiedRatioBp).toBe(5000);
@@ -140,6 +141,7 @@ describe("project financials with FX consolidation", () => {
       expense({ id: 2, amountMinor: 5_000_000 }),
     ],
       NO_CASH,
+      EGP_VALUATION,
     );
     expect(fin.expensesEgp).toBe(15_000_000);
     expect(fin.profitEgp).toBe(35_000_000);
@@ -152,13 +154,14 @@ describe("project financials with FX consolidation", () => {
       expense({ currency: "USD", fxRateMicro: 50_000_000, amountMinor: 100_000 }), // 1,000 USD → 50,000 EGP
     ],
       NO_CASH,
+      EGP_VALUATION,
     );
     expect(fin.expensesEgp).toBe(5_000_000); // 50,000.00 EGP in piasters
   });
 
   it("zero revenue yields zero margin (no division blow-up)", () => {
     const p = project();
-    const fin = computeProjectFinancials(p, [stateOf(contract(), [])], [expense()], NO_CASH);
+    const fin = computeProjectFinancials(p, [stateOf(contract(), [])], [expense()], NO_CASH, EGP_VALUATION);
     expect(fin.revenueEgp).toBe(0);
     expect(fin.marginBp).toBe(0);
     expect(fin.profitEgp).toBe(-10_000_000);
@@ -177,7 +180,7 @@ describe("project financials with FX consolidation", () => {
       allocations: [{ id: 1, paymentId: 1, certificateId: 1, amountMinor: 20_000_000 }],
       todayIso: TODAY,
     });
-    const fin = computeProjectFinancials(p, [state], [], NO_CASH);
+    const fin = computeProjectFinancials(p, [state], [], NO_CASH, EGP_VALUATION);
     expect(fin.certificateCollectionsMinor).toBe(20_000_000);
     expect(fin.unallocatedCustomerCreditMinor).toBe(10_000_000);
     expect(fin.totalActualCashInMinor).toBe(30_000_000);
@@ -200,7 +203,7 @@ describe("project financials with FX consolidation", () => {
       currencySnapshot: "USD",
       fxRateMicroSnapshot: 50_000_000,
     });
-    const fin = computeProjectFinancials(p, [stateOf(c, [oldEgp, currentUsd])], [], NO_CASH);
+    const fin = computeProjectFinancials(p, [stateOf(c, [oldEgp, currentUsd])], [], NO_CASH, EGP_VALUATION);
 
     expect(fin.revenueEgp).toBe(5_100_000);
     expect(fin.invoicedAmountEgp).toBe(5_100_000);
@@ -214,7 +217,7 @@ describe("project financials with FX consolidation", () => {
     const underCertified = stateOf(contract({ id: 2, valueMinor: 100_000_000 }), [
       cert({ id: 2, contractId: 2, grossMinor: 20_000_000 }),
     ]);
-    const fin = computeProjectFinancials(project(), [overCertified, underCertified], [], NO_CASH);
+    const fin = computeProjectFinancials(project(), [overCertified, underCertified], [], NO_CASH, EGP_VALUATION);
     expect(overCertified.remainingUncertifiedMinor).toBe(0);
     expect(underCertified.remainingUncertifiedMinor).toBe(80_000_000);
     expect(fin.remainingUncertifiedMinor).toBe(80_000_000);
@@ -223,8 +226,8 @@ describe("project financials with FX consolidation", () => {
 
 describe("client rollup", () => {
   it("aggregates only the client's own projects", () => {
-    const mine = computeProjectFinancials(project({ id: 1, clientId: 7 }), [stateOf(contract(), [cert()])], [], NO_CASH);
-    const other = computeProjectFinancials(project({ id: 2, clientId: 8 }), [stateOf(contract({ id: 2 }), [cert({ id: 2 })])], [], NO_CASH);
+    const mine = computeProjectFinancials(project({ id: 1, clientId: 7 }), [stateOf(contract(), [cert()])], [], NO_CASH, EGP_VALUATION);
+    const other = computeProjectFinancials(project({ id: 2, clientId: 8 }), [stateOf(contract({ id: 2 }), [cert({ id: 2 })])], [], NO_CASH, EGP_VALUATION);
     const rollup = computeClientFinancials(7, [mine, other]);
     expect(rollup.projectCount).toBe(1);
     expect(rollup.contractValueEgp).toBe(100_000_000);
@@ -233,10 +236,11 @@ describe("client rollup", () => {
 
 describe("dashboard KPIs", () => {
   it("uses ALL expenses (incl. overhead) for net profit", () => {
-    const fin = computeProjectFinancials(project(), [stateOf(contract(), [cert()])], [expense()], NO_CASH);
+    const fin = computeProjectFinancials(project(), [stateOf(contract(), [cert()])], [expense()], NO_CASH, EGP_VALUATION);
     const kpis = computeDashboardKpis(
       [fin],
       [expense(), expense({ id: 2, projectId: null, amountMinor: 2_000_000 })], // overhead too
+      EGP_VALUATION,
     );
     expect(kpis.revenueEgp).toBe(50_000_000);
     expect(kpis.expensesEgp).toBe(12_000_000);
