@@ -84,7 +84,7 @@ describe("baseline database creation", () => {
     database.exec("INSERT INTO clients (name) VALUES ('Version Probe')");
     expect(database.prepare(
       "SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1",
-    ).get()).toEqual({ application_version: "0.7.1" });
+    ).get()).toEqual({ application_version: "0.8.0" });
 
     // No retired 0.6.x literal may remain on the live audit path.
     const finalize = (database.prepare(
@@ -133,10 +133,10 @@ describe("baseline database creation", () => {
 
     // Everything written from here on carries the shipping version.
     expect(database.prepare("SELECT application_version FROM audit_context WHERE id=1").get())
-      .toEqual({ application_version: "0.7.1" });
+      .toEqual({ application_version: "0.8.0" });
     database.exec("INSERT INTO clients (name) VALUES ('After Upgrade')");
     expect(database.prepare("SELECT application_version FROM audit_logs ORDER BY id DESC LIMIT 1").get())
-      .toEqual({ application_version: "0.7.1" });
+      .toEqual({ application_version: "0.8.0" });
   });
 
   /**
@@ -237,7 +237,7 @@ describe("baseline database creation", () => {
       .toEqual({ fx_rate_micro: 1_000_000 });
     expect(database.prepare("SELECT COUNT(*) AS n FROM currencies").get()).toEqual({ n: 11 });
     expect(database.prepare("SELECT source,application_version FROM audit_context WHERE id=1").get())
-      .toEqual({ source: "DESKTOP", application_version: "0.7.1" });
+      .toEqual({ source: "DESKTOP", application_version: "0.8.0" });
 
     // A brand-new workspace has no financial records and no audit history:
     // seeding reference data must not manufacture activity.
@@ -341,7 +341,7 @@ describe("baseline financial integrity constraints", () => {
       action: "CREATE",
       entity_type: "contract",
       source: "DESKTOP",
-      application_version: "0.7.1",
+      application_version: "0.8.0",
       finalized: 1,
     });
     expect(() => database.exec("UPDATE audit_logs SET action='TAMPER'")).toThrow(/AUDIT_LOG_IMMUTABLE/);

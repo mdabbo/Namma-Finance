@@ -111,6 +111,10 @@ BEGIN
   );
 END;
 
+UPDATE audit_context SET application_version = '0.8.0' WHERE id = 1;
+INSERT INTO app_metadata(key,value) VALUES('application_version','0.8.0')
+ON CONFLICT(key) DO UPDATE SET value='0.8.0';
+
 PRAGMA user_version = 30;
 INSERT INTO app_metadata(key,value) VALUES('schema_version','30')
 ON CONFLICT(key) DO UPDATE SET value='30';
