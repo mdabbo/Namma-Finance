@@ -18,6 +18,8 @@ import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { useFormat } from "../../lib/format";
 import { listOpenSyncConflicts, resolveSyncConflict, type SyncConflictResolution } from "../../repositories/syncConflicts";
 import { loadReleaseInfo } from "../../lib/release";
+import { desktopCommand } from "../../lib/atomic";
+import { logError } from "../../lib/logger";
 import {
   SETTINGS_SECTIONS,
   canOpenSettingsSection,
@@ -58,6 +60,7 @@ export function SettingsPage() {
 
   const [newCategory, setNewCategory] = useState({ nameAr: "", nameEn: "" });
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const [logFolderFailed, setLogFolderFailed] = useState(false);
   const role = useRole();
   const params = useParams<{ section: string }>();
   const groups = settingsNavigationGroups(role);
@@ -227,6 +230,27 @@ export function SettingsPage() {
             <p className="mt-3 text-xs font-medium text-red-600" role="alert">
               {t("settings.schemaMismatch", { expected: releaseInfo.expectedSchemaVersion, actual: releaseInfo.schemaVersion })}
             </p>
+          )}
+        </Card>
+        )}
+
+        {section === "advanced" && (
+        <Card className="p-5">
+          <SectionTitle icon={<Wrench size={16} />} title={t("settings.logFolder")} />
+          <p className="mb-3 text-xs text-slate-400">{t("settings.logFolderHint")}</p>
+          <Button
+            onClick={() => {
+              setLogFolderFailed(false);
+              desktopCommand("open_log_folder").catch((err) => {
+                logError("open log folder failed", err);
+                setLogFolderFailed(true);
+              });
+            }}
+          >
+            {t("settings.openLogFolder")}
+          </Button>
+          {logFolderFailed && (
+            <p className="mt-2 text-xs font-medium text-red-600" role="alert">{t("settings.openLogFolderFailed")}</p>
           )}
         </Card>
         )}

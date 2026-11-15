@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import { appConfigDir, dirname, join } from "@tauri-apps/api/path";
 import { exists, mkdir, remove } from "@tauri-apps/plugin-fs";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { closeDb, execute, select } from "../lib/db";
-import { atomicCommand } from "../lib/atomic";
+import { atomicCommand, invokeLogged } from "../lib/atomic";
+import { logError } from "../lib/logger";
 import { loadSettings, saveSetting } from "../lib/settings";
 import { todayIso } from "../lib/format";
 
@@ -33,7 +33,7 @@ export async function listBackups(): Promise<BackupLogEntry[]> {
 
 /** Consistent online backup via SQLite VACUUM INTO (safe under WAL). */
 async function backupTo(path: string, kind: "AUTO" | "MANUAL"): Promise<void> {
-  await invoke<BackupInspection>("create_backup_file",{destinationPath:path,backupType:kind});
+  await invokeLogged<BackupInspection>("create_backup_file",{destinationPath:path,backupType:kind});
 }
 
 async function pruneAutomaticBackups(directory: string, keep: number): Promise<void> {
@@ -70,7 +70,7 @@ export async function runDailyBackupIfDue(): Promise<boolean> {
         await pruneAutomaticBackups(settings.backupFolder,settings.backupRetentionCount);
       }
     } catch (err) {
-      console.error("backup-folder copy failed", err);
+      logError("backup-folder copy failed", err);
     }
   }
   return true;
@@ -95,9 +95,9 @@ export async function restoreFromBackup(): Promise<boolean> {
     filters: [{ name: "SQLite backup", extensions: ["db"] }],
   });
   if (!path || typeof path !== "string") return false;
-  await invoke("validate_backup", { backupPath: path });
+  await invokeLogged("validate_backup", { backupPath: path });
   await closeDb();
-  await invoke("restore_database", { backupPath: path });
+  await invokeLogged("restore_database", { backupPath: path });
   await relaunch();
   return true;
 }

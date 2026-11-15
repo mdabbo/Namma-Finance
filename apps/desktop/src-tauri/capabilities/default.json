@@ -9,6 +9,7 @@
     "notification:default",
     "dialog:default",
     "process:default",
+    "log:default",
     "sql:allow-load",
     "sql:allow-execute",
     "sql:allow-select",
