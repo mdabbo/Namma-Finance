@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { runInTransaction } from "./db";
+import { logError } from "./logger";
 
 /**
  * The single seam between a multi-statement write and the transaction that
@@ -32,8 +33,22 @@ export async function atomicCommand<T>(
   args: Record<string, unknown>,
   testDouble: () => Promise<T>,
 ): Promise<T> {
-  if (hasTauriRuntime()) return invoke<T>(command, args);
+  if (hasTauriRuntime()) return invokeLogged<T>(command, args);
   return runInTransaction(testDouble);
+}
+
+/**
+ * `invoke` that records a failed Rust command in the log file. Only the command
+ * name and the scrubbed error are logged — never the arguments, which carry
+ * amounts and names.
+ */
+export async function invokeLogged<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    logError(`command ${command} failed`, error);
+    throw error;
+  }
 }
 
 /**
@@ -42,5 +57,5 @@ export async function atomicCommand<T>(
  */
 export function desktopCommand<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   if (!hasTauriRuntime()) throw new Error(`DESKTOP_COMMAND_UNAVAILABLE: ${command}`);
-  return invoke<T>(command, args);
+  return invokeLogged<T>(command, args);
 }

@@ -29,6 +29,8 @@ import { CashflowView } from "./features/reports/CashflowView";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { finalizePendingRestoreAudit } from "./repositories/audit";
 import { getRuntimeReleaseInfo } from "./lib/db";
+import { ErrorBoundary, RouteErrorElement } from "./components/ErrorBoundary";
+import { installGlobalErrorLogging, logError } from "./lib/logger";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, retry: 1 } },
@@ -38,7 +40,14 @@ const router = createHashRouter([
   {
     path: "/",
     element: <Layout />,
+    // Errors in the layout itself (sidebar, header) fall back to a full-window screen.
+    errorElement: <RouteErrorElement variant="app" />,
     children: [
+      {
+        // Pathless wrapper: a page that throws renders the fallback inside the
+        // layout's <Outlet />, so the sidebar and navigation keep working.
+        errorElement: <RouteErrorElement />,
+        children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "overview", element: <DashboardPage /> },
 
@@ -76,9 +85,19 @@ const router = createHashRouter([
       { path: "people/:id", element: <LegacyDetailRedirect base="/team/people" /> },
       { path: "time", element: <Navigate to="/team/time" replace /> },
       { path: "audit", element: <Navigate to="/settings/audit" replace /> },
+
+      // E2E only (vite serve --mode e2e): a page that throws on render, to prove
+      // the error fallback keeps the sidebar alive. Absent from production builds.
+      ...(import.meta.env.MODE === "e2e" ? [{ path: "__crash", element: <CrashForTest /> }] : []),
+        ],
+      },
     ],
   },
 ]);
+
+function CrashForTest(): never {
+  throw new Error("E2E forced render error");
+}
 
 function LegacyDetailRedirect({ base }: { base: string }) {
   const { id } = useParams();
@@ -118,6 +137,7 @@ function StartupCompatibilityError({ error }: { error: unknown }) {
 }
 
 async function bootstrap() {
+  installGlobalErrorLogging();
   let language = "ar";
   let theme: "light" | "dark" = "light";
   let startupError: unknown = null;
@@ -125,7 +145,7 @@ async function bootstrap() {
     await getRuntimeReleaseInfo();
   } catch (error) {
     startupError = error;
-    console.error("release compatibility preflight failed", error);
+    logError("release compatibility preflight failed", error);
   }
   if (!startupError) {
     try {
@@ -135,7 +155,7 @@ async function bootstrap() {
       language = settings.language;
       theme = settings.theme;
     } catch (err) {
-      console.error("failed to load settings, using defaults", err);
+      logError("failed to load settings, using defaults", err);
     }
   }
   initI18n(language);
@@ -143,14 +163,16 @@ async function bootstrap() {
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        {startupError ? <StartupCompatibilityError error={startupError} /> : <Root />}
-      </QueryClientProvider>
+      <ErrorBoundary>
+        <QueryClientProvider client={queryClient}>
+          {startupError ? <StartupCompatibilityError error={startupError} /> : <Root />}
+        </QueryClientProvider>
+      </ErrorBoundary>
     </React.StrictMode>,
   );
 
   // fire-and-forget: once-per-day local backup
-  if (!startupError) runDailyBackupIfDue().catch((err) => console.error("auto-backup failed", err));
+  if (!startupError) runDailyBackupIfDue().catch((err) => logError("auto-backup failed", err));
 }
 
 void bootstrap();

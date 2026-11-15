@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { isFormulaInjectionRisk } from "../lib/export";
 import { useTranslation } from "react-i18next";
+import { logError } from "../lib/logger";
 import {
   ArrowDown,
   ArrowUp,
@@ -259,7 +260,7 @@ export function DataTable<T>({
       });
       if (path) await writeTextFile(path, buildCsv(columns, filtered));
     } catch (error) {
-      console.error("CSV export failed", error);
+      logError("CSV export failed", error);
     }
   }
 
