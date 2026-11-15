@@ -58,6 +58,14 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     fks: [{ column: "project_id", parent: "projects" }],
   },
   {
+    // Append-only progress history (migration 0008). The stage is referenced
+    // by its uuid as plain data, not as an FK: a stage can be deleted and its
+    // history must survive it. Rows are written by triggers, never edited.
+    name: "stage_progress_log",
+    columns: ["stage_uuid", "completion_bp", "recorded_at", "source"],
+    fks: [],
+  },
+  {
     name: "contract_revisions",
     columns: ["contract_id", "revision_number", "effective_date", "contract_value_minor", "vat_bp",
       "retention_bp", "withholding_bp", "advance_minor", "advance_recovery_method", "payment_terms_days",
