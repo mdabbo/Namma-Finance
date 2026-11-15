@@ -556,6 +556,10 @@ const SYNC_TABLE_POLICIES: &[SyncTablePolicy] = &[
         risk: SyncTableRisk::SimpleMasterData,
     },
     SyncTablePolicy {
+        table: "stage_progress_log",
+        risk: SyncTableRisk::ImmutableOrEventEvidence,
+    },
+    SyncTablePolicy {
         table: "contract_revisions",
         risk: SyncTableRisk::ImmutableOrEventEvidence,
     },
@@ -5277,7 +5281,7 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 29;
+const CURRENT_SCHEMA_VERSION: i64 = 30;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 /// Migration lineage after the v0.7.0 rebase. The baseline recreates schema 24
@@ -6319,6 +6323,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
+            include_str!("../migrations/0008_stage_progress_log.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -6725,6 +6730,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
+            include_str!("../migrations/0008_stage_progress_log.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7027,7 +7033,7 @@ mod financial_transaction_tests {
 
     #[test]
     fn sync_table_risk_mapping_classifies_every_mutable_table() {
-        assert_eq!(SYNC_TABLE_POLICIES.len(), 17);
+        assert_eq!(SYNC_TABLE_POLICIES.len(), 18);
 
         let simple = [
             "clients",
@@ -7065,6 +7071,7 @@ mod financial_transaction_tests {
             "payments",
             "payment_certificate_allocations",
             "person_payments",
+            "stage_progress_log",
         ];
         for table in evidence {
             assert_eq!(
@@ -7475,6 +7482,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0005_audit_version_baseline.sql"),
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
+            include_str!("../migrations/0008_stage_progress_log.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -9596,6 +9604,12 @@ pub fn run() {
             version: 7,
             description: "special_person_payments",
             sql: include_str!("../migrations/0007_special_person_payments.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "stage_progress_log",
+            sql: include_str!("../migrations/0008_stage_progress_log.sql"),
             kind: MigrationKind::Up,
         },
     ];

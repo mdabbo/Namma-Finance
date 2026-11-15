@@ -67,7 +67,7 @@ describe("two-device round-trip", () => {
 
     const peer = remoteRows("sync_peers")[0]!;
     expect(peer.financial_protocol_version).toBe(FINANCIAL_SYNC_PROTOCOL_VERSION);
-    expect(peer.schema_version).toBe(29);
+    expect(peer.schema_version).toBe(30);
     expect(peer.application_version).toBe("0.7.1");
     expect(peer.deleted_at).toBeNull();
   });
@@ -1104,5 +1104,49 @@ describe("keyset cursor tie-break", () => {
     newDevice("B");
     await sync("B");
     expect(rawOn<{ n: number }>("B", "SELECT COUNT(*) n FROM clients")[0]!.n).toBe(N);
+  });
+});
+
+describe("stage progress history sync", () => {
+  const history = (deviceId: string) =>
+    rawOn<{ sync_uuid: string; stage_uuid: string; completion_bp: number; source: string }>(
+      deviceId, "SELECT sync_uuid, stage_uuid, completion_bp, source FROM stage_progress_log ORDER BY recorded_at, completion_bp",
+    );
+
+  it("moves each device's history to the other once, without logging the pull again", async () => {
+    newDevice("A");
+    const clientId = await createClient({ name: "H Client", company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject("PRJ-2026-060", {
+      name: "History Project", clientId, country: null, city: null, manager: null, discipline: "MULTI",
+      projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000,
+      startDate: null, endDate: null, progressBp: 0, description: null,
+    });
+    const input = {
+      projectId, name: "Design", sortOrder: 0, startDate: null, endDate: null,
+      status: "IN_PROGRESS" as const, completionBp: 0, engineers: null, notes: null,
+    };
+    const stageId = await createStage(input);
+    await updateStage(stageId, { ...input, completionBp: 5000 });
+    await sync("A");
+
+    newDevice("B");
+    await sync("B");
+    expect(history("B")).toEqual(history("A"));
+    expect(history("B").map((row) => row.completion_bp)).toEqual([0, 5000]);
+    expect(rawOneOn<{ completion_bp: number }>("B", "SELECT completion_bp FROM project_stages")!.completion_bp).toBe(5000);
+
+    useDevice("B");
+    const bStageId = rawOneOn<{ id: number }>("B", "SELECT id FROM project_stages")!.id;
+    const bProjectId = rawOneOn<{ id: number }>("B", "SELECT id FROM projects")!.id;
+    await updateStage(bStageId, { ...input, projectId: bProjectId, completionBp: 8000 });
+    await sync("B");
+    await sync("A");
+    await sync("A");
+    await sync("B");
+
+    expect(history("A").map((row) => row.completion_bp)).toEqual([0, 5000, 8000]);
+    expect(history("B")).toEqual(history("A"));
+    expect(remoteRows("stage_progress_log")).toHaveLength(3);
+    expect(new Set(history("A").map((row) => row.stage_uuid)).size).toBe(1);
   });
 });

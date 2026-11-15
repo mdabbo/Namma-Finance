@@ -26,6 +26,7 @@ const MIGRATIONS = [
   "0005_audit_version_baseline.sql",
   "0006_sync_domain_conflict_kind.sql",
   "0007_special_person_payments.sql",
+  "0008_stage_progress_log.sql",
 ];
 
 let db: DatabaseSync | null = null;
