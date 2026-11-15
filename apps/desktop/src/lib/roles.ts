@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getSyncClient, getSyncSession } from "./sync/client";
 import { loadSettings } from "./settings";
+import { logWarn } from "./logger";
 import { canOpenSettingsSection } from "../app/navigation";
 
 /**
@@ -68,7 +69,7 @@ export async function refreshRole(): Promise<Role | null> {
   const { data, error } = await client.from("user_roles").select("role").eq("user_id", session.user.id).maybeSingle();
   if (error) {
     // table missing (roles SQL not run yet) → behave like before roles existed
-    console.warn("role fetch failed:", error.message);
+    logWarn("role fetch failed", error);
     return null;
   }
   let role = (data?.role as Role | undefined) ?? null;

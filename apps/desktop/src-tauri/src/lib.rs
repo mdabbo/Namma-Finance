@@ -9512,6 +9512,50 @@ mod financial_transaction_tests {
     }
 }
 
+/// Opens the application log folder in the system file manager. Used by
+/// Settings → System → Advanced so a user can attach the log to a support
+/// request without hunting for it under `%LOCALAPPDATA%`.
+#[tauri::command]
+fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    use tauri_plugin_opener::OpenerExt;
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    log::info!("open_log_folder requested: {}", dir.display());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let result = app
+        .opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string());
+    match &result {
+        Ok(()) => log::info!("open_log_folder opened the folder"),
+        Err(e) => log::error!("open_log_folder failed: {e}"),
+    }
+    result
+}
+
+/// The rotating log file plugin. Files are capped at 1 MB and the five most
+/// recent are kept, so the log can never grow without bound. Callers must not
+/// log money, client names or credentials — `test/logging.test.ts` enforces it
+/// for the TypeScript call sites.
+fn log_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+    let level = if cfg!(debug_assertions) {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    tauri_plugin_log::Builder::new()
+        .level(level)
+        .max_file_size(1_000_000)
+        .rotation_strategy(RotationStrategy::KeepSome(5))
+        .clear_targets()
+        .target(Target::new(TargetKind::LogDir {
+            file_name: Some("dabworks-finance".to_string()),
+        }))
+        .target(Target::new(TargetKind::Stdout))
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // v0.7.0 database rebase (Milestone 7): the development chain
@@ -9572,6 +9616,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(LockThrottle::default())
+        .plugin(log_plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -9583,6 +9628,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            open_log_folder,
             app_lock_enabled,
             initialize_runtime_release,
             execute_sync_mutation_atomic,

@@ -7,6 +7,7 @@ import { useWorkspaceFinancials } from "./financials";
 import { useRecurring } from "./recurring";
 import { execute, selectOne } from "../lib/db";
 import { todayIso, useFormat } from "../lib/format";
+import { logError } from "../lib/logger";
 
 /**
  * Phase 5 notification center. Everything is DERIVED from the workspace
@@ -186,7 +187,7 @@ export function useNotificationToasts(items: NotificationItem[]): void {
         for (const item of fresh) seen.add(item.key);
         await saveSeen(seen);
       } catch (err) {
-        console.error("notification toasts failed", err);
+        logError("notification toasts failed", err);
       } finally {
         busy.current = false;
       }
