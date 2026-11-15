@@ -75,4 +75,14 @@ if (mismatches.length) {
   throw new Error(`release metadata is out of sync: ${[...new Set(mismatches)].join(", ")}. Run pnpm version:sync.`);
 }
 
-console.log(`NAMAA Finance ${release.version} (${release.channel}), schema ${release.schemaVersion}: ${checkOnly ? "verified" : "synchronized"}`);
+// The product name is read from the Tauri bundle, the name installers and the
+// window title carry, rather than written here: a hard-coded copy kept saying
+// "NAMAA Finance" for a week after the product was renamed.
+const productName = JSON.parse(
+  readFileSync(resolve(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"),
+).productName;
+if (typeof productName !== "string" || productName.trim() === "") {
+  throw new Error("apps/desktop/src-tauri/tauri.conf.json has no productName");
+}
+
+console.log(`${productName} ${release.version} (${release.channel}), schema ${release.schemaVersion}: ${checkOnly ? "verified" : "synchronized"}`);
