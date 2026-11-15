@@ -4,10 +4,14 @@ All notable changes to DABWORKS Finance (named NAMAA Finance before November
 2026; entries from before then use the old name) are documented here. Versions
 follow Semantic Versioning.
 
-## [0.7.1] - Unreleased
+## [0.8.0] - 2026-11-15
 
 ### Added
 
+- Stage progress history: every change to a project stage's completion is
+  recorded in an append-only log, so progress over time can be shown later. No
+  screen uses it yet; collection starts with this release.
+- Error boundary and a rotating log file for the desktop app (B1).
 - Protected financial sync pulls that fail domain validation are preserved as
   `REMOTE_DOMAIN_REJECTED` conflicts with local state, incoming state, rejection
   reason and timestamps for later review.
@@ -16,6 +20,10 @@ follow Semantic Versioning.
 
 ### Changed
 
+- Schema advances to **30**. Schema 29 (special person payments) and 30 (stage
+  progress history) are forward-only. **Before the first sync from 0.8.0 the
+  cloud project needs `docs/supabase-0020-stage-progress-log.sql`**; a 0.8.0
+  build without it stops sync with an error about `stage_progress_log`.
 - Schema advances to **28** with a forward-only migration that extends
   `sync_conflicts.conflict_kind` for domain-rejected remote mutations.
 

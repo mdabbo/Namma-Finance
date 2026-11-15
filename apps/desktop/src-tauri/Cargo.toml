@@ -1,6 +1,6 @@
 [package]
 name = "mep-finance-desktop"
-version = "0.7.1"
+version = "0.8.0"
 description = "DABWORKS Finance — Project Financial Management for MEP design offices"
 authors = ["MEP Finance"]
 edition = "2021"
