@@ -1,6 +1,8 @@
 # Changelog
 
-All notable changes to NAMAA Finance are documented here. Versions follow Semantic Versioning.
+All notable changes to DABWORKS Finance (named NAMAA Finance before November
+2026; entries from before then use the old name) are documented here. Versions
+follow Semantic Versioning.
 
 ## [0.7.1] - Unreleased
 

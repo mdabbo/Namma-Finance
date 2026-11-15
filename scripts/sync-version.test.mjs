@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -103,4 +104,32 @@ test("the changelog documents the version being released", () => {
     read("CHANGELOG.md").includes(`## [${release.version}]`),
     `CHANGELOG.md has no section for ${release.version}`,
   );
+});
+
+/**
+ * The product was renamed NAMAA Finance -> DABWORKS Finance in November 2026.
+ * The version check kept printing the old name for a week, because the script
+ * held its own copy of it. The name now comes from the Tauri bundle — what the
+ * installer and the window title use — and this runs the real script to prove
+ * what it prints, rather than trusting the script's own code.
+ */
+test("version:check names the product the installer ships as", () => {
+  const productName = JSON.parse(read("apps/desktop/src-tauri/tauri.conf.json")).productName;
+  assert.equal(typeof productName, "string");
+  assert.ok(productName.trim().length > 0, "tauri.conf.json productName is empty");
+
+  const output = execFileSync(process.execPath, ["scripts/sync-version.mjs", "--check"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(
+    output,
+    `${productName} ${release.version} (${release.channel}), schema ${release.schemaVersion}: verified`,
+  );
+});
+
+test("the changelog introduces the product by its current name", () => {
+  const productName = JSON.parse(read("apps/desktop/src-tauri/tauri.conf.json")).productName;
+  const intro = read("CHANGELOG.md").split(/\r?\n## /)[0];
+  assert.ok(intro.includes(productName), `CHANGELOG.md introduction does not name ${productName}`);
 });
