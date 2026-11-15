@@ -9512,10 +9512,17 @@ fn open_log_folder(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     use tauri_plugin_opener::OpenerExt;
     let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    log::info!("open_log_folder requested: {}", dir.display());
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    app.opener()
+    let result = app
+        .opener()
         .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    match &result {
+        Ok(()) => log::info!("open_log_folder opened the folder"),
+        Err(e) => log::error!("open_log_folder failed: {e}"),
+    }
+    result
 }
 
 /// The rotating log file plugin. Files are capped at 1 MB and the five most
