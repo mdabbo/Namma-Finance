@@ -51,7 +51,7 @@ importers:
         specifier: ^2.5.1
         version: 2.5.1
       '@tauri-apps/plugin-log':
-        specifier: ^2.9.2
+        specifier: ~2.9.2
         version: 2.9.2
       '@tauri-apps/plugin-notification':
         specifier: ^2.3.3
