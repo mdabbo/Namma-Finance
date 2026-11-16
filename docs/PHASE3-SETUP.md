@@ -35,6 +35,9 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 11. `supabase-0018-sync-peers.sql` (optional compatibility metadata for v0.7.1+)
 12. `supabase-0019-special-person-payments.sql`
 13. `supabase-0020-stage-progress-log.sql` (required before the first sync from desktop schema 30)
+14. `supabase-0021-time-entry-capture.sql` (only needed before an engineer logs
+    time from the phone; run `supabase-0021-preflight.sql` first — it is
+    read-only and must report `ready: true`. No desktop upgrade is required.)
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by
