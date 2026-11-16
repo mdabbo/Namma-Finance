@@ -36,11 +36,25 @@ backup, check out the `pre-db-rebase-v0.6.7` tag and run that build.
 
 ## Financial records
 
-### Role enforcement is client-side
+### Role enforcement is per table, not per record
 
-Roles (ADMIN / ACCOUNTANT / ENGINEER) gate the UI. The shared Supabase database
-still grants full access to any authenticated office login; per-role row-level
-security is not yet implemented. See `docs/supabase-roles.sql`.
+Roles (ADMIN / ACCOUNTANT / ENGINEER) gate the UI, and the cloud database
+enforces them with row-level security once `docs/supabase-security-hardening.sql`
+is applied (confirmed live on the office project on 2026-11-16 with
+`docs/supabase-policy-preflight.sql`). Any login with a role can read every
+table. Only ADMIN and ACCOUNTANT can write, except `project_stages`, `documents`
+and `stage_progress_log`, which ENGINEER can also write.
+
+What remains:
+
+- The rules are per table. An engineer cannot yet be limited to their own
+  records, because no login is linked to a `people` row.
+- A cloud project that has not had the hardening script applied still grants
+  full access to any authenticated login. Run the preflight to check.
+- Uploaded files in the `namaa-documents` bucket are readable only by the login
+  that uploaded them.
+- The local desktop database is not role-protected; roles there gate the UI
+  only.
 
 ### The app lock does not encrypt the database
 
