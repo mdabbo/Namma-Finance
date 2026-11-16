@@ -1,4 +1,4 @@
-import { test, expect, completeOnboarding, queryOne } from "../fixtures";
+import { test, expect, completeOnboarding, loadDemoWorkspace, queryOne } from "../fixtures";
 
 /**
  * Milestone 8: the project workspace location is in the URL.
@@ -9,10 +9,7 @@ import { test, expect, completeOnboarding, queryOne } from "../fixtures";
  */
 
 async function demoProjectId(page: import("@playwright/test").Page): Promise<number> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Load demo workspace" }).click();
-  await expect(page.getByRole("heading", { name: /Set up your office workspace/i }))
-    .toBeHidden({ timeout: 30_000 });
+  await loadDemoWorkspace(page);
   const row = await queryOne<{ id: number }>(
     "SELECT id FROM projects WHERE archived_at IS NULL ORDER BY id LIMIT 1",
   );
@@ -82,8 +79,10 @@ test("navigates from a project activity row into the matching tab", async ({ pag
   const id = await demoProjectId(page);
   await page.goto(`/#/projects/${id}?tab=summary`);
 
+  // The demo always records project activity; a missing row is a failure, not
+  // a reason to skip. The bounded wait covers the list's first render.
   const activity = page.getByRole("button", { name: /Created|Updated|Changed status/ }).first();
-  if (await activity.count() === 0) test.skip(true, "demo workspace produced no project activity");
+  await expect(activity).toBeVisible();
   await activity.click();
   // Whichever entity it was, the workspace moved somewhere addressable.
   await expect(page).toHaveURL(/tab=/);

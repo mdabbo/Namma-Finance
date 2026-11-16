@@ -1,4 +1,4 @@
-import { test, expect, resetWorkspace, completeOnboarding } from "../fixtures";
+import { test, expect, resetWorkspace, completeOnboarding, loadDemoWorkspace } from "../fixtures";
 
 /**
  * Milestone 6: saved views must restore the page's own filters, not just search
@@ -14,10 +14,7 @@ test.beforeEach(async () => {
 });
 
 async function loadDemo(page: import("@playwright/test").Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Load demo workspace" }).click();
-  await expect(page.getByRole("heading", { name: /Set up your office workspace/i }))
-    .toBeHidden({ timeout: 30_000 });
+  await loadDemoWorkspace(page);
 }
 
 test("saves a view with its page filters and restores them", async ({ page }) => {
