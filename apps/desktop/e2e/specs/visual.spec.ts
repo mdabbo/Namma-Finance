@@ -1,4 +1,4 @@
-import { test, expect, resetWorkspace, completeOnboarding } from "../fixtures";
+import { test, expect, resetWorkspace, completeOnboarding, loadDemoWorkspace } from "../fixtures";
 import type { Page } from "@playwright/test";
 
 /**
@@ -12,10 +12,7 @@ import type { Page } from "@playwright/test";
 
 /** Load the demo workspace so the populated states have realistic data. */
 async function loadDemo(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Load demo workspace" }).click();
-  await expect(page.getByRole("heading", { name: /Set up your office workspace/i }))
-    .toBeHidden({ timeout: 30_000 });
+  await loadDemoWorkspace(page);
 }
 
 /** Charts animate in; wait for the network and a beat of settle time. */
@@ -56,7 +53,16 @@ test("project workspace", async ({ page }) => {
   await expect(page).toHaveScreenshot("project-workspace.png", { fullPage: true });
 });
 
+/**
+ * The finance workspace and the payment form show date-relative content —
+ * due and overdue figures, ageing, the form's default date — and the demo seed
+ * dates its records from the browser's "today". Without a fixed clock these two
+ * baselines drift as the calendar moves. Only Date is pinned; timers run.
+ */
+const VISUAL_TODAY = new Date("2026-11-16T09:00:00Z");
+
 test("finance workspace", async ({ page }) => {
+  await page.clock.setFixedTime(VISUAL_TODAY);
   await completeOnboarding();
   await loadDemo(page);
   await page.goto("/#/finance");
@@ -65,6 +71,7 @@ test("finance workspace", async ({ page }) => {
 });
 
 test("payment form", async ({ page }) => {
+  await page.clock.setFixedTime(VISUAL_TODAY);
   await completeOnboarding();
   await loadDemo(page);
   await page.goto("/#/finance/payments");

@@ -1,4 +1,4 @@
-import { test, expect, completeOnboarding, queryOne } from "../fixtures";
+import { test, expect, completeOnboarding, loadDemoWorkspace, queryOne } from "../fixtures";
 import type { Page } from "@playwright/test";
 
 /**
@@ -17,10 +17,7 @@ test.beforeEach(async () => {
 });
 
 async function loadDemo(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Load demo workspace" }).click();
-  await expect(page.getByRole("heading", { name: /Set up your office workspace/i }))
-    .toBeHidden({ timeout: 30_000 });
+  await loadDemoWorkspace(page);
 }
 
 /** A demo project that actually owns rows on the given finance list. */

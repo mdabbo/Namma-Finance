@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { migrationFiles, migrationsDir } from "./migrations.mjs";
 
 /**
  * End-to-end database bridge.
@@ -17,15 +17,8 @@ import { dirname, join } from "node:path";
  * never part of a production build.
  */
 
-const here = dirname(fileURLToPath(import.meta.url));
-const migrationsDir = join(here, "..", "src-tauri", "migrations");
-const MIGRATIONS = [
-  "0001_baseline.sql",
-  "0002_seed_reference_data.sql",
-  "0003_assignment_lifecycle.sql",
-  "0004_cancellation_evidence_integrity.sql",
-  "0005_audit_version_baseline.sql",
-];
+// Every migration in the folder, in order: the same chain the app runs.
+const MIGRATIONS = migrationFiles();
 
 let db = null;
 let transactionDepth = 0;
