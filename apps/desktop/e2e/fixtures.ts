@@ -51,6 +51,28 @@ export async function execute(statement: string, params: unknown[] = []): Promis
   await sql("execute", statement, params);
 }
 
+/**
+ * Load the demo workspace and wait until it has FINISHED.
+ *
+ * The setup panel hides as soon as the first demo record exists, while the
+ * seed is still writing projects, certificates and payments. Specs that read
+ * the database or navigate at that moment raced the seed: counts came up short,
+ * and a reload cut the seed off half-way. `demo_workspace` is the seed's last
+ * write (src/repositories/demo.ts), so a value there means every record exists.
+ */
+export async function loadDemoWorkspace(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Load demo workspace" }).click();
+  await expect
+    .poll(
+      async () =>
+        (await queryOne<{ value: string }>("SELECT value FROM settings WHERE key='demo_workspace'"))?.value ?? "",
+      { timeout: 30_000, message: "demo workspace did not finish loading" },
+    )
+    .not.toBe("");
+  await expect(page.getByRole("heading", { name: /Set up your office workspace/i })).toBeHidden();
+}
+
 export async function ready(page: Page): Promise<void> {
   await expect(page.getByRole("navigation", { name: /breadcrumb|مسار/i })).toBeVisible();
 }

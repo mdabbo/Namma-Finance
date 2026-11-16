@@ -1,4 +1,4 @@
-import { test, expect, countRows, queryOne } from "../fixtures";
+import { test, expect, countRows, loadDemoWorkspace, queryOne } from "../fixtures";
 
 /**
  * Milestone 6 acceptance: the guided first-use flow, its skip/resume state,
@@ -36,14 +36,10 @@ test("skips and resumes setup without losing progress", async ({ page }) => {
 });
 
 test("loads and removes the demo workspace, leaving no financial records", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Load demo workspace" }).click();
-
-  // Real records created through the real repositories. The setup panel
-  // disappearing is the signal the workspace now has financial activity —
-  // the "Dashboard" title is present in the empty state too.
-  await expect(page.getByRole("heading", { name: /Set up your office workspace/i }))
-    .toBeHidden({ timeout: 30_000 });
+  // Real records created through the real repositories. The setup panel hides
+  // as soon as the FIRST record exists, so wait for the seed to finish before
+  // counting.
+  await loadDemoWorkspace(page);
   expect(await countRows("projects")).toBe(2);
   expect(await countRows("payment_certificates")).toBe(3);
   expect(await countRows("payments")).toBe(1);
