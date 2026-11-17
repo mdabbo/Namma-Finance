@@ -3,6 +3,7 @@
   "version": "0.8.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo-google-fonts/tajawal": "^0.4.1",
     "@mep/core": "workspace:*",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.18.11",
@@ -11,6 +12,7 @@
     "@supabase/supabase-js": "^2.110.7",
     "@tanstack/react-query": "^5.101.2",
     "expo": "~54.0.0",
+    "expo-font": "~14.0.12",
     "expo-status-bar": "~3.0.8",
     "i18next": "^26.3.6",
     "react": "19.1.0",

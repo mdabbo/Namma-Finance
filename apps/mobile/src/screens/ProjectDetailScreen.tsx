@@ -1,9 +1,11 @@
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { RouteProp } from "@react-navigation/native";
-import { useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { formatIsoDate, formatMinor, isBillable, type AppLocale } from "@mep/core";
 import { useWorkspace } from "../hooks/useWorkspace";
+import { Text } from "../components/AppText";
+import { ScreenHeader } from "../components/ScreenHeader";
 import { card, colors } from "../lib/theme";
 import type { ProjectsStackParams } from "../navigation";
 
@@ -12,10 +14,18 @@ export function ProjectDetailScreen() {
   const { t, i18n } = useTranslation();
   const locale = (i18n.language as AppLocale) ?? "ar";
   const route = useRoute<RouteProp<ProjectsStackParams, "ProjectDetail">>();
+  const navigation = useNavigation();
   const { data, refetch, isRefetching } = useWorkspace();
 
   const fin = data?.projects.find((p) => p.project.id === route.params.projectId);
-  if (!fin) return <Text style={styles.empty}>{t("common.loading")}</Text>;
+  if (!fin) {
+    return (
+      <View style={styles.page}>
+        <ScreenHeader title="" onBack={() => navigation.goBack()} />
+        <Text style={styles.empty}>{t("common.loading")}</Text>
+      </View>
+    );
+  }
 
   const currency = fin.project.currency;
   const money = (minor: number) => formatMinor(minor, currency, locale, { compactFraction: true });
@@ -25,46 +35,49 @@ export function ProjectDetailScreen() {
   const certificates = states.flatMap((c) => c.certificates).sort((a, b) => b.certificate.date.localeCompare(a.certificate.date));
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} />}
-    >
-      <View style={[card, styles.section]}>
-        <Text style={styles.name}>{fin.project.name}</Text>
-        <Text style={styles.code}>{fin.project.code} · {currency}</Text>
-        <View style={styles.tiles}>
-          <Tile label={t("dashboard.kpiContractValue")} value={money(fin.contractValueMinor)} />
-          <Tile label={t("projects.certified")} value={money(fin.certifiedBaseMinor)} />
-          <Tile label={t("projects.collected")} value={money(fin.totalPaidMinor)} color={colors.green} />
-          <Tile label={t("clients.outstanding")} value={money(fin.outstandingMinor)} color={colors.amber} />
-          <Tile label={t("payments.remainingBalance")} value={money(Math.max(0, lifetime - cashIn))} color={colors.amber} />
-          <Tile label={t("dashboard.cashIn")} value={money(cashIn)} />
-        </View>
-      </View>
-
-      <View style={[card, styles.section]}>
-        <Text style={styles.sectionTitle}>{t("certificates.title")}</Text>
-        {certificates.length === 0 && <Text style={styles.emptyRow}>{t("common.empty")}</Text>}
-        {certificates.map((cs) => (
-          <View key={cs.certificate.id} style={styles.certRow}>
-            <View style={styles.certText}>
-              <Text style={styles.certNumber} numberOfLines={1}>
-                {cs.certificate.number}
-                {cs.certificate.description ? ` — ${cs.certificate.description}` : ""}
-              </Text>
-              <Text style={styles.certDate}>{formatIsoDate(cs.certificate.date, locale)}</Text>
-            </View>
-            <View style={styles.certEnd}>
-              <Text style={styles.certAmount}>{isBillable(cs.certificate.status) ? money(cs.breakdown.netPayableMinor) : money(cs.breakdown.baseMinor)}</Text>
-              <Text style={[styles.certStatus, statusStyle(cs.certificate.status, cs.overdue)]}>
-                {cs.overdue ? t("certificates.overdue") : t(`status.${cs.certificate.status}`)}
-              </Text>
-            </View>
+    <View style={styles.page}>
+      <ScreenHeader title={fin.project.name} onBack={() => navigation.goBack()} />
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={styles.container}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} />}
+      >
+        <View style={[card, styles.section]}>
+          <Text style={styles.name}>{fin.project.name}</Text>
+          <Text style={styles.code}>{fin.project.code} · {currency}</Text>
+          <View style={styles.tiles}>
+            <Tile label={t("dashboard.kpiContractValue")} value={money(fin.contractValueMinor)} />
+            <Tile label={t("projects.certified")} value={money(fin.certifiedBaseMinor)} />
+            <Tile label={t("projects.collected")} value={money(fin.totalPaidMinor)} color={colors.green} />
+            <Tile label={t("clients.outstanding")} value={money(fin.outstandingMinor)} color={colors.amber} />
+            <Tile label={t("payments.remainingBalance")} value={money(Math.max(0, lifetime - cashIn))} color={colors.amber} />
+            <Tile label={t("dashboard.cashIn")} value={money(cashIn)} />
           </View>
-        ))}
-      </View>
-    </ScrollView>
+        </View>
+
+        <View style={[card, styles.section]}>
+          <Text style={styles.sectionTitle}>{t("certificates.title")}</Text>
+          {certificates.length === 0 && <Text style={styles.emptyRow}>{t("common.empty")}</Text>}
+          {certificates.map((cs) => (
+            <View key={cs.certificate.id} style={styles.certRow}>
+              <View style={styles.certText}>
+                <Text style={styles.certNumber} numberOfLines={1}>
+                  {cs.certificate.number}
+                  {cs.certificate.description ? ` — ${cs.certificate.description}` : ""}
+                </Text>
+                <Text style={styles.certDate}>{formatIsoDate(cs.certificate.date, locale)}</Text>
+              </View>
+              <View style={styles.certEnd}>
+                <Text style={styles.certAmount}>{isBillable(cs.certificate.status) ? money(cs.breakdown.netPayableMinor) : money(cs.breakdown.baseMinor)}</Text>
+                <Text style={[styles.certStatus, statusStyle(cs.certificate.status, cs.overdue)]}>
+                  {cs.overdue ? t("certificates.overdue") : t(`status.${cs.certificate.status}`)}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -86,6 +99,7 @@ function statusStyle(status: string, overdue: boolean) {
 }
 
 const styles = StyleSheet.create({
+  page: { flex: 1, backgroundColor: colors.bg },
   screen: { flex: 1, backgroundColor: colors.bg },
   container: { padding: 14, gap: 12 },
   empty: { textAlign: "center", color: colors.subtle, marginTop: 40 },

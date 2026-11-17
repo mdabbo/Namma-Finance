@@ -33,7 +33,14 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 - Consolidated KPIs are in **EGP** (each project's stored rate); the
   per-currency section shows face values. The desktop's display-currency
   setting is local to the desktop.
-- Layout is LTR even in Arabic (RTL layout needs an app restart per switch —
-  planned with Phase 5 polish).
+- **Arabic is right-to-left on every screen**, and English left-to-right. The
+  switch in Settings re-lays-out the whole app at once, with no restart: the
+  layout direction is an explicit style on the root view (`App.tsx`), not the
+  phone's own setting. Arabic text uses Tajawal. Headers are drawn by the app
+  (`ScreenHeader`) so the back button is on the right side in Arabic.
+  The phone's own direction is kept in step for the next time the app is
+  opened (`nativeDirection.ts`); it only affects system pieces such as the
+  pull-to-refresh spinner. **Not yet checked on a real phone** — see the
+  checklist in the F2 pull request.
 - A standalone installable APK (no Expo Go) can be produced later with
   `eas build` — say the word when you want one.
