@@ -1,0 +1,17 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "apk": {
+      "distribution": "internal",
+      "autoIncrement": true,
+      "node": "24.18.0",
+      "pnpm": "10.0.0",
+      "android": {
+        "buildType": "apk"
+      }
+    }
+  }
+}

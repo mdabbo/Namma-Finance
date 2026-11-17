@@ -35,5 +35,43 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
   setting is local to the desktop.
 - Layout is LTR even in Arabic (RTL layout needs an app restart per switch —
   planned with Phase 5 polish).
-- A standalone installable APK (no Expo Go) can be produced later with
-  `eas build` — say the word when you want one.
+
+## Install it as a real app (APK, no Expo Go)
+
+The APK is built in Expo's cloud (EAS), because this PC has no Java or
+Android SDK. It is free on Expo's Free plan. You need an Expo account
+(sign up at <https://expo.dev>).
+
+**One time only**, in a terminal:
+
+```sh
+npm install -g eas-cli
+eas login
+cd C:DevNamaa-financeappsmobile
+eas init
+```
+
+`eas init` links the app to your Expo account and writes a `projectId` into
+`app.json`. Commit that change. On the first build EAS also offers to create
+an Android signing key — accept; it stays on your Expo account. **Do not lose
+that account**: an APK signed with a different key cannot install over this
+one, and you would have to uninstall (losing the saved sign-in) first.
+
+**Each build:**
+
+```sh
+cd C:DevNamaa-financeappsmobile
+eas build --platform android --profile apk
+```
+
+It takes about 10–20 minutes. When it finishes, open the link it prints on
+your phone, download the `.apk` and open it. Android asks once to allow
+installs from your browser. A later build installs over the earlier one and
+keeps your sign-in: EAS raises the build number each time.
+
+- The Supabase URL, anon key and password are typed into the app on first
+  run and stay on the phone. They are never part of the build.
+- The application id is `com.mepfinance.mobile`. Never change it — Android
+  would treat the next APK as a different app.
+- The app still targets Expo SDK 54. Upgrading the SDK is a separate step,
+  done after the APK works.
