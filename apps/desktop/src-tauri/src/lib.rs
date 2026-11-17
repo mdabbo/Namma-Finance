@@ -2634,7 +2634,10 @@ async fn assignment_released_minor_as_of(
     }
 
     let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
-    let contract_numbers: Vec<&str> = stages.iter().map(|stage| stage.contract_number.as_str()).collect();
+    let contract_numbers: Vec<&str> = stages
+        .iter()
+        .map(|stage| stage.contract_number.as_str())
+        .collect();
     let amounts = allocate_stage_amounts(
         agreed_minor,
         &contract_numbers,
@@ -2677,15 +2680,14 @@ async fn apply_synced_assignment_transaction(
     let derived_cancelled_earned = if input.lifecycle_status == "CANCELLED" {
         let cancelled_at = input.cancelled_at.as_deref().unwrap_or_default();
         let cutoff = cancelled_at.get(0..10).unwrap_or(cancelled_at);
-        let earned =
-            assignment_released_minor_as_of(
-                &mut tx,
-                input.project_id,
-                input.agreed_minor,
-                input.contract_fees.as_deref(),
-                cutoff,
-            )
-                .await?;
+        let earned = assignment_released_minor_as_of(
+            &mut tx,
+            input.project_id,
+            input.agreed_minor,
+            input.contract_fees.as_deref(),
+            cutoff,
+        )
+        .await?;
         if input.earned_minor_at_cancellation != Some(earned) {
             return Err("SYNC_CANCELLATION_EARNED_MISMATCH".into());
         }
@@ -3489,7 +3491,9 @@ fn allocate_stage_amounts(
     let mut remaining = agreed_minor;
     let mut with_fee: Vec<&str> = Vec::new();
     for number in &order {
-        let Some(fee) = fees.get(*number) else { continue };
+        let Some(fee) = fees.get(*number) else {
+            continue;
+        };
         let applied = (*fee).min(remaining);
         remaining -= applied;
         with_fee.push(number);
@@ -3498,7 +3502,10 @@ fn allocate_stage_amounts(
             .collect();
         let parts = allocate_largest_remainder(
             applied,
-            &indexes.iter().map(|index| weights[*index]).collect::<Vec<_>>(),
+            &indexes
+                .iter()
+                .map(|index| weights[*index])
+                .collect::<Vec<_>>(),
         )?;
         for (position, index) in indexes.iter().enumerate() {
             amounts[*index] = parts[position];
@@ -3636,7 +3643,10 @@ async fn assignment_released_minor(
     }
 
     let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
-    let contract_numbers: Vec<&str> = stages.iter().map(|stage| stage.contract_number.as_str()).collect();
+    let contract_numbers: Vec<&str> = stages
+        .iter()
+        .map(|stage| stage.contract_number.as_str())
+        .collect();
     let amounts = allocate_stage_amounts(
         agreed_minor,
         &contract_numbers,
@@ -3766,7 +3776,9 @@ async fn cancel_assignment_transaction(
         return Err("PROJECT_ARCHIVED".into());
     }
 
-    let earned_minor = assignment_released_minor(&mut tx, project_id, agreed_minor, contract_fees.as_deref()).await?;
+    let earned_minor =
+        assignment_released_minor(&mut tx, project_id, agreed_minor, contract_fees.as_deref())
+            .await?;
     // Released value is a subset of an allocation of the agreed fee, so this
     // cannot fail — it is kept as a assertion on the derivation itself rather
     // than a check on an untrusted input.
@@ -6433,7 +6445,6 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
-
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
@@ -6842,7 +6853,6 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
-
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
@@ -7596,7 +7606,6 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
-
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
@@ -7826,7 +7835,9 @@ mod financial_transaction_tests {
             // remainder stage, so nothing is released.
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000, None).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 0
             );
             tx.commit().await.unwrap();
@@ -7835,7 +7846,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 1, "PC-1", 50_000, "PAID").await;
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000, None).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 20_000
             );
             tx.commit().await.unwrap();
@@ -7844,7 +7857,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 2, "PC-2", 50_000, "APPROVED").await;
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000, None).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 20_000
             );
             tx.commit().await.unwrap();
@@ -7886,7 +7901,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 2, "PC-DRAFT", 50_000, "DRAFT").await;
 
             let mut tx = begin_immediate(&pool).await.unwrap();
-            let released = assignment_released_minor(&mut tx, 1, 40_000, None).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000, None)
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             // Two stages of equal base: the paid one releases exactly half. If
             // the draft's base were dropped, the paid stage would absorb the
@@ -8753,7 +8770,9 @@ mod financial_transaction_tests {
             .unwrap();
 
             let mut tx = begin_immediate(&pool).await.unwrap();
-            let released = assignment_released_minor(&mut tx, 1, 40_000, None).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000, None)
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             assert_eq!(released, 20_000, "only the paid milestone releases");
         });
