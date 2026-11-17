@@ -21,6 +21,8 @@ import {
   resetRig,
   useDevice,
   makeFakeClient,
+  emulateTimestamptz,
+  respellRemote,
 } from "./sync-harness";
 import { createClient } from "../src/repositories/clients";
 import { createProject, updateProject } from "../src/repositories/projects";
@@ -1148,5 +1150,126 @@ describe("stage progress history sync", () => {
     expect(history("B")).toEqual(history("A"));
     expect(remoteRows("stage_progress_log")).toHaveLength(3);
     expect(new Set(history("A").map((row) => row.stage_uuid)).size).toBe(1);
+  });
+});
+
+/**
+ * The cloud stores contract revision timestamps as timestamptz and hands them
+ * back as "2026-11-07T11:53:11+00:00"; the desktop writes "2026-11-07 11:53:11".
+ * Same moment, different text. The engine used to compare the text, and filed a
+ * CONCURRENT_EDIT — a financial conflict needing a manual decision — against
+ * revisions nobody had edited (seven of them on the owner's PC).
+ */
+describe("the cloud spells the same timestamp differently", () => {
+  const REVISION_TIMESTAMPS = ["created_at", "approved_at"];
+
+  async function firstDevice(prefix: string) {
+    newDevice("A");
+    const clientId = await createClient({ name: `${prefix} Client`, company: null, address: null, phone: null, email: null, taxNumber: null, contacts: null, notes: null });
+    const projectId = await createProject(`PRJ-${prefix}`, { name: `${prefix} Project`, clientId, country: null, city: null, manager: null, discipline: "MULTI", projectType: null, status: "ACTIVE", currency: "EGP", fxRateMicro: 1_000_000, startDate: null, endDate: null, progressBp: 0, description: null });
+    await createContract({ projectId, number: `C-${prefix}`, title: null, valueMinor: 85_000_000, vatBp: 0, retentionBp: 0, withholdingBp: 0, advanceMinor: 0, advanceRecoveryMethod: "PROPORTIONAL", performanceBondBp: 0, performanceBondBank: null, performanceBondExpiry: null, paymentTermsDays: 30, paymentTermsNotes: null, valuationMode: "LUMP_SUM", milestones: null, drawings: null, attachments: null, signedDate: "2026-07-01", notes: null });
+  }
+
+  const openConflicts = (device: string) =>
+    rawOn<{ table_name: string; conflict_kind: string }>(device, "SELECT table_name,conflict_kind FROM sync_conflicts WHERE status='OPEN'");
+
+  it("raises no conflict when a revision is pushed, pulled and pushed again", async () => {
+    emulateTimestamptz("contract_revisions", REVISION_TIMESTAMPS);
+    await firstDevice("PUSH");
+
+    expect((await sync("A")).conflicts).toBe(0);
+    expect(String(remoteRows("contract_revisions")[0]!.approved_at)).toMatch(/[+]00:00$/); // the emulation is on
+    newDevice("B");
+    expect((await sync("B")).conflicts).toBe(0);
+    expect((await sync("A")).conflicts).toBe(0);
+    expect((await sync("B")).conflicts).toBe(0);
+
+    expect(openConflicts("A")).toEqual([]);
+    expect(openConflicts("B")).toEqual([]);
+    expect(rawOn("A", "SELECT id FROM contract_revisions")).toHaveLength(1);
+    expect(rawOn("B", "SELECT id FROM contract_revisions")).toHaveLength(1);
+  });
+
+  it("raises no conflict for a revision that has no earlier sync record", async () => {
+    await firstDevice("LEGACY");
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+    const before = rawOneOn<{ created_at: string; approved_at: string }>("B", "SELECT created_at,approved_at FROM contract_revisions")!;
+
+    // A row synced by an older release: the device has no record of the last
+    // sync, and the cloud now answers with its own spelling and a later stamp.
+    useDevice("B");
+    await execute("DELETE FROM sync_record_state WHERE table_name='contract_revisions'");
+    emulateTimestamptz("contract_revisions", REVISION_TIMESTAMPS);
+    respellRemote("contract_revisions");
+    remoteRows("contract_revisions")[0]!.updated_at = "2099-08-01T00:00:00.000Z";
+
+    expect((await sync("B")).conflicts).toBe(0);
+    expect(openConflicts("B")).toEqual([]);
+    // Nothing was rewritten: the approved revision keeps the text it was written with.
+    expect(rawOneOn("B", "SELECT created_at,approved_at FROM contract_revisions")).toEqual(before);
+    // ...and the sync now has a record of it.
+    expect(rawOn("B", "SELECT row_uuid FROM sync_record_state WHERE table_name='contract_revisions'")).toHaveLength(1);
+  });
+
+  // Archived contracts carry a timestamptz column too (supabase-0008), and a
+  // contract can still be edited after the cloud has re-spelled it.
+  async function archivedContract(prefix: string) {
+    emulateTimestamptz("contracts", ["archived_at"]);
+    await firstDevice(prefix);
+    const contractId = rawOneOn<{ id: number }>("A", "SELECT id FROM contracts")!.id;
+    await execute("UPDATE contracts SET archived_at='2026-11-07 11:53:11', archive_reason='Closed out' WHERE id=$1", [contractId]);
+    await stamp("contracts", contractId, "2099-09-01T00:00:00.000Z");
+    expect((await sync("A")).conflicts).toBe(0);
+    expect(String(remoteRows("contracts")[0]!.archived_at)).toBe("2026-11-07T11:53:11+00:00");
+    return contractId;
+  }
+
+  it("pushes a local edit made before this PC has pulled the re-spelled copy back", async () => {
+    const contractId = await archivedContract("EDIT-FIRST");
+    useDevice("A");
+    await execute("UPDATE contracts SET title='Edited here' WHERE id=$1", [contractId]);
+    await stamp("contracts", contractId, "2099-09-02T00:00:00.000Z");
+
+    expect((await sync("A")).conflicts).toBe(0);
+    expect(openConflicts("A")).toEqual([]);
+    expect(remoteRows("contracts")[0]!.title).toBe("Edited here");
+  });
+
+  it("takes another device's edit after agreeing with a re-spelled copy", async () => {
+    const contractId = await archivedContract("PULL-LATER");
+    useDevice("A");
+    // An older release left no sync record; the next pull finds the two agree.
+    await execute("DELETE FROM sync_record_state WHERE table_name='contracts'");
+    remoteRows("contracts")[0]!.updated_at = "2099-09-03T00:00:00.000Z";
+    expect((await sync("A")).conflicts).toBe(0);
+
+    // Then a real change arrives from elsewhere.
+    const cloud = remoteRows("contracts")[0]!;
+    cloud.title = "Edited elsewhere";
+    cloud.updated_at = "2099-09-04T00:00:00.000Z";
+    expect((await sync("A")).conflicts).toBe(0);
+    expect(openConflicts("A")).toEqual([]);
+    expect(rawOneOn<{ title: string }>("A", "SELECT title FROM contracts WHERE id=$1", [contractId])!.title).toBe("Edited elsewhere");
+  });
+
+  it("still raises a conflict when the cloud copy is a different moment", async () => {
+    await firstDevice("REAL");
+    await sync("A");
+    newDevice("B");
+    await sync("B");
+
+    useDevice("B");
+    await execute("DELETE FROM sync_record_state WHERE table_name='contract_revisions'");
+    emulateTimestamptz("contract_revisions", REVISION_TIMESTAMPS);
+    respellRemote("contract_revisions");
+    const revision = remoteRows("contract_revisions")[0]!;
+    revision.approved_at = "2030-01-01T00:00:00+00:00"; // not the moment this PC recorded
+    revision.updated_at = "2099-08-01T00:00:00.000Z";
+
+    const report = await sync("B");
+    expect(report.conflicts).toBe(1);
+    expect(openConflicts("B")).toEqual([{ table_name: "contract_revisions", conflict_kind: "CONCURRENT_EDIT" }]);
   });
 });
