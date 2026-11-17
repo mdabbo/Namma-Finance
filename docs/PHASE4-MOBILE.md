@@ -12,7 +12,10 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 
 ## Try it on your phone (development — no app store needed)
 
-1. Install **Expo Go** from the Play Store / App Store on your phone.
+1. Install **Expo Go** from the Play Store / App Store on your phone. **The
+   current Expo Go (SDK 58) will not open this app, which is on SDK 54** — it
+   shows "Project is incompatible with this version of Expo Go". Install the APK
+   below instead, or an older Expo Go built for SDK 54 (<https://expo.dev/go>).
 2. On the PC (phone and PC on the same Wi-Fi):
    ```sh
    cd C:\Dev\Namaa-finance\apps\mobile
@@ -47,12 +50,10 @@ Android SDK. It is free on Expo's Free plan. You need an Expo account
 ```sh
 npm install -g eas-cli
 eas login
-cd C:DevNamaa-financeappsmobile
-eas init
 ```
 
-`eas init` links the app to your Expo account and writes a `projectId` into
-`app.json`. Commit that change. On the first build EAS also offers to create
+The app is already linked to the Expo project `@dabworks/namaa-finance`
+(`eas init` wrote its `projectId` and `owner` into `app.json`). On the first build EAS also offers to create
 an Android signing key — accept; it stays on your Expo account. **Do not lose
 that account**: an APK signed with a different key cannot install over this
 one, and you would have to uninstall (losing the saved sign-in) first.
