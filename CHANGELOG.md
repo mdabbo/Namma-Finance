@@ -4,6 +4,23 @@ All notable changes to DABWORKS Finance (named NAMAA Finance before November
 2026; entries from before then use the old name) are documented here. Versions
 follow Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Optional fee per contract on a team assignment. When a project has several
+  contracts, a fee can be fixed for each one; that contract's payment stages then
+  split exactly that fee (round fees give round stages) instead of every stage
+  getting a share of one agreed fee by value. Contracts left empty share the
+  rest proportionally, and assignments without per-contract fees are unchanged.
+  Fees are keyed by contract number so they sync between devices.
+
+### Changed
+
+- Schema advances to **31** (migration 0009, `project_assignments.contract_fees`).
+  **Before the first sync from this build the cloud project needs
+  `docs/supabase-0022-assignment-contract-fees.sql`.**
+
 ## [0.8.0] - 2026-11-15
 
 ### Added

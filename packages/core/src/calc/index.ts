@@ -6,6 +6,7 @@ export * from "./cashValuation";
 export * from "./allocation";
 export * from "./valuation";
 export * from "./teamPayout";
+export * from "./stageAllocation";
 export * from "./assignmentLifecycle";
 export * from "./overhead";
 export * from "./profitability";

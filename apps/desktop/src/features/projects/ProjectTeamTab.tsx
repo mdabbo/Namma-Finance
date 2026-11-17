@@ -11,6 +11,7 @@ import { Badge, Button, Card, EmptyState, Field, Input, Modal, SectionHeader, Se
 import { MoneyInput } from "../../components/MoneyInput";
 import { useFormat } from "../../lib/format";
 import { PersonForm } from "../people/PeoplePage";
+import { ContractFeesEditor } from "../people/ContractFeesEditor";
 import { readModelAmount, UNKNOWN_AMOUNT } from "./projectWorkspaceModel";
 
 export function ProjectTeam({
@@ -258,13 +259,16 @@ export function ProjectTeamForm({
   const [creatingPerson, setCreatingPerson] = useState(false);
   const [agreedMinor, setAgreedMinor] = useState(0);
   const [scope, setScope] = useState("");
+  const [contractFees, setContractFees] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
+  const feesExceedAgreed = Object.values(contractFees).reduce((a, b) => a + b, 0) > agreedMinor;
 
   function submit() {
     const parsed = assignmentSchema.safeParse({
       personId,
       projectId,
       agreedMinor,
+      contractFees,
       currency,
       fxRateMicro,
       scope: scope || null,
@@ -313,6 +317,13 @@ export function ProjectTeamForm({
               onChange={(value) => setAgreedMinor(value ?? 0)}
             />
           </Field>
+          <ContractFeesEditor
+            projectId={projectId}
+            currency={currency}
+            agreedMinor={agreedMinor}
+            value={contractFees}
+            onChange={setContractFees}
+          />
           <Field label={t("common.description")}>
             <Input
               value={scope}
@@ -326,7 +337,7 @@ export function ProjectTeamForm({
             variant="primary"
             onClick={submit}
             disabled={
-              personId === 0 || mutations.createAssignment.isPending
+              personId === 0 || feesExceedAgreed || mutations.createAssignment.isPending
             }
           >
             {t("common.save")}

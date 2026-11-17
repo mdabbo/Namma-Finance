@@ -1,6 +1,7 @@
 import type { CertificateStatus } from "../domain/types";
-import { allocate, assertMinor, ratioBp } from "../money/money";
+import { assertMinor, ratioBp } from "../money/money";
 import type { ContractState } from "./contract";
+import { allocateStageAmounts, type ContractFees } from "./stageAllocation";
 import { milestoneAmounts, parseMilestones } from "./valuation";
 
 /**
@@ -18,6 +19,9 @@ import { milestoneAmounts, parseMilestones } from "./valuation";
  *  - LUMP_SUM / DRAWINGS contracts: stages = the contract's certificates
  *    (each certificate is a payment stage), released when PAID; contract
  *    value not yet certified appears as a single PENDING remainder stage.
+ *
+ * An assignment may fix the fee per contract (see stageAllocation.ts); then
+ * each such contract's stages split exactly that fee.
  *
  * Person payments cover released stages in schedule order (FIFO), mirroring
  * how client payments are allocated to certificates.
@@ -75,6 +79,8 @@ export function computeTeamPayout(
   agreedMinor: number,
   contractStates: ContractState[],
   personPaidMinor: number,
+  /** Optional fee per contract number; see stageAllocation.ts. Absent = single-fee split. */
+  contractFees: ContractFees = {},
 ): TeamPayoutState {
   assertMinor(agreedMinor, "agreedMinor");
   assertMinor(personPaidMinor, "personPaidMinor");
@@ -123,7 +129,11 @@ export function computeTeamPayout(
     }
   }
 
-  const amounts = allocate(agreedMinor, drafts.map((d) => d.weightMinor));
+  const amounts = allocateStageAmounts(
+    agreedMinor,
+    drafts.map((d) => ({ contractNumber: d.contractNumber, weightMinor: d.weightMinor })),
+    contractFees,
+  );
 
   let releasedMinor = 0;
   let cover = personPaidMinor;

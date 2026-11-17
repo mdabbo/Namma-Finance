@@ -6,6 +6,7 @@ import {
   computeProjectFinancials,
   computeReadyToBill,
   computeTeamPayout,
+  parseContractFees,
   parseMilestones,
   toEgpPiasters,
   EGP_VALUATION,
@@ -391,6 +392,7 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
       Number(r.agreed_minor ?? 0),
       statesByProject.get(projectId) ?? [],
       paidByAssignment.get(assignmentId) ?? 0,
+      parseContractFees(typeof r.contract_fees === "string" ? r.contract_fees : null),
     );
     if (payout.dueMinor > 0) {
       teamPayables.push({
