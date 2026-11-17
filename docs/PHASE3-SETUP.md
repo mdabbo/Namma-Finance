@@ -38,6 +38,9 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 14. `supabase-0021-time-entry-capture.sql` (only needed before an engineer logs
     time from the phone; run `supabase-0021-preflight.sql` first — it is
     read-only and must report `ready: true`. No desktop upgrade is required.)
+15. `supabase-0022-assignment-lifecycle.sql` (**required** for every desktop from
+    0.7.0 on: without it every sync stops with "Could not find the
+    'cancellation_reason' column of 'project_assignments' in the schema cache")
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by
