@@ -76,6 +76,7 @@ export function resetRig(): void {
   devices.clear();
   active = null;
   remote.clear();
+  timestamptzColumns.clear();
   transactionDepth = 0;
 }
 
@@ -172,6 +173,39 @@ function tableStore(name: string): Map<string, Row> {
   return m;
 }
 
+/**
+ * Real Supabase stores some columns as timestamptz and hands them back as
+ * "YYYY-MM-DDTHH:MM:SS+00:00", whatever spelling was written. The desktop writes
+ * "YYYY-MM-DD HH:MM:SS". Naming a table here makes the fake cloud answer the
+ * way Postgres does for those columns (the contract revision ones come from
+ * docs/supabase-0009-contract-revisions.sql).
+ */
+const timestamptzColumns = new Map<string, string[]>();
+
+export function emulateTimestamptz(table: string, columns: string[]): void {
+  timestamptzColumns.set(table, columns);
+}
+
+/** A moment the way PostgREST prints a timestamptz column. */
+export function postgrestTimestamp(value: string): string {
+  const naive = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(value);
+  const parsed = new Date(naive ? `${value.replace(" ", "T")}Z` : value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toISOString().replace(/\.000Z$/, "+00:00").replace("Z", "+00:00");
+}
+
+function respell(table: string, row: Row): Row {
+  for (const column of timestamptzColumns.get(table) ?? []) {
+    if (typeof row[column] === "string") row[column] = postgrestTimestamp(row[column] as string);
+  }
+  return row;
+}
+
+/** Re-spell the rows already in the fake cloud, as Postgres would have stored them. */
+export function respellRemote(table: string): void {
+  for (const row of tableStore(table).values()) respell(table, row);
+}
+
 /** All live (non-tombstoned) remote rows in a table, for assertions. */
 export function remoteRows(name: string): Row[] {
   return [...(remote.get(name)?.values() ?? [])];
@@ -254,7 +288,7 @@ class FakeQuery implements PromiseLike<QueryResult> {
       if (existing && Date.parse(row.updated_at as string) <= Date.parse(existing.updated_at as string)) {
         continue; // older-or-equal write loses; stored row stays
       }
-      store.set(key, { ...row });
+      store.set(key, respell(this.table, { ...row }));
     }
     return Promise.resolve({ data: null, error: null });
   }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { sameRecord } from "./comparable";
 import { execute, select, selectOne } from "../db";
 import { atomicCommand } from "../atomic";
 import { getSyncClient } from "./client";
@@ -367,14 +368,24 @@ async function pullTable(
         const base = await baseline(spec.name, uuid);
         const localJson = stableJson(await remoteShape(spec, local, maps));
         const remoteJson = stableJson(remotePayload(spec, remote));
-        const localChanged = base ? localJson !== base.payload_json : localJson !== remoteJson;
-        const remoteChanged = base ? remoteJson !== base.payload_json : localJson !== remoteJson;
-        if (localChanged && remoteChanged && localJson !== remoteJson) {
+        // Compare records, not their text: the cloud re-spells timestamps (see comparable.ts).
+        const identical = sameRecord(localJson, remoteJson);
+        const localChanged = base ? !sameRecord(localJson, base.payload_json) : !identical;
+        const remoteChanged = base ? !sameRecord(remoteJson, base.payload_json) : !identical;
+        if (localChanged && remoteChanged && !identical) {
           await preserveConflict(spec, uuid, remote.deleted_at != null ? "DELETE_VS_EDIT" : "CONCURRENT_EDIT", localJson, remoteJson, local.updated_at, remoteUpdated, report);
           await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
           continue;
         }
         if (localChanged && !remoteChanged) {
+          await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
+          continue;
+        }
+        if (!localChanged && !remoteChanged) {
+          // Same record on both sides. Applying the cloud copy would only rewrite
+          // the spelling of a timestamp, which an approved financial record
+          // refuses; record that the two agree and move on.
+          if (!base) await saveBaseline(spec.name, uuid, remoteJson, remoteUpdated);
           await setCursor("pull", spec.name, { u: remote.updated_at as string, k: uuid });
           continue;
         }
@@ -908,7 +919,7 @@ async function pushTable(
         if (remote && base) {
           const localJson = stableJson(await remoteShape(spec, row, maps));
           const remoteJson = stableJson(remotePayload(spec, remote));
-          if (localJson !== base.payload_json && remoteJson !== base.payload_json && localJson !== remoteJson) {
+          if (!sameRecord(localJson, base.payload_json) && !sameRecord(remoteJson, base.payload_json) && !sameRecord(localJson, remoteJson)) {
             await preserveConflict(spec, row.sync_uuid, remote.deleted_at != null ? "DELETE_VS_EDIT" : "CONCURRENT_EDIT", localJson, remoteJson, row.updated_at, remote.updated_at as string, report);
             continue;
           }
@@ -945,7 +956,7 @@ async function pushTable(
           if (verifyError) throw new Error(`verify push ${spec.name}: ${verifyError.message}`);
           const stored = verified?.[0] as Record<string, unknown> | undefined;
           const expectedJson = stableJson(remotePayload(spec, out));
-          if (!stored || stableJson(remotePayload(spec, stored)) !== expectedJson) {
+          if (!stored || !sameRecord(stableJson(remotePayload(spec, stored)), expectedJson)) {
             await preserveConflict(spec, out.uuid as string, stored?.deleted_at != null ? "DELETE_VS_EDIT" : "CONCURRENT_EDIT", expectedJson, stored ? stableJson(remotePayload(spec, stored)) : "{}", out.updated_at as string, (stored?.updated_at as string | undefined) ?? nowIso(), report);
             continue;
           }
