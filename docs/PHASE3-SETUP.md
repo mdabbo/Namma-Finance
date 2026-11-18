@@ -41,6 +41,9 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 15. `supabase-0022-assignment-lifecycle.sql` (**required** for every desktop from
     0.7.0 on: without it every sync stops with "Could not find the
     'cancellation_reason' column of 'project_assignments' in the schema cache")
+16. `supabase-0023-assignment-contract-fees.sql` (**required** before the first
+    sync from desktop schema 31: without it every sync stops with "Could not
+    find the 'contract_fees' column of 'project_assignments' in the schema cache")
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by
