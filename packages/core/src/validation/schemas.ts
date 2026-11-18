@@ -130,6 +130,8 @@ export const assignmentSchema = z.object({
   personId: z.number().int().positive(),
   projectId: z.number().int().positive(),
   agreedMinor: nonNegMinor,
+  /** Optional per-contract fees, contract number -> minor units. */
+  contractFees: z.record(z.string().min(1), nonNegMinor).nullish(),
   currency: currencyCode,
   fxRateMicro: fxMicro,
   scope: z.string().nullish(),

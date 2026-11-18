@@ -69,7 +69,7 @@ describe("two-device round-trip", () => {
 
     const peer = remoteRows("sync_peers")[0]!;
     expect(peer.financial_protocol_version).toBe(FINANCIAL_SYNC_PROTOCOL_VERSION);
-    expect(peer.schema_version).toBe(30);
+    expect(peer.schema_version).toBe(31);
     expect(peer.application_version).toBe("0.8.0");
     expect(peer.deleted_at).toBeNull();
   });

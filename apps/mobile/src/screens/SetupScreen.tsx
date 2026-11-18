@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { getClient, saveConfig, type SyncConfig } from "../lib/supabase";
+import { Text, TextInput } from "../components/AppText";
 import { card, colors } from "../lib/theme";
 
 /**
@@ -86,7 +87,8 @@ function Field({
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
-        style={styles.input}
+        // Addresses, keys and emails are always typed left to right, even in an Arabic layout.
+        style={[styles.input, styles.inputLtr]}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
@@ -112,6 +114,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 12,
     paddingVertical: 10, fontSize: 14, color: colors.text, backgroundColor: "#fff",
   },
+  inputLtr: { writingDirection: "ltr", textAlign: "left" }, // ltr-content
   error: { color: colors.red, fontSize: 13 },
   button: { backgroundColor: colors.brand, borderRadius: 10, paddingVertical: 12, alignItems: "center", marginTop: 4 },
   buttonDisabled: { opacity: 0.5 },

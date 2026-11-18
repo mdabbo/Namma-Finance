@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { allocate, allocateStageAmounts, parseContractFees, serializeContractFees } from "@mep/core";
 import type { AssignmentInput, AssignmentLifecycle, Person, PersonInput, PersonPayment, PersonPaymentInput, ProjectAssignment } from "@mep/core";
 import { execute, select, selectOne } from "../lib/db";
 import { atomicCommand } from "../lib/atomic";
@@ -90,6 +91,7 @@ interface AssignmentRow {
   person_id: number;
   project_id: number;
   agreed_minor: number;
+  contract_fees?: string | null;
   currency: string;
   fx_rate_micro: number;
   scope: string | null;
@@ -122,6 +124,7 @@ export interface SyncedAssignmentInput {
   personId: number;
   projectId: number;
   agreedMinor: number;
+  contractFees: string | null;
   currency: string;
   fxRateMicro: number;
   scope: string | null;
@@ -143,6 +146,7 @@ function mapAssignment(r: AssignmentRow): AssignmentListItem {
     personId: r.person_id,
     projectId: r.project_id,
     agreedMinor: r.agreed_minor,
+    contractFees: r.contract_fees ?? null,
     currency: r.currency,
     fxRateMicro: r.fx_rate_micro,
     scope: r.scope,
@@ -195,19 +199,21 @@ export async function listAssignmentsByProject(projectId: number): Promise<Assig
 
 export async function createAssignment(input: AssignmentInput): Promise<number> {
   const r = await execute(
-    `INSERT INTO project_assignments (person_id, project_id, agreed_minor, currency, fx_rate_micro, scope, progress_note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO project_assignments (person_id, project_id, agreed_minor, currency, fx_rate_micro, scope, progress_note, contract_fees)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [input.personId, input.projectId, input.agreedMinor, input.currency, input.fxRateMicro,
-     input.scope ?? null, input.progressNote ?? null],
+     input.scope ?? null, input.progressNote ?? null, serializeContractFees(input.contractFees ?? {})],
   );
   return r.lastInsertId ?? 0;
 }
 
 export async function updateAssignment(id: number, input: AssignmentInput): Promise<void> {
   await execute(
-    `UPDATE project_assignments SET agreed_minor=$1, currency=$2, fx_rate_micro=$3, scope=$4, progress_note=$5
-     WHERE id=$6`,
-    [input.agreedMinor, input.currency, input.fxRateMicro, input.scope ?? null, input.progressNote ?? null, id],
+    `UPDATE project_assignments SET agreed_minor=$1, currency=$2, fx_rate_micro=$3, scope=$4, progress_note=$5,
+       contract_fees=$6
+     WHERE id=$7`,
+    [input.agreedMinor, input.currency, input.fxRateMicro, input.scope ?? null, input.progressNote ?? null,
+     serializeContractFees(input.contractFees ?? {}), id],
   );
 }
 
@@ -276,8 +282,8 @@ async function cancelAssignmentUnlocked(id: number, reason: string): Promise<voi
 
 /** Fee released to this assignment by client certificates paid so far. */
 async function assignmentEarnedMinor(id: number): Promise<number> {
-  const assignment = await selectOne<{ projectId: number; agreedMinor: number }>(
-    "SELECT project_id AS projectId, agreed_minor AS agreedMinor FROM project_assignments WHERE id=$1",
+  const assignment = await selectOne<{ projectId: number; agreedMinor: number; contractFees: string | null }>(
+    "SELECT project_id AS projectId, agreed_minor AS agreedMinor, contract_fees AS contractFees FROM project_assignments WHERE id=$1",
     [id],
   );
   if (!assignment) throw new Error("ASSIGNMENT_NOT_FOUND");
@@ -291,7 +297,7 @@ async function assignmentEarnedMinor(id: number): Promise<number> {
     (state) => state.contract.projectId === assignment.projectId,
   );
   const { computeTeamPayout } = await import("@mep/core");
-  return computeTeamPayout(assignment.agreedMinor, states, paid?.paid ?? 0).releasedMinor;
+  return computeTeamPayout(assignment.agreedMinor, states, paid?.paid ?? 0, parseContractFees(assignment.contractFees)).releasedMinor;
 }
 
 export async function deleteAssignment(id: number): Promise<void> {
@@ -326,12 +332,11 @@ function validateSyncedAssignmentInput(input: SyncedAssignmentInput): void {
   }
 }
 
-async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number, cutoffDate: string): Promise<number> {
+async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number, cutoffDate: string, contractFees: string | null): Promise<number> {
   const { loadWorkspaceFinancials, CONTRACT_STATES_ONLY } = await import("./financials");
-  const { allocate } = await import("@mep/core");
   const workspace = await loadWorkspaceFinancials(CONTRACT_STATES_ONLY);
   const states = [...workspace.contractStates.values()].filter((state) => state.contract.projectId === projectId);
-  const stages: Array<{ weight: number; paid: boolean }> = [];
+  const stages: Array<{ weight: number; paid: boolean; contractNumber: string }> = [];
   const paidForCertificate = async (certificateId: number) => {
     const row = await selectOne<{ paid: number }>(
       `SELECT COALESCE(SUM(a.amount_minor),0) AS paid
@@ -351,7 +356,7 @@ async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number,
         const payable = state.certificates.find((item) => item.certificate.id === m.certificateId);
         const paid = payable ? await paidForCertificate(payable.certificate.id) : 0;
         const net = payable?.breakdown.netPayableMinor ?? 0;
-        stages.push({ weight: amounts[index] ?? 0, paid: payable !== undefined && paid >= Math.max(0, net) });
+        stages.push({ weight: amounts[index] ?? 0, paid: payable !== undefined && paid >= Math.max(0, net), contractNumber: state.contract.number });
       }
       continue;
     }
@@ -363,13 +368,18 @@ async function assignmentEarnedMinorAsOf(projectId: number, agreedMinor: number,
       stages.push({
         weight: Math.max(0, item.certificate.grossMinor - item.certificate.discountMinor),
         paid: paid >= Math.max(0, item.breakdown.netPayableMinor),
+        contractNumber: state.contract.number,
       });
     }
     if (state.contract.valueMinor > scheduled) {
-      stages.push({ weight: state.contract.valueMinor - scheduled, paid: false });
+      stages.push({ weight: state.contract.valueMinor - scheduled, paid: false, contractNumber: state.contract.number });
     }
   }
-  const amounts = allocate(agreedMinor, stages.map((stage) => stage.weight));
+  const amounts = allocateStageAmounts(
+    agreedMinor,
+    stages.map((stage) => ({ contractNumber: stage.contractNumber, weightMinor: stage.weight })),
+    parseContractFees(contractFees),
+  );
   return stages.reduce((sum, stage, index) => sum + (stage.paid ? amounts[index] ?? 0 : 0), 0);
 }
 
@@ -384,7 +394,7 @@ async function applySyncedAssignmentDouble(input: SyncedAssignmentInput): Promis
   if (!parent) throw new Error("ASSIGNMENT_PARENT_NOT_FOUND");
   if (parent.projectArchivedAt !== null && input.archivedAt === null) throw new Error("PROJECT_ARCHIVED");
   const derivedEarned = input.lifecycleStatus === "CANCELLED"
-    ? await assignmentEarnedMinorAsOf(input.projectId, input.agreedMinor, input.cancelledAt!.slice(0, 10))
+    ? await assignmentEarnedMinorAsOf(input.projectId, input.agreedMinor, input.cancelledAt!.slice(0, 10), input.contractFees)
     : null;
   if (input.lifecycleStatus === "CANCELLED" && input.earnedMinorAtCancellation !== derivedEarned) {
     throw new Error("SYNC_CANCELLATION_EARNED_MISMATCH");
@@ -418,25 +428,25 @@ async function applySyncedAssignmentDouble(input: SyncedAssignmentInput): Promis
       `UPDATE project_assignments SET agreed_minor=$1,currency=$2,fx_rate_micro=$3,scope=$4,
          progress_note=$5,archived_at=$6,archived_by=$7,archive_reason=$8,lifecycle_status=$9,
          completed_at=$10,cancelled_at=$11,cancellation_reason=$12,
-         earned_minor_at_cancellation=$13,sync_uuid=$14,updated_at=$15
-       WHERE id=$16`,
+         earned_minor_at_cancellation=$13,sync_uuid=$14,updated_at=$15,contract_fees=$16
+       WHERE id=$17`,
       [input.agreedMinor, input.currency, input.fxRateMicro, input.scope, input.progressNote,
        input.archivedAt, input.archivedBy, input.archiveReason, input.lifecycleStatus,
        input.completedAt, input.cancelledAt, input.cancellationReason?.trim() ?? null,
-       derivedEarned, input.syncUuid, input.updatedAt, input.localId],
+       derivedEarned, input.syncUuid, input.updatedAt, input.contractFees, input.localId],
     );
   } else {
     const r = await execute(
       `INSERT INTO project_assignments
          (person_id,project_id,agreed_minor,currency,fx_rate_micro,scope,progress_note,
           created_at,archived_at,archived_by,archive_reason,lifecycle_status,completed_at,
-          cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at,contract_fees)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [input.personId, input.projectId, input.agreedMinor, input.currency, input.fxRateMicro,
        input.scope, input.progressNote, input.createdAt ?? input.updatedAt, input.archivedAt,
        input.archivedBy, input.archiveReason, input.lifecycleStatus, input.completedAt,
        input.cancelledAt, input.cancellationReason?.trim() ?? null, derivedEarned,
-       input.syncUuid, input.updatedAt],
+       input.syncUuid, input.updatedAt, input.contractFees],
     );
     void r;
   }

@@ -8,6 +8,7 @@ import {
   computeReadyToBill,
   computeProjectCostProfile,
   computeTeamPayout,
+  parseContractFees,
   laborCostMinor,
   parseMilestones,
   resolveEffectiveFxSnapshot,
@@ -352,14 +353,14 @@ async function loadWorkspaceFinancialsOnce(
   // team payables: client paid a certificate → the matching stage of every
   // assignment on that project becomes payable to the team member
   const assignments = await read<{
-    id: number; person_id: number; project_id: number; agreed_minor: number;
+    id: number; person_id: number; project_id: number; agreed_minor: number; contract_fees: string | null;
     currency: string; fx_rate_micro: number; person_name: string;
     lifecycle_status: AssignmentLifecycle;
     earned_minor_at_cancellation: number | null;
     archived_at: string | null;
     person_archived_at: string | null;
   }>(
-    `SELECT a.id, a.person_id, a.project_id, a.agreed_minor, a.currency, a.fx_rate_micro,
+    `SELECT a.id, a.person_id, a.project_id, a.agreed_minor, a.contract_fees, a.currency, a.fx_rate_micro,
             a.lifecycle_status, a.earned_minor_at_cancellation, a.archived_at,
             pe.name AS person_name, pe.archived_at AS person_archived_at
      FROM project_assignments a
@@ -393,6 +394,7 @@ async function loadWorkspaceFinancialsOnce(
       a.agreed_minor,
       statesByProject.get(a.project_id) ?? [],
       paidByAssignment.get(a.id) ?? 0,
+      parseContractFees(a.contract_fees),
     );
     const position = assignmentCostPosition({
       lifecycle: a.lifecycle_status,

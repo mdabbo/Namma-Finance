@@ -1,7 +1,8 @@
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { formatMinor, type AppLocale } from "@mep/core";
 import { useWorkspace } from "../hooks/useWorkspace";
+import { Text } from "../components/AppText";
 import { card, colors } from "../lib/theme";
 
 /** Office overview: consolidated KPIs (EGP), face values per currency, alerts. */

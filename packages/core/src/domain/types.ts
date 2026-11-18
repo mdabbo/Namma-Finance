@@ -201,6 +201,8 @@ export interface ProjectAssignment {
   personId: number;
   projectId: number;
   agreedMinor: number;
+  /** JSON `{ "<contract number>": feeMinor }`; null = one fee split by value share. */
+  contractFees?: string | null;
   currency: string;
   fxRateMicro: number;
   scope: string | null;

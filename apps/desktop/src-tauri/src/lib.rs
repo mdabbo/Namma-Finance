@@ -334,6 +334,7 @@ struct SyncedAssignmentInput {
     person_id: i64,
     project_id: i64,
     agreed_minor: i64,
+    contract_fees: Option<String>,
     currency: String,
     fx_rate_micro: i64,
     scope: Option<String>,
@@ -2537,10 +2538,11 @@ async fn assignment_released_minor_as_of(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     project_id: i64,
     agreed_minor: i64,
+    contract_fees: Option<&str>,
     cutoff_date: &str,
 ) -> Result<i64, String> {
     let contracts = sqlx::query(
-        "SELECT c.id, c.value_minor, c.valuation_mode, c.milestones
+        "SELECT c.id, c.number, c.value_minor, c.valuation_mode, c.milestones
          FROM contracts c JOIN projects p ON p.id=c.project_id
          WHERE c.project_id=? AND c.archived_at IS NULL AND p.archived_at IS NULL
          ORDER BY c.id",
@@ -2553,6 +2555,7 @@ async fn assignment_released_minor_as_of(
     let mut stages: Vec<PayoutStage> = Vec::new();
     for contract in contracts {
         let contract_id: i64 = contract.try_get("id").map_err(|e| e.to_string())?;
+        let contract_number: String = contract.try_get("number").map_err(|e| e.to_string())?;
         let value_minor: i64 = contract.try_get("value_minor").map_err(|e| e.to_string())?;
         let valuation_mode: String = contract
             .try_get("valuation_mode")
@@ -2604,6 +2607,7 @@ async fn assignment_released_minor_as_of(
             let amounts = milestone_amounts(value_minor, &percents)?;
             for (index, (_, certificate_id)) in milestones.iter().enumerate() {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: amounts.get(index).copied().unwrap_or(0),
                     certificate_status: certificate_id
                         .and_then(|id| status_by_id.get(&id).cloned()),
@@ -2613,6 +2617,7 @@ async fn assignment_released_minor_as_of(
             let mut scheduled = 0_i64;
             for payable in &payables {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: payable.certified_base_minor,
                     certificate_status: status_by_id.get(&payable.id).cloned(),
                 });
@@ -2620,6 +2625,7 @@ async fn assignment_released_minor_as_of(
             }
             if value_minor > scheduled {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: value_minor - scheduled,
                     certificate_status: None,
                 });
@@ -2628,7 +2634,16 @@ async fn assignment_released_minor_as_of(
     }
 
     let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
-    let amounts = allocate_largest_remainder(agreed_minor, &weights)?;
+    let contract_numbers: Vec<&str> = stages
+        .iter()
+        .map(|stage| stage.contract_number.as_str())
+        .collect();
+    let amounts = allocate_stage_amounts(
+        agreed_minor,
+        &contract_numbers,
+        &weights,
+        &parse_contract_fees(contract_fees),
+    )?;
     let mut released = 0_i64;
     for (index, stage) in stages.iter().enumerate() {
         if stage.certificate_status.as_deref() == Some("PAID") {
@@ -2665,9 +2680,14 @@ async fn apply_synced_assignment_transaction(
     let derived_cancelled_earned = if input.lifecycle_status == "CANCELLED" {
         let cancelled_at = input.cancelled_at.as_deref().unwrap_or_default();
         let cutoff = cancelled_at.get(0..10).unwrap_or(cancelled_at);
-        let earned =
-            assignment_released_minor_as_of(&mut tx, input.project_id, input.agreed_minor, cutoff)
-                .await?;
+        let earned = assignment_released_minor_as_of(
+            &mut tx,
+            input.project_id,
+            input.agreed_minor,
+            input.contract_fees.as_deref(),
+            cutoff,
+        )
+        .await?;
         if input.earned_minor_at_cancellation != Some(earned) {
             return Err("SYNC_CANCELLATION_EARNED_MISMATCH".into());
         }
@@ -2716,7 +2736,7 @@ async fn apply_synced_assignment_transaction(
             "UPDATE project_assignments SET agreed_minor=?, currency=?, fx_rate_micro=?,
                scope=?, progress_note=?, archived_at=?, archived_by=?, archive_reason=?,
                lifecycle_status=?, completed_at=?, cancelled_at=?, cancellation_reason=?,
-               earned_minor_at_cancellation=?, sync_uuid=?, updated_at=?
+               earned_minor_at_cancellation=?, sync_uuid=?, updated_at=?, contract_fees=?
              WHERE id=?",
         )
         .bind(input.agreed_minor)
@@ -2734,6 +2754,7 @@ async fn apply_synced_assignment_transaction(
         .bind(derived_cancelled_earned)
         .bind(&input.sync_uuid)
         .bind(&input.updated_at)
+        .bind(&input.contract_fees)
         .bind(id)
         .execute(&mut *tx)
         .await
@@ -2744,8 +2765,8 @@ async fn apply_synced_assignment_transaction(
             "INSERT INTO project_assignments (
                person_id,project_id,agreed_minor,currency,fx_rate_micro,scope,progress_note,
                created_at,archived_at,archived_by,archive_reason,lifecycle_status,completed_at,
-               cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at
-             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               cancelled_at,cancellation_reason,earned_minor_at_cancellation,sync_uuid,updated_at,contract_fees
+             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(input.person_id)
         .bind(input.project_id)
@@ -2765,6 +2786,7 @@ async fn apply_synced_assignment_transaction(
         .bind(derived_cancelled_earned)
         .bind(&input.sync_uuid)
         .bind(&input.updated_at)
+        .bind(&input.contract_fees)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -2804,7 +2826,7 @@ async fn create_person_payment_transaction(
         return Err("DUPLICATE_PERSON_PAYMENT".into());
     }
     let context = sqlx::query(
-        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.contract_fees, a.lifecycle_status,
                 a.earned_minor_at_cancellation, a.archived_at, p.archived_at AS project_archived_at,
                 pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
          FROM project_assignments a
@@ -2847,6 +2869,9 @@ async fn create_person_payment_transaction(
         return Err("ARCHIVED_ASSIGNMENT_CANNOT_BE_PAID".into());
     }
     let agreed_minor: i64 = context.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let contract_fees: Option<String> = context
+        .try_get("contract_fees")
+        .map_err(|e| e.to_string())?;
     let lifecycle: String = context
         .try_get("lifecycle_status")
         .map_err(|e| e.to_string())?;
@@ -2856,7 +2881,7 @@ async fn create_person_payment_transaction(
     let earned_minor = if lifecycle == "CANCELLED" {
         frozen_earned.unwrap_or(0).max(0)
     } else {
-        assignment_released_minor(&mut tx, project_id, agreed_minor)
+        assignment_released_minor(&mut tx, project_id, agreed_minor, contract_fees.as_deref())
             .await?
             .max(0)
     };
@@ -2933,7 +2958,7 @@ async fn assignment_person_payment_due(
     exclude_payment_id: Option<i64>,
 ) -> Result<(i64, i64, String, String, String, i64, i64), String> {
     let context = sqlx::query(
-        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.lifecycle_status,
+        "SELECT a.project_id, a.currency, a.fx_rate_micro, a.agreed_minor, a.contract_fees, a.lifecycle_status,
                 a.earned_minor_at_cancellation, a.archived_at, p.archived_at AS project_archived_at,
                 pe.name AS person_name, pe.type AS person_type, pe.archived_at AS person_archived_at
          FROM project_assignments a
@@ -2962,6 +2987,9 @@ async fn assignment_person_payment_due(
     }
     let project_id: i64 = context.try_get("project_id").map_err(|e| e.to_string())?;
     let agreed_minor: i64 = context.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let contract_fees: Option<String> = context
+        .try_get("contract_fees")
+        .map_err(|e| e.to_string())?;
     let lifecycle: String = context
         .try_get("lifecycle_status")
         .map_err(|e| e.to_string())?;
@@ -2971,7 +2999,7 @@ async fn assignment_person_payment_due(
     let earned_minor = if lifecycle == "CANCELLED" {
         frozen_earned.unwrap_or(0).max(0)
     } else {
-        assignment_released_minor(tx, project_id, agreed_minor)
+        assignment_released_minor(tx, project_id, agreed_minor, contract_fees.as_deref())
             .await?
             .max(0)
     };
@@ -3423,6 +3451,81 @@ fn allocate_largest_remainder(total_minor: i64, weights: &[i64]) -> Result<Vec<i
         .collect()
 }
 
+/// Per-contract fees: JSON `{"<contract number>": minor}`. Mirrors
+/// `parseContractFees` — malformed input or non-integer / negative entries are
+/// dropped, never an error.
+fn parse_contract_fees(raw: Option<&str>) -> std::collections::HashMap<String, i64> {
+    let mut fees = std::collections::HashMap::new();
+    let Some(raw) = raw else { return fees };
+    let Ok(JsonValue::Object(map)) = serde_json::from_str::<JsonValue>(raw) else {
+        return fees;
+    };
+    for (number, value) in map {
+        if let Some(fee) = value.as_i64() {
+            if fee >= 0 {
+                fees.insert(number, fee);
+            }
+        }
+    }
+    fees
+}
+
+/// Split an agreed fee over payout stages. Mirrors `allocateStageAmounts` in
+/// @mep/core: a contract with a fee splits exactly that fee (capped at what is
+/// left of the agreed fee, in contract order) by its own stage weights; the
+/// remaining stages share what is left, proportionally. With no fees this is
+/// the original single-fee split.
+fn allocate_stage_amounts(
+    agreed_minor: i64,
+    contract_numbers: &[&str],
+    weights: &[i64],
+    fees: &std::collections::HashMap<String, i64>,
+) -> Result<Vec<i64>, String> {
+    let mut amounts = vec![0_i64; weights.len()];
+    let mut order: Vec<&str> = Vec::new();
+    for number in contract_numbers {
+        if !order.contains(number) {
+            order.push(number);
+        }
+    }
+    let mut remaining = agreed_minor;
+    let mut with_fee: Vec<&str> = Vec::new();
+    for number in &order {
+        let Some(fee) = fees.get(*number) else {
+            continue;
+        };
+        let applied = (*fee).min(remaining);
+        remaining -= applied;
+        with_fee.push(number);
+        let indexes: Vec<usize> = (0..weights.len())
+            .filter(|index| contract_numbers[*index] == *number)
+            .collect();
+        let parts = allocate_largest_remainder(
+            applied,
+            &indexes
+                .iter()
+                .map(|index| weights[*index])
+                .collect::<Vec<_>>(),
+        )?;
+        for (position, index) in indexes.iter().enumerate() {
+            amounts[*index] = parts[position];
+        }
+    }
+    let free: Vec<usize> = (0..weights.len())
+        .filter(|index| !with_fee.contains(&contract_numbers[*index]))
+        .collect();
+    if !free.is_empty() {
+        let parts = allocate_largest_remainder(
+            remaining,
+            &free.iter().map(|index| weights[*index]).collect::<Vec<_>>(),
+        )?;
+        for (position, index) in free.iter().enumerate() {
+            amounts[*index] = parts[position];
+        }
+    }
+    Ok(amounts)
+}
+
 /// Milestone amounts from a contract value, matching `milestoneAmounts`.
 ///
 /// A plan totalling exactly 100% is allocated by largest remainder so the parts
@@ -3445,6 +3548,7 @@ fn milestone_amounts(value_minor: i64, percents_bp: &[i64]) -> Result<Vec<i64>, 
 /// One stage of a person's payout schedule: how much of the contract it
 /// represents, and the status of the certificate that releases it.
 struct PayoutStage {
+    contract_number: String,
     weight_minor: i64,
     certificate_status: Option<String>,
 }
@@ -3468,11 +3572,12 @@ async fn assignment_released_minor(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     project_id: i64,
     agreed_minor: i64,
+    contract_fees: Option<&str>,
 ) -> Result<i64, String> {
     // Same boundary and order as the read model: live contracts of a live
     // project, ascending id.
     let contracts = sqlx::query(
-        "SELECT c.id, c.value_minor, c.valuation_mode, c.milestones
+        "SELECT c.id, c.number, c.value_minor, c.valuation_mode, c.milestones
          FROM contracts c JOIN projects p ON p.id=c.project_id
          WHERE c.project_id=? AND c.archived_at IS NULL AND p.archived_at IS NULL
          ORDER BY c.id",
@@ -3485,6 +3590,7 @@ async fn assignment_released_minor(
     let mut stages: Vec<PayoutStage> = Vec::new();
     for contract in contracts {
         let contract_id: i64 = contract.try_get("id").map_err(|e| e.to_string())?;
+        let contract_number: String = contract.try_get("number").map_err(|e| e.to_string())?;
         let value_minor: i64 = contract.try_get("value_minor").map_err(|e| e.to_string())?;
         let valuation_mode: String = contract
             .try_get("valuation_mode")
@@ -3509,6 +3615,7 @@ async fn assignment_released_minor(
             let amounts = milestone_amounts(value_minor, &percents)?;
             for (index, (_, certificate_id)) in milestones.iter().enumerate() {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: amounts.get(index).copied().unwrap_or(0),
                     certificate_status: certificate_id
                         .and_then(|id| status_by_id.get(&id).cloned()),
@@ -3518,6 +3625,7 @@ async fn assignment_released_minor(
             let mut scheduled = 0_i64;
             for payable in &payables {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: payable.certified_base_minor,
                     certificate_status: Some(payable.status.clone()),
                 });
@@ -3526,6 +3634,7 @@ async fn assignment_released_minor(
             // Contract value not yet certified is a single pending remainder.
             if value_minor > scheduled {
                 stages.push(PayoutStage {
+                    contract_number: contract_number.clone(),
                     weight_minor: value_minor - scheduled,
                     certificate_status: None,
                 });
@@ -3534,7 +3643,16 @@ async fn assignment_released_minor(
     }
 
     let weights: Vec<i64> = stages.iter().map(|stage| stage.weight_minor).collect();
-    let amounts = allocate_largest_remainder(agreed_minor, &weights)?;
+    let contract_numbers: Vec<&str> = stages
+        .iter()
+        .map(|stage| stage.contract_number.as_str())
+        .collect();
+    let amounts = allocate_stage_amounts(
+        agreed_minor,
+        &contract_numbers,
+        &weights,
+        &parse_contract_fees(contract_fees),
+    )?;
     let mut released = 0_i64;
     for (index, stage) in stages.iter().enumerate() {
         if stage.certificate_status.as_deref() == Some("PAID") {
@@ -3636,7 +3754,7 @@ async fn cancel_assignment_transaction(
     }
     let mut tx = begin_immediate(pool).await?;
     let row = sqlx::query(
-        "SELECT a.agreed_minor, a.lifecycle_status, a.project_id, p.archived_at AS project_archived_at
+        "SELECT a.agreed_minor, a.contract_fees, a.lifecycle_status, a.project_id, p.archived_at AS project_archived_at
          FROM project_assignments a JOIN projects p ON p.id=a.project_id WHERE a.id=?",
     )
     .bind(assignment_id)
@@ -3645,6 +3763,7 @@ async fn cancel_assignment_transaction(
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "ASSIGNMENT_NOT_FOUND".to_string())?;
     let agreed_minor: i64 = row.try_get("agreed_minor").map_err(|e| e.to_string())?;
+    let contract_fees: Option<String> = row.try_get("contract_fees").map_err(|e| e.to_string())?;
     let lifecycle: String = row.try_get("lifecycle_status").map_err(|e| e.to_string())?;
     let project_id: i64 = row.try_get("project_id").map_err(|e| e.to_string())?;
     let project_archived_at: Option<String> = row
@@ -3657,7 +3776,9 @@ async fn cancel_assignment_transaction(
         return Err("PROJECT_ARCHIVED".into());
     }
 
-    let earned_minor = assignment_released_minor(&mut tx, project_id, agreed_minor).await?;
+    let earned_minor =
+        assignment_released_minor(&mut tx, project_id, agreed_minor, contract_fees.as_deref())
+            .await?;
     // Released value is a subset of an allocation of the agreed fee, so this
     // cannot fail — it is kept as a assertion on the derivation itself rather
     // than a check on an untrusted input.
@@ -5281,7 +5402,7 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 30;
+const CURRENT_SCHEMA_VERSION: i64 = 31;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 /// Migration lineage after the v0.7.0 rebase. The baseline recreates schema 24
@@ -6324,6 +6445,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
+            include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -6731,6 +6853,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
+            include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7483,6 +7606,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0006_sync_domain_conflict_kind.sql"),
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
+            include_str!("../migrations/0009_assignment_contract_fees.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7711,7 +7835,9 @@ mod financial_transaction_tests {
             // remainder stage, so nothing is released.
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 0
             );
             tx.commit().await.unwrap();
@@ -7720,7 +7846,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 1, "PC-1", 50_000, "PAID").await;
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 20_000
             );
             tx.commit().await.unwrap();
@@ -7729,7 +7857,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 2, "PC-2", 50_000, "APPROVED").await;
             let mut tx = begin_immediate(&pool).await.unwrap();
             assert_eq!(
-                assignment_released_minor(&mut tx, 1, 40_000).await.unwrap(),
+                assignment_released_minor(&mut tx, 1, 40_000, None)
+                    .await
+                    .unwrap(),
                 20_000
             );
             tx.commit().await.unwrap();
@@ -7771,7 +7901,9 @@ mod financial_transaction_tests {
             add_certificate(&pool, 2, "PC-DRAFT", 50_000, "DRAFT").await;
 
             let mut tx = begin_immediate(&pool).await.unwrap();
-            let released = assignment_released_minor(&mut tx, 1, 40_000).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000, None)
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             // Two stages of equal base: the paid one releases exactly half. If
             // the draft's base were dropped, the paid stage would absorb the
@@ -8139,6 +8271,7 @@ mod financial_transaction_tests {
                     person_id: 1,
                     project_id: 1,
                     agreed_minor: 100_000,
+                    contract_fees: None,
                     currency: "EGP".into(),
                     fx_rate_micro: 1_000_000,
                     scope: None,
@@ -8170,6 +8303,7 @@ mod financial_transaction_tests {
                     person_id: 1,
                     project_id: 1,
                     agreed_minor: 100_000,
+                    contract_fees: None,
                     currency: "EGP".into(),
                     fx_rate_micro: 1_000_000,
                     scope: None,
@@ -8477,6 +8611,41 @@ mod financial_transaction_tests {
         });
     }
 
+    /// The per-contract fee rule is asserted from the same fixtures as the
+    /// TypeScript engine (`allocateStageAmounts`), so the two cannot drift.
+    #[test]
+    fn stage_allocation_fixtures_match_typescript() {
+        let raw = include_str!("../../../../fixtures/team-payout.json");
+        let fixtures: serde_json::Value = serde_json::from_str(raw).expect("fixture json");
+        let cases = fixtures["stageAllocations"]
+            .as_array()
+            .expect("stageAllocations array");
+        assert!(cases.len() >= 6, "stage allocation fixtures too thin");
+        for case in cases {
+            let name = case["name"].as_str().unwrap_or("unnamed");
+            let agreed = case["agreedMinor"].as_i64().unwrap();
+            let stages = case["stages"].as_array().unwrap();
+            let numbers: Vec<&str> = stages
+                .iter()
+                .map(|stage| stage["contractNumber"].as_str().unwrap())
+                .collect();
+            let weights: Vec<i64> = stages
+                .iter()
+                .map(|stage| stage["weightMinor"].as_i64().unwrap())
+                .collect();
+            let fees = parse_contract_fees(Some(&case["fees"].to_string()));
+            let expected: Vec<i64> = case["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_i64().unwrap())
+                .collect();
+            let actual = allocate_stage_amounts(agreed, &numbers, &weights, &fees)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(actual, expected, "stage allocation mismatch: {name}");
+        }
+    }
+
     /// The allocation arithmetic the payout schedule stands on, asserted
     /// against the same file the TypeScript engine asserts.
     ///
@@ -8601,7 +8770,9 @@ mod financial_transaction_tests {
             .unwrap();
 
             let mut tx = begin_immediate(&pool).await.unwrap();
-            let released = assignment_released_minor(&mut tx, 1, 40_000).await.unwrap();
+            let released = assignment_released_minor(&mut tx, 1, 40_000, None)
+                .await
+                .unwrap();
             tx.commit().await.unwrap();
             assert_eq!(released, 20_000, "only the paid milestone releases");
         });
@@ -9610,6 +9781,12 @@ pub fn run() {
             version: 8,
             description: "stage_progress_log",
             sql: include_str!("../migrations/0008_stage_progress_log.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "assignment_contract_fees",
+            sql: include_str!("../migrations/0009_assignment_contract_fees.sql"),
             kind: MigrationKind::Up,
         },
     ];

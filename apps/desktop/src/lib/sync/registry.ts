@@ -135,7 +135,7 @@ export const SYNC_TABLES: SyncTableSpec[] = [
     columns: ["person_id", "project_id", "agreed_minor", "currency", "fx_rate_micro", "scope",
       "progress_note", "created_at", "archived_at", "archived_by", "archive_reason",
       "lifecycle_status", "completed_at", "cancelled_at", "cancellation_reason",
-      "earned_minor_at_cancellation"],
+      "earned_minor_at_cancellation", "contract_fees"],
     fks: [
       { column: "person_id", parent: "people" },
       { column: "project_id", parent: "projects" },

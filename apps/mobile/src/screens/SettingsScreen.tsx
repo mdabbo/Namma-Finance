@@ -1,7 +1,9 @@
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { useSupabase } from "../hooks/useWorkspace";
 import { saveLanguage } from "../lib/supabase";
+import { Text } from "../components/AppText";
+import { syncNativeDirection } from "../lib/nativeDirection";
 import { card, colors } from "../lib/theme";
 import { APP_VERSION, RELEASE_CHANNEL } from "../generated/release";
 
@@ -10,7 +12,10 @@ export function SettingsScreen({ onSignedOut }: { onSignedOut: () => void }) {
   const client = useSupabase();
 
   async function switchLanguage(lang: "ar" | "en") {
+    // The layout flips at once (App.tsx reads the language); this only keeps
+    // the phone's own direction in step for the next time the app is opened.
     await i18n.changeLanguage(lang);
+    syncNativeDirection(lang);
     await saveLanguage(lang);
   }
 

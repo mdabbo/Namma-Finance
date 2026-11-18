@@ -6,6 +6,7 @@ import {
   assignmentCostPosition,
   assignmentSchema,
   computeTeamPayout,
+  parseContractFees,
   personPaymentSchema,
   type AssignmentCostPosition,
   type AssignmentInput,
@@ -24,6 +25,7 @@ import {
 import { useWorkspaceFinancials } from "../../repositories/financials";
 import { useProjects } from "../../repositories/projects";
 import { Badge, Button, Card, DateInput, EmptyState, Field, Input, Modal, Select, Textarea } from "../../components/ui";
+import { ContractFeesEditor } from "./ContractFeesEditor";
 import { MoneyInput } from "../../components/MoneyInput";
 import { PrintPortal } from "../../components/PrintPortal";
 import { todayIso, useFormat } from "../../lib/format";
@@ -60,7 +62,7 @@ export function PersonDetailPage() {
   }
   const payoutOf = (a: AssignmentListItem): TeamPayoutState => {
     const paid = payments.filter((p) => p.assignmentId === a.id).reduce((s, p) => s + p.amountMinor, 0);
-    return computeTeamPayout(a.agreedMinor, statesByProject.get(a.projectId) ?? [], paid);
+    return computeTeamPayout(a.agreedMinor, statesByProject.get(a.projectId) ?? [], paid, parseContractFees(a.contractFees));
   };
 
   /**
@@ -453,12 +455,16 @@ function AssignmentForm({
     scope: initial?.scope ?? "",
     progressNote: initial?.progressNote ?? "",
   });
+  const [contractFees, setContractFees] = useState<Record<string, number>>(parseContractFees(initial?.contractFees));
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const feesExceedAgreed = Object.values(contractFees).reduce((a, b) => a + b, 0) > form.agreedMinor;
 
   function submit() {
     const parsed = assignmentSchema.safeParse({
       ...form,
       personId,
+      contractFees,
       scope: form.scope || null,
       progressNote: form.progressNote || null,
     });
@@ -498,6 +504,13 @@ function AssignmentForm({
         <Field label={t("people.agreedAmount")}>
           <MoneyInput currency={form.currency} valueMinor={form.agreedMinor} onChange={(v) => setForm((f) => ({ ...f, agreedMinor: v ?? 0 }))} />
         </Field>
+        <ContractFeesEditor
+          projectId={form.projectId}
+          currency={form.currency}
+          agreedMinor={form.agreedMinor}
+          value={contractFees}
+          onChange={setContractFees}
+        />
         <Field label={t("people.workProgress")}>
           <Input value={form.progressNote} onChange={(e) => setForm((f) => ({ ...f, progressNote: e.target.value }))} />
         </Field>
@@ -507,7 +520,7 @@ function AssignmentForm({
       </div>
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={onClose}>{t("common.cancel")}</Button>
-        <Button variant="primary" onClick={submit} disabled={busy}>{t("common.save")}</Button>
+        <Button variant="primary" onClick={submit} disabled={busy || feesExceedAgreed}>{t("common.save")}</Button>
       </div>
     </Modal>
   );

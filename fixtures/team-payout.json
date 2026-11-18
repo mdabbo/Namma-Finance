@@ -231,17 +231,42 @@
       "name": "lump sum keeps draft weight and releases paid certificate only",
       "agreedMinor": 40000,
       "personPaidMinor": 5000,
-      "contracts": [{
-        "id": 1, "number": "C-1", "valueMinor": 100000, "valuationMode": "LUMP_SUM",
-        "milestones": null,
-        "certificates": [
-          { "id": 1, "seq": 1, "number": "PC-1", "status": "PAID", "baseMinor": 50000 },
-          { "id": 2, "seq": 2, "number": "PC-2", "status": "DRAFT", "baseMinor": 50000 }
-        ]
-      }],
+      "contracts": [
+        {
+          "id": 1,
+          "number": "C-1",
+          "valueMinor": 100000,
+          "valuationMode": "LUMP_SUM",
+          "milestones": null,
+          "certificates": [
+            {
+              "id": 1,
+              "seq": 1,
+              "number": "PC-1",
+              "status": "PAID",
+              "baseMinor": 50000
+            },
+            {
+              "id": 2,
+              "seq": 2,
+              "number": "PC-2",
+              "status": "DRAFT",
+              "baseMinor": 50000
+            }
+          ]
+        }
+      ],
       "expectedStages": [
-        { "weightMinor": 50000, "amountMinor": 20000, "status": "PAYABLE" },
-        { "weightMinor": 50000, "amountMinor": 20000, "status": "AWAITING_COLLECTION" }
+        {
+          "weightMinor": 50000,
+          "amountMinor": 20000,
+          "status": "PAYABLE"
+        },
+        {
+          "weightMinor": 50000,
+          "amountMinor": 20000,
+          "status": "AWAITING_COLLECTION"
+        }
       ],
       "expectedReleasedMinor": 20000,
       "expectedDueMinor": 15000
@@ -250,22 +275,63 @@
       "name": "milestones release by linked certificate",
       "agreedMinor": 10001,
       "personPaidMinor": 0,
-      "contracts": [{
-        "id": 2, "number": "C-MS", "valueMinor": 100000, "valuationMode": "MILESTONES",
-        "milestones": [
-          { "title": "Concept", "percentBp": 3334, "certificateId": 12 },
-          { "title": "IFC", "percentBp": 3333, "certificateId": 11 },
-          { "title": "Support", "percentBp": 3333, "certificateId": null }
-        ],
-        "certificates": [
-          { "id": 11, "seq": 1, "number": "MS-1", "status": "APPROVED", "baseMinor": 33330 },
-          { "id": 12, "seq": 2, "number": "MS-2", "status": "PAID", "baseMinor": 33340 }
-        ]
-      }],
+      "contracts": [
+        {
+          "id": 2,
+          "number": "C-MS",
+          "valueMinor": 100000,
+          "valuationMode": "MILESTONES",
+          "milestones": [
+            {
+              "title": "Concept",
+              "percentBp": 3334,
+              "certificateId": 12
+            },
+            {
+              "title": "IFC",
+              "percentBp": 3333,
+              "certificateId": 11
+            },
+            {
+              "title": "Support",
+              "percentBp": 3333,
+              "certificateId": null
+            }
+          ],
+          "certificates": [
+            {
+              "id": 11,
+              "seq": 1,
+              "number": "MS-1",
+              "status": "APPROVED",
+              "baseMinor": 33330
+            },
+            {
+              "id": 12,
+              "seq": 2,
+              "number": "MS-2",
+              "status": "PAID",
+              "baseMinor": 33340
+            }
+          ]
+        }
+      ],
       "expectedStages": [
-        { "weightMinor": 33340, "amountMinor": 3335, "status": "PAYABLE" },
-        { "weightMinor": 33330, "amountMinor": 3333, "status": "AWAITING_COLLECTION" },
-        { "weightMinor": 33330, "amountMinor": 3333, "status": "PENDING" }
+        {
+          "weightMinor": 33340,
+          "amountMinor": 3335,
+          "status": "PAYABLE"
+        },
+        {
+          "weightMinor": 33330,
+          "amountMinor": 3333,
+          "status": "AWAITING_COLLECTION"
+        },
+        {
+          "weightMinor": 33330,
+          "amountMinor": 3333,
+          "status": "PENDING"
+        }
       ],
       "expectedReleasedMinor": 3335,
       "expectedDueMinor": 3335
@@ -275,18 +341,236 @@
       "agreedMinor": 7,
       "personPaidMinor": 1,
       "contracts": [
-        { "id": 20, "number": "C-20", "valueMinor": 1, "valuationMode": "LUMP_SUM", "milestones": null,
-          "certificates": [{ "id": 20, "seq": 1, "number": "B", "status": "PAID", "baseMinor": 1 }] },
-        { "id": 10, "number": "C-10", "valueMinor": 2, "valuationMode": "LUMP_SUM", "milestones": null,
-          "certificates": [{ "id": 10, "seq": 1, "number": "A", "status": "PAID", "baseMinor": 1 }] }
+        {
+          "id": 20,
+          "number": "C-20",
+          "valueMinor": 1,
+          "valuationMode": "LUMP_SUM",
+          "milestones": null,
+          "certificates": [
+            {
+              "id": 20,
+              "seq": 1,
+              "number": "B",
+              "status": "PAID",
+              "baseMinor": 1
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "number": "C-10",
+          "valueMinor": 2,
+          "valuationMode": "LUMP_SUM",
+          "milestones": null,
+          "certificates": [
+            {
+              "id": 10,
+              "seq": 1,
+              "number": "A",
+              "status": "PAID",
+              "baseMinor": 1
+            }
+          ]
+        }
       ],
       "expectedStages": [
-        { "weightMinor": 1, "amountMinor": 3, "status": "PAYABLE" },
-        { "weightMinor": 1, "amountMinor": 2, "status": "PENDING" },
-        { "weightMinor": 1, "amountMinor": 2, "status": "PAYABLE" }
+        {
+          "weightMinor": 1,
+          "amountMinor": 3,
+          "status": "PAYABLE"
+        },
+        {
+          "weightMinor": 1,
+          "amountMinor": 2,
+          "status": "PENDING"
+        },
+        {
+          "weightMinor": 1,
+          "amountMinor": 2,
+          "status": "PAYABLE"
+        }
       ],
       "expectedReleasedMinor": 5,
       "expectedDueMinor": 4
+    }
+  ],
+  "stageAllocations": [
+    {
+      "name": "no fees equals the single-fee split",
+      "agreedMinor": 100,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 1
+        }
+      ],
+      "fees": {},
+      "expected": [
+        34,
+        33,
+        33
+      ]
+    },
+    {
+      "name": "a fee per contract splits each contract by its own shares",
+      "agreedMinor": 3800000,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 818462
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 409231
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 409231
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 409231
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 701538
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 350769
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 350769
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 350769
+        }
+      ],
+      "fees": {
+        "A": 2000000,
+        "B": 1800000
+      },
+      "expected": [
+        800000,
+        400000,
+        400000,
+        400000,
+        720000,
+        360000,
+        360000,
+        360000
+      ]
+    },
+    {
+      "name": "contracts without a fee share the remainder",
+      "agreedMinor": 1000,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "C",
+          "weightMinor": 3
+        }
+      ],
+      "fees": {
+        "A": 400
+      },
+      "expected": [
+        400,
+        150,
+        450
+      ]
+    },
+    {
+      "name": "fees are capped at what is left of the agreed fee, in contract order",
+      "agreedMinor": 1000,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "B",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "C",
+          "weightMinor": 1
+        }
+      ],
+      "fees": {
+        "A": 800,
+        "B": 800
+      },
+      "expected": [
+        800,
+        200,
+        0
+      ]
+    },
+    {
+      "name": "a fee for an unknown contract is ignored",
+      "agreedMinor": 10,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        }
+      ],
+      "fees": {
+        "ZZ": 5
+      },
+      "expected": [
+        5,
+        5
+      ]
+    },
+    {
+      "name": "a fee with uneven shares keeps every unit",
+      "agreedMinor": 100,
+      "stages": [
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        },
+        {
+          "contractNumber": "A",
+          "weightMinor": 1
+        }
+      ],
+      "fees": {
+        "A": 100
+      },
+      "expected": [
+        34,
+        33,
+        33
+      ]
     }
   ]
 }

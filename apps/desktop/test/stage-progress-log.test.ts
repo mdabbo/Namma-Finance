@@ -172,7 +172,7 @@ describe("upgrading an existing database to schema 30", () => {
     const legacyUpdatedAt = (db.prepare("SELECT updated_at FROM project_stages WHERE name='Legacy'").get() as { updated_at: string }).updated_at;
     expect(legacyUpdatedAt).toBe("2026-03-04T05:06:07.000Z");
 
-    applyMigrations(db, 7);
+    applyMigrations(db, 7, 8);
 
     const rows = db.prepare(
       `SELECT s.name, l.completion_bp, l.source, l.recorded_at, l.updated_at
@@ -201,7 +201,7 @@ describe("upgrading an existing database to schema 30", () => {
              UPDATE project_stages SET updated_at='2026-02-01T10:00:00.000Z' WHERE id=1;`);
     const before = db.prepare("SELECT sync_uuid FROM project_stages WHERE id=1").get() as { sync_uuid: string };
 
-    applyMigrations(db, 7);
+    applyMigrations(db, 7, 8);
 
     expect(db.prepare("SELECT sync_uuid FROM project_stages WHERE id=1").get()).toEqual(before);
     expect(db.prepare("SELECT stage_uuid, recorded_at FROM stage_progress_log").get()).toEqual({
