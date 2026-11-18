@@ -4,6 +4,7 @@ import { ActivityIndicator, View } from "react-native";
 import { useFonts } from "expo-font";
 import { Tajawal_400Regular, Tajawal_500Medium, Tajawal_700Bold } from "@expo-google-fonts/tajawal";
 import { NavigationContainer } from "@react-navigation/native";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -11,15 +12,27 @@ import { useTranslation } from "react-i18next";
 import i18n, { initI18n } from "./src/lib/i18n";
 import { getClient, getSession, loadConfig, loadLanguage, type SyncConfig } from "./src/lib/supabase";
 import { SupabaseContext } from "./src/hooks/useWorkspace";
+import { ReportingCurrencyProvider } from "./src/hooks/useReportingCurrency";
 import { SetupScreen } from "./src/screens/SetupScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 import { ProjectDetailScreen } from "./src/screens/ProjectDetailScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { colors } from "./src/lib/theme";
-import { layoutDirection, TAJAWAL } from "./src/lib/layout";
+import { fontFamilyFor, layoutDirection, TAJAWAL } from "./src/lib/layout";
+import { Icon, type IconName } from "./src/components/ui";
+
+const TAB_ICONS: Record<string, IconName> = { Home: "home", Projects: "briefcase", Settings: "settings" };
 import { syncNativeDirection } from "./src/lib/nativeDirection";
 import type { ProjectsStackParams } from "./src/navigation";
+
+/**
+ * `EXPO_PUBLIC_PREVIEW=1 pnpm web` opens the app in a browser on made-up data,
+ * with no login, for looking at screens. The flag is fixed when the app is
+ * bundled, so the installed APK drops the preview code altogether.
+ */
+const PREVIEW = process.env.EXPO_PUBLIC_PREVIEW === "1";
+const PREVIEW_CONFIG: SyncConfig = { url: "preview", anonKey: "preview" };
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
 const Tabs = createBottomTabNavigator();
@@ -45,6 +58,7 @@ export default function App() {
       const language = await loadLanguage();
       initI18n(language);
       syncNativeDirection(language);
+      if (PREVIEW) return setBoot({ phase: "ready", config: PREVIEW_CONFIG });
       const config = await loadConfig();
       if (!config) return setBoot({ phase: "setup", config: null });
       const session = await getSession(config).catch(() => null);
@@ -72,13 +86,23 @@ export default function App() {
   return (
     <DirectionRoot>
       <QueryClientProvider client={queryClient}>
-        <SupabaseContext.Provider value={getClient(boot.config)}>
+        <SupabaseContext.Provider value={PREVIEW ? previewClient() : getClient(boot.config)}>
           <StatusBar style="dark" />
+          <ReportingCurrencyProvider>
           <MainNavigator onSignedOut={() => setBoot({ phase: "setup", config: boot.config })} />
+          </ReportingCurrencyProvider>
         </SupabaseContext.Provider>
       </QueryClientProvider>
     </DirectionRoot>
   );
+}
+
+let preview: ReturnType<typeof getClient> | null = null;
+function previewClient() {
+  // Required here, not imported at the top, so a build without the flag leaves it out.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  preview ??= (require("./src/preview/previewClient") as typeof import("./src/preview/previewClient")).createPreviewClient();
+  return preview;
 }
 
 /**
@@ -88,11 +112,18 @@ export default function App() {
  */
 function DirectionRoot({ children }: { children: ReactNode }) {
   const { i18n: instance } = useTranslation();
-  return <View style={{ flex: 1, direction: layoutDirection(instance.language) }}>{children}</View>;
+  // The safe-area provider sits at the root so every screen, the sign-in one
+  // included, can keep clear of the status bar and the gesture bar.
+  return (
+    <SafeAreaProvider>
+      <View style={{ flex: 1, direction: layoutDirection(instance.language) }}>{children}</View>
+    </SafeAreaProvider>
+  );
 }
 
 function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
   const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
   // re-render the tab titles when the language switches
   const lang = i18n.language;
   const screens = useMemo(
@@ -108,22 +139,26 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
   return (
     <NavigationContainer direction={layoutDirection(lang)}>
       <Tabs.Navigator
-        screenOptions={{
-          headerTitleStyle: { fontSize: 16, fontWeight: "700" },
+        screenOptions={({ route }) => ({
+          // Every screen draws its own header, so it follows the app's direction.
+          headerShown: false,
           tabBarActiveTintColor: colors.brand,
           tabBarInactiveTintColor: colors.faint,
-          tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
-          tabBarIconStyle: { display: "none" },
-        }}
+          tabBarLabelStyle: { fontSize: 11, lineHeight: 18, fontWeight: "600", fontFamily: fontFamilyFor(lang, "600") },
+          // Room for an icon and a Tajawal label, plus the phone's own bottom inset
+          // (gesture bar or buttons), so nothing sits under the system bar.
+          tabBarStyle: { borderTopColor: colors.border, height: 68 + insets.bottom, paddingTop: 6, paddingBottom: 10 + insets.bottom },
+          tabBarIcon: ({ color }) => <Icon name={TAB_ICONS[route.name] ?? "circle"} size={21} color={color} />,
+        })}
       >
         <Tabs.Screen name="Home" component={HomeScreen} options={{ title: screens.home }} />
-        <Tabs.Screen name="Projects" options={{ title: screens.projects, headerShown: false }}>
+        <Tabs.Screen name="Projects" options={{ title: screens.projects }}>
           {() => (
             // Both screens draw their own header (see ScreenHeader): the native
             // one would stay on the phone's layout direction.
             <ProjectsStack.Navigator screenOptions={{ headerShown: false }}>
-              <ProjectsStack.Screen name="ProjectsList" component={ProjectsScreen} />
-              <ProjectsStack.Screen name="ProjectDetail" component={ProjectDetailScreen} />
+              <ProjectsStack.Screen name="ProjectsList" component={ProjectsScreen} options={{ title: screens.projects }} />
+              <ProjectsStack.Screen name="ProjectDetail" component={ProjectDetailScreen} options={{ title: screens.projects }} />
             </ProjectsStack.Navigator>
           )}
         </Tabs.Screen>

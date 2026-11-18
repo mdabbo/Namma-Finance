@@ -4,6 +4,7 @@
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/tajawal": "^0.4.1",
+    "@expo/vector-icons": "^15.0.3",
     "@mep/core": "workspace:*",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.18.11",
@@ -23,7 +24,10 @@
     "react-native-url-polyfill": "^4.0.0"
   },
   "devDependencies": {
+    "@expo/metro-runtime": "~6.1.2",
     "@types/react": "~19.1.17",
+    "react-dom": "19.1.0",
+    "react-native-web": "^0.21.0",
     "typescript": "~5.9.3"
   },
   "scripts": {
