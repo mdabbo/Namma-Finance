@@ -21,7 +21,9 @@ export function ScreenHeader({ title, onBack }: { title: string; onBack?: () => 
             <Text style={styles.backGlyph}>{backGlyph(layoutDirection(i18n.language))}</Text>
           </TouchableOpacity>
         ) : null}
+        {/* Sized to its text so it sits beside the back button in either direction. */}
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
+        <View style={styles.fill} />
       </View>
     </View>
   );
@@ -29,8 +31,9 @@ export function ScreenHeader({ title, onBack }: { title: string; onBack?: () => 
 
 const styles = StyleSheet.create({
   bar: { backgroundColor: "#fff", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  row: { height: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, gap: 8 },
-  back: { width: 32, alignItems: "center" },
-  backGlyph: { fontSize: 30, lineHeight: 34, color: colors.brand },
-  title: { flex: 1, fontSize: 16, fontWeight: "700", color: colors.text },
+  row: { height: 56, flexDirection: "row", alignItems: "center", paddingHorizontal: 16, gap: 8 },
+  back: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: colors.chipBg },
+  backGlyph: { fontSize: 26, lineHeight: 30, color: colors.brand },
+  title: { flexShrink: 1, fontSize: 20, fontWeight: "700", color: colors.text },
+  fill: { flex: 1 },
 });

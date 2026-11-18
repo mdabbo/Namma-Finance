@@ -3,6 +3,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 import { useTranslation } from "react-i18next";
 import { getClient, saveConfig, type SyncConfig } from "../lib/supabase";
 import { Text, TextInput } from "../components/AppText";
+import { BrandLogo } from "../components/BrandLogo";
 import { card, colors } from "../lib/theme";
 
 /**
@@ -46,8 +47,9 @@ export function SetupScreen({
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        {/* The primary logo already carries "Engineering That Works.". */}
+        <BrandLogo variant="horizontal" height={56} style={styles.logo} />
         <Text style={styles.title}>{t("common.appName")}</Text>
-        <Text style={styles.tagline}>{t("common.tagline")}</Text>
 
         <View style={[card, styles.form]}>
           <Field label={t("settings.syncUrl")} value={url} onChange={setUrl} placeholder="https://xxxx.supabase.co" autoCapitalize="none" />
@@ -105,8 +107,8 @@ function Field({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.bg },
   container: { flexGrow: 1, justifyContent: "center", padding: 20 },
-  title: { fontSize: 28, fontWeight: "700", color: colors.text, textAlign: "center" },
-  tagline: { fontSize: 13, color: colors.subtle, textAlign: "center", marginBottom: 24, fontStyle: "italic" },
+  logo: { alignSelf: "center", marginBottom: 12 },
+  title: { fontSize: 15, fontWeight: "600", color: colors.subtle, textAlign: "center", marginBottom: 24 },
   form: { gap: 12 },
   field: { gap: 4 },
   label: { fontSize: 12, color: colors.subtle, fontWeight: "600" },
