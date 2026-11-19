@@ -126,17 +126,37 @@ rows.project_assignments!.push(
   { uuid: "as-2", person_id: "pe-2", project_id: "pr-101", agreed_minor: money(60_000), currency: "SAR", fx_rate_micro: 12_800_000, lifecycle_status: "ACTIVE" },
 );
 
+// A few time entries, so the Time screen has something to list.
+rows.time_entries = [
+  { uuid: "te-1", person_id: "pe-1", project_id: "pr-102", stage_id: null, date: iso(0), minutes: 180, billable: 1, note: "Coordination meeting on site", created_at: `${iso(0)} 08:00:00`, deleted_at: null },
+  { uuid: "te-2", person_id: "pe-2", project_id: "pr-106", stage_id: "st-2", date: iso(-1), minutes: 450, billable: 1, note: null, created_at: `${iso(-1)} 09:00:00`, deleted_at: null },
+  { uuid: "te-3", person_id: "pe-1", project_id: "pr-101", stage_id: null, date: iso(-3), minutes: 90, billable: 0, note: "Internal review", created_at: `${iso(-3)} 10:00:00`, deleted_at: null },
+];
+
 type Result = { data: Row[] | null; error: null; count?: number };
 
 class PreviewQuery implements PromiseLike<Result> {
   private from = 0;
   private to = 999;
   private head = false;
+  private filters: ((row: Row) => boolean)[] = [];
+  private written: Row[] | null = null;
   constructor(private readonly table: string) {}
   select(_columns?: string, options?: { head?: boolean }): this { this.head = options?.head === true; return this; }
-  is(): this { return this; }
+  is(column: string, value: null): this { this.filters.push((row) => (row[column] ?? null) === value); return this; }
   eq(): this { return this; }
+  gte(column: string, value: string): this { this.filters.push((row) => String(row[column] ?? "") >= value); return this; }
   order(): this { return this; }
+  limit(count: number): this { this.to = this.from + count - 1; return this; }
+  /** Writes stay in memory until the page is reloaded. */
+  upsert(row: Row): this {
+    const table = (rows[this.table] ??= []);
+    const at = table.findIndex((existing) => existing.uuid === row.uuid);
+    if (at >= 0) table[at] = { ...table[at], ...row };
+    else table.push({ ...row });
+    this.written = [{ uuid: row.uuid }];
+    return this;
+  }
   /** The signed-in preview user is an admin. */
   async maybeSingle(): Promise<{ data: Row | null; error: null }> {
     return { data: this.table === "user_roles" ? { role: "ADMIN" } : null, error: null };
@@ -146,8 +166,12 @@ class PreviewQuery implements PromiseLike<Result> {
     onfulfilled?: ((value: Result) => A | PromiseLike<A>) | null,
     onrejected?: ((reason: unknown) => B | PromiseLike<B>) | null,
   ): PromiseLike<A | B> {
-    const all = rows[this.table] ?? [];
-    const result: Result = this.head ? { data: null, error: null, count: all.length } : { data: all.slice(this.from, this.to + 1), error: null };
+    const all = (rows[this.table] ?? []).filter((row) => this.filters.every((keep) => keep(row)));
+    const result: Result = this.written
+      ? { data: this.written, error: null }
+      : this.head
+        ? { data: null, error: null, count: all.length }
+        : { data: all.slice(this.from, this.to + 1), error: null };
     return Promise.resolve<Result>(result).then(onfulfilled, onrejected);
   }
 }
