@@ -1,13 +1,15 @@
 # Phase 4 — NAMAA Finance mobile companion (Expo)
 
-A **read-only** phone app that shows the office's live financials from the
-same Supabase backend the desktop syncs to. All figures are computed on the
+A phone app that shows the office's live financials from the same Supabase
+backend the desktop syncs to, and logs **time entries** — the one thing it
+writes. All figures are computed on the
 phone by the **same `@mep/core` engine** as the desktop — the two can never
 disagree. Arabic + English.
 
 Screens: **Home** (consolidated KPIs in EGP, per-currency face values,
 ready-to-collect, team payments due, overdue count) · **Projects** (list with
 certified/collected bars) · **Project detail** (totals + certificates) ·
+**Time** (log, change or delete time entries from the last 14 days) ·
 **Settings** (language, sign out). Pull down anywhere to refresh.
 
 ## Try it on your phone (development — no app store needed)
@@ -31,8 +33,16 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 
 ## Notes / current limits (v0.1)
 
-- **Read-only** by design: recording payments/certificates stays on the
-  desktop, so there are no write conflicts.
+- **Time entries are the only write.** Certificates, payments and every other
+  financial record stay on the desktop (a test holds every cloud write to
+  `time_entries`). An entry is saved on the phone first and sent when the
+  cloud answers, so a dropped signal never loses it; its uuid is the cloud key,
+  so a resend never makes a second entry. `updated_at` comes from the cloud's
+  clock (the `Date` header of `/auth/v1/health`), so a phone with a slow clock
+  cannot write rows the desktops' pull would skip.
+- The phone keeps the **14-day window** itself: an office login is not bound by
+  the cloud guard in `supabase-0021`, which only binds an engineer's own login.
+  Older entries are changed on the desktop.
 - Consolidated KPIs are in **EGP** (each project's stored rate); the
   per-currency section shows face values. The desktop's display-currency
   setting is local to the desktop.

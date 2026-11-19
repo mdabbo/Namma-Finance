@@ -79,7 +79,8 @@ revision, and variation-order mutations are preserved as reviewable
 
 ## Mobile companion
 
-The Expo app is **read-only** by design and is pinned to Expo SDK 54 because
+The Expo app writes only time entries (everything financial stays on the
+desktop) and is pinned to Expo SDK 54 because
 that is the newest SDK the public Expo Go client supports. Arabic renders with
 LTR layout, and there is no standalone APK yet. See
 [PHASE4-MOBILE.md](./PHASE4-MOBILE.md).
