@@ -20,6 +20,7 @@ import { ProjectDetailScreen } from "./src/screens/ProjectDetailScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TimeScreen } from "./src/screens/TimeScreen";
 import { TimeQueueProvider } from "./src/hooks/useTimeQueue";
+import { AppLockGate } from "./src/hooks/useAppLock";
 import { fetchServerNow } from "./src/lib/timeEntriesCloud";
 import { colors } from "./src/lib/theme";
 import { fontFamilyFor, layoutDirection, TAJAWAL } from "./src/lib/layout";
@@ -88,6 +89,7 @@ export default function App() {
 
   return (
     <DirectionRoot>
+      <AppLockGate>
       <QueryClientProvider client={queryClient}>
         <SupabaseContext.Provider value={PREVIEW ? previewClient() : getClient(boot.config)}>
           <StatusBar style="dark" />
@@ -98,6 +100,7 @@ export default function App() {
           </ReportingCurrencyProvider>
         </SupabaseContext.Provider>
       </QueryClientProvider>
+      </AppLockGate>
     </DirectionRoot>
   );
 }
