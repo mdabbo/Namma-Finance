@@ -11,6 +11,7 @@ import {
   toEgpPiasters,
   EGP_VALUATION,
   type Contract,
+  type CurrencyValuation,
   type ContractState,
   type DashboardKpis,
   type Expense,
@@ -81,6 +82,8 @@ export interface TeamPayableAlert extends MobileAlertItem {
 }
 
 export interface MobileWorkspace {
+  /** The currency every consolidated figure (the `…Egp` fields, kpis) is in. */
+  currency: string;
   projects: ProjectFinancials[];
   contractStates: Map<number, ContractState>;
   kpis: DashboardKpis;
@@ -107,7 +110,11 @@ export interface MobileWorkspace {
  */
 const isLive = (row: Row) => row.archived_at == null && row.voided_at == null;
 
-export async function loadMobileWorkspace(client: SupabaseClient): Promise<MobileWorkspace> {
+/**
+ * `valuation` decides the currency the consolidated figures are reported in
+ * (see lib/reporting.ts). Each project's own figures stay in its currency.
+ */
+export async function loadMobileWorkspace(client: SupabaseClient, valuation: CurrencyValuation = EGP_VALUATION): Promise<MobileWorkspace> {
   const [
     clientRows, allProjectRows, allContractRows, allCertRows, allPaymentRows, allocRows,
     _categoryRows, allExpenseRows, peopleRows, assignmentRows, personPaymentRows, stageRows,
@@ -310,18 +317,17 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
       allocations,
       billableCertificateIds,
       resolveFx: () => ({ currency: project.currency, fxRateMicro: project.fxRateMicro }),
-    }, EGP_VALUATION);
+    }, valuation);
     return computeProjectFinancials(
       project,
       projectContracts.map((c) => contractStates.get(c.id)!),
       expenses.filter((e) => e.projectId === project.id),
       cashValuation,
-      EGP_VALUATION,
+      valuation,
     );
   });
 
-  // The mobile workspace reports in EGP, the pivot itself.
-  const kpis = computeDashboardKpis(projectFinancials, expenses, EGP_VALUATION);
+  const kpis = computeDashboardKpis(projectFinancials, expenses, valuation);
 
   const byCurrencyMap = new Map<string, { value: number; collected: number; outstanding: number }>();
   for (const p of projectFinancials) {
@@ -408,6 +414,7 @@ export async function loadMobileWorkspace(client: SupabaseClient): Promise<Mobil
   }
 
   return {
+    currency: valuation.currency,
     projects: projectFinancials,
     contractStates,
     kpis,

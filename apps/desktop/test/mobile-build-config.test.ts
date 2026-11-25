@@ -39,3 +39,26 @@ describe("mobile APK build profile", () => {
     expect(app.android.package).toBe("com.mepfinance.mobile");
   });
 });
+
+describe("the DABWORKS logo on the phone", () => {
+  const mobileFile = (path: string) => readFileSync(fileURLToPath(new URL(`../../mobile/${path}`, import.meta.url)));
+
+  it("uses the brand's navy app icon behind the white D", () => {
+    // Brand package: app icons are AppIcon_Navy (white D, orange cut, Deep Navy).
+    expect(app.android.adaptiveIcon.backgroundColor).toBe("#0B2545");
+  });
+
+  it("shows the official logo artwork, never a redrawn mark", () => {
+    const logo = mobileFile("src/components/BrandLogo.tsx").toString();
+    expect(logo).toContain("assets/brand/wordmark-fullcolor.png");
+    expect(logo).toContain("assets/brand/horizontal-fullcolor.png");
+    for (const file of ["wordmark-fullcolor.png", "horizontal-fullcolor.png"]) {
+      // PNG signature: the files are the package's images, not placeholders.
+      expect(mobileFile(`assets/brand/${file}`).subarray(1, 4).toString()).toBe("PNG");
+    }
+    const home = mobileFile("src/screens/HomeScreen.tsx").toString();
+    expect(home).toContain('<BrandLogo variant="wordmark"');
+    expect(home).not.toMatch(/markSlash|>D<[/]Text>/);
+    expect(mobileFile("src/screens/SetupScreen.tsx").toString()).toContain('<BrandLogo variant="horizontal"');
+  });
+});
