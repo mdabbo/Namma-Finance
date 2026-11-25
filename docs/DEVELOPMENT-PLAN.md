@@ -667,7 +667,7 @@ the office decides.
 | Time entries | Certificates |
 | Expense capture with a photo | Payments and allocations |
 | Drawing received / document status (after E2) | Contract revisions, variation orders |
-| Site photos against a project | Team payments |
+| Site photos against a project | Team payments — except earned payments capped at due, which the phone may record (owner decision 2026-11-25; see PHASE4-MOBILE.md) |
 | Requests for approval | Anything touching two or more financial tables |
 | Everything read-only | |
 

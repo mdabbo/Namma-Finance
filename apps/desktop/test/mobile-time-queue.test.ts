@@ -21,6 +21,7 @@ import {
   type QueueState,
   type SendOutcome,
   type TimeEntryRow,
+  OUTBOX_TABLES,
 } from "../../mobile/src/lib/timeQueue";
 import {
   addDays,
@@ -33,7 +34,7 @@ import {
   withdrawn,
   type TimeEntryDraft,
 } from "../../mobile/src/lib/timeEntryForm";
-import { fetchServerNow, mergeWithQueue, sendTimeEntry } from "../../mobile/src/lib/timeEntriesCloud";
+import { fetchServerNow, mergeWithQueue, sendOutboxRow } from "../../mobile/src/lib/timeEntriesCloud";
 
 /**
  * Time entries from the phone (plan steps F4 and F5): the outbox that keeps an
@@ -283,19 +284,26 @@ describe("sending one entry", () => {
 
   it("upserts on the uuid into time_entries", async () => {
     const { client, calls } = stubClient({ data: [{ uuid: "u" }], error: null, status: 201 });
-    await expect(sendTimeEntry(client, { ...row(), updated_at: "2026-11-19T10:00:01.000Z" })).resolves.toEqual({ kind: "ok" });
+    await expect(sendOutboxRow(client, { ...row(), updated_at: "2026-11-19T10:00:01.000Z" }, "time_entries")).resolves.toEqual({ kind: "ok" });
     expect(calls).toEqual([{ table: "time_entries", row: expect.objectContaining({ uuid: row().uuid }), options: { onConflict: "uuid" } }]);
   });
 
   it("reports an answer with no row as a newer cloud version", async () => {
     const { client } = stubClient({ data: [], error: null, status: 201 });
-    await expect(sendTimeEntry(client, { ...row(), updated_at: "x" })).resolves.toEqual({ kind: "rejected", message: "STALE" });
+    await expect(sendOutboxRow(client, { ...row(), updated_at: "x" }, "time_entries")).resolves.toEqual({ kind: "rejected", message: "STALE" });
   });
 
   it("passes the cloud's refusal on", async () => {
     const { client } = stubClient({ data: null, error: { code: "P0001", message: "TIME_ENTRY_STAGE_MISMATCH" }, status: 400 });
-    const outcome: SendOutcome = await sendTimeEntry(client, { ...row(), updated_at: "x" });
+    const outcome: SendOutcome = await sendOutboxRow(client, { ...row(), updated_at: "x" }, "time_entries");
     expect(outcome).toEqual({ kind: "rejected", message: "TIME_ENTRY_STAGE_MISMATCH" });
+  });
+
+  it("refuses any table outside the outbox's two, without calling the cloud", async () => {
+    const { client, calls } = stubClient({ data: [{ uuid: "u" }], error: null });
+    const outcome = await sendOutboxRow(client, { ...row(), updated_at: "x" }, "payments" as never);
+    expect(outcome).toEqual({ kind: "rejected", message: "TABLE_NOT_ALLOWED" });
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -375,7 +383,7 @@ describe("the time-entry form", () => {
   });
 });
 
-describe("the phone writes nothing but time entries", () => {
+describe("the phone writes nothing but time entries and team payments", () => {
   const mobile = fileURLToPath(new URL("../../mobile", import.meta.url));
   const files: string[] = [];
   const collect = (dir: string) => {
@@ -389,12 +397,16 @@ describe("the phone writes nothing but time entries", () => {
   collect(join(mobile, "src"));
   files.push(join(mobile, "App.tsx"));
 
-  it("keeps every cloud write in lib/timeEntriesCloud.ts, aimed at time_entries", () => {
+  it("keeps every cloud write in lib/timeEntriesCloud.ts, limited to the outbox tables", () => {
     const writers = files.filter((path) => /\.(insert|upsert|update|delete)\s*\(/.test(readFileSync(path, "utf8")));
     expect(writers.map((path) => relative(mobile, path).replace(/\\/g, "/"))).toEqual(["src/lib/timeEntriesCloud.ts"]);
     const source = readFileSync(join(mobile, "src/lib/timeEntriesCloud.ts"), "utf8");
     const writes = source.match(/\.from\([^)]*\)\s*\.(insert|upsert|update|delete)\(/g) ?? [];
-    expect(writes).toEqual([".from(TIME_ENTRIES).upsert("]);
-    expect(source).toContain('export const TIME_ENTRIES = "time_entries";');
+    expect(writes).toEqual([".from(table).upsert("]);
+    expect(source).toContain("if (!OUTBOX_TABLES.includes(table)) return");
+    // Adding a table here is a decision, not a refactor: payments go through
+    // the desktop's checks when it pulls them; nothing else the phone could
+    // write does.
+    expect([...OUTBOX_TABLES]).toEqual(["time_entries", "person_payments"]);
   });
 });

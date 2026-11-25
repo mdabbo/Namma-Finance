@@ -1,23 +1,28 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { classifyError, serverMsFromDateHeader, type SendOutcome, type TimeEntryRow } from "./timeQueue";
+import { classifyError, OUTBOX_TABLES, serverMsFromDateHeader, type OutboxRow, type OutboxTable, type SendOutcome, type TimeEntryRow } from "./timeQueue";
 import { addDays, OPEN_DAYS } from "./timeEntryForm";
 
 /**
- * The time-entry calls the phone makes to the cloud. This is the ONLY table
- * the phone writes (plan 11.2: "the phone captures; the desktop decides").
+ * The phone's calls to the cloud for the outbox. The phone writes only the
+ * tables in OUTBOX_TABLES: time entries, and earned payments to the team that
+ * every desktop checks again (amount due, duplicates, archived) when it pulls
+ * them, adding the linked expense itself.
  */
 
 export const TIME_ENTRIES = "time_entries";
 
 /**
- * Sends one row. The uuid is the table's key, so a resend updates the same row.
+ * Sends one row to its table. The uuid is the table's key, so a resend
+ * updates the same row.
  *
  * An empty answer with no error means the cloud's last-writer-wins guard
  * kept a newer version of this entry (changed on a desktop after this one was
  * stamped), so this change is refused rather than reported as sent.
  */
-export async function sendTimeEntry(client: SupabaseClient, row: TimeEntryRow & { updated_at: string }): Promise<SendOutcome> {
-  const { data, error, status } = await client.from(TIME_ENTRIES).upsert(row, { onConflict: "uuid" }).select("uuid");
+export async function sendOutboxRow(client: SupabaseClient, row: OutboxRow & { updated_at: string }, table: OutboxTable): Promise<SendOutcome> {
+  if (!OUTBOX_TABLES.includes(table)) return { kind: "rejected", message: "TABLE_NOT_ALLOWED" };
+  const payload: Record<string, unknown> = { ...row };
+  const { data, error, status } = await client.from(table).upsert(payload, { onConflict: "uuid" }).select("uuid");
   if (error) return classifyError({ code: error.code, message: error.message, status });
   if (!data || data.length === 0) return { kind: "rejected", message: "STALE" };
   return { kind: "ok" };

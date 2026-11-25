@@ -1,9 +1,10 @@
 /**
- * The phone's outbox for time entries (plan steps F4 and F5).
+ * The phone's outbox (plan steps F4 and F5): time entries, and payments to
+ * the team (see lib/team.ts). These are the only two things the phone writes.
  *
- * Site signal is unreliable, so a time entry is never sent straight from the
- * form: it is put in this queue, kept on the phone, and sent when the cloud
- * answers. Four rules make that safe:
+ * Site signal is unreliable, so nothing is sent straight from a form: it is
+ * put in this queue, kept on the phone, and sent when the cloud answers. Four
+ * rules make that safe:
  *
  * 1. Exactly once. Each entry carries a uuid made on the phone, and the cloud
  *    table's primary key is that uuid, so sending it again (after a lost
@@ -39,10 +40,30 @@ export interface TimeEntryRow {
   deleted_at: string | null;
 }
 
+/**
+ * A payment to a team member, in the cloud's column names, minus updated_at.
+ * Payments are never changed or withdrawn from the phone: once in the cloud a
+ * payment is fixed or voided on the desktop, which keeps its linked expense.
+ */
+export interface PersonPaymentRow {
+  uuid: string;
+  assignment_id: string;
+  /** YYYY-MM-DD */
+  date: string;
+  amount_minor: number;
+  note: string | null;
+  /** Only earned payments, which the desktop caps at the amount due. */
+  payment_kind: "EARNED";
+  created_at: string;
+}
+
+/** The cloud tables the outbox writes. Nothing else is written from the phone. */
+export const OUTBOX_TABLES = ["time_entries", "person_payments"] as const;
+export type OutboxTable = (typeof OUTBOX_TABLES)[number];
+
 export type QueueStatus = "pending" | "sent" | "rejected";
 
-export interface QueueItem {
-  row: TimeEntryRow;
+interface QueueItemBase {
   status: QueueStatus;
   /** Bumped on every change, so an answer for an older version is ignored. */
   rev: number;
@@ -52,6 +73,12 @@ export interface QueueItem {
   /** Why the last attempt failed: a refusal code or a network message. */
   lastError?: string;
 }
+
+export type QueueItem =
+  | (QueueItemBase & { table: "time_entries"; row: TimeEntryRow })
+  | (QueueItemBase & { table: "person_payments"; row: PersonPaymentRow });
+
+export type OutboxRow = QueueItem["row"];
 
 export interface QueueState {
   items: QueueItem[];
@@ -69,17 +96,35 @@ export type SendOutcome =
   | { kind: "transient"; message: string }
   | { kind: "rejected"; message: string };
 
-/** Adds an entry, or replaces the waiting copy of the same entry. */
+/** Adds a time entry, or replaces the waiting copy of the same entry. */
 export function enqueue(state: QueueState, row: TimeEntryRow, nowIso: string): QueueState {
+  return put(state, { table: "time_entries", row }, nowIso);
+}
+
+/**
+ * Adds a payment. A payment is added once: the same uuid again (a double tap)
+ * changes nothing, because a payment is never edited from the phone.
+ */
+export function enqueuePayment(state: QueueState, row: PersonPaymentRow, nowIso: string): QueueState {
+  if (state.items.some((item) => item.row.uuid === row.uuid)) return state;
+  return put(state, { table: "person_payments", row }, nowIso);
+}
+
+function put(
+  state: QueueState,
+  entry: { table: "time_entries"; row: TimeEntryRow } | { table: "person_payments"; row: PersonPaymentRow },
+  nowIso: string,
+): QueueState {
+  const row = entry.row;
   const existing = state.items.find((item) => item.row.uuid === row.uuid);
-  const item: QueueItem = {
-    row,
+  const item = {
+    ...entry,
     status: "pending",
     rev: (existing?.rev ?? 0) + 1,
     attempts: 0,
     queuedAt: nowIso,
-  };
-  const others = state.items.filter((entry) => entry.row.uuid !== row.uuid);
+  } as QueueItem;
+  const others = state.items.filter((other) => other.row.uuid !== row.uuid);
   return { ...state, items: [...others, item] };
 }
 
@@ -158,8 +203,8 @@ export interface FlushDeps {
   /** The cloud's current time in ms. Throws when the cloud cannot be reached. */
   serverNow(): Promise<number>;
   deviceNow(): number;
-  /** Sends one row with the given updated_at. */
-  send(row: TimeEntryRow & { updated_at: string }): Promise<SendOutcome>;
+  /** Sends one row, with the given updated_at, to its table. */
+  send(row: OutboxRow & { updated_at: string }, table: OutboxTable): Promise<SendOutcome>;
 }
 
 export interface FlushResult {
@@ -200,7 +245,7 @@ export async function flush(state: QueueState, deps: FlushDeps): Promise<FlushRe
     lastStamp = stamp;
     let outcome: SendOutcome;
     try {
-      outcome = await deps.send({ ...item.row, updated_at: new Date(stamp).toISOString() });
+      outcome = await deps.send({ ...item.row, updated_at: new Date(stamp).toISOString() }, item.table);
     } catch (error) {
       outcome = { kind: "transient", message: error instanceof Error ? error.message : String(error) };
     }
@@ -241,7 +286,12 @@ export function parseQueue(raw: string | null): QueueState {
   if (!raw) return EMPTY_QUEUE;
   try {
     const value = JSON.parse(raw) as Partial<QueueState>;
-    const items = Array.isArray(value.items) ? value.items.filter((item) => item && typeof item.row?.uuid === "string") : [];
+    // Items saved before payments existed carry no table: they are time entries.
+    const items = Array.isArray(value.items)
+      ? value.items
+          .filter((item) => item && typeof item.row?.uuid === "string")
+          .map((item) => ({ ...item, table: OUTBOX_TABLES.includes(item.table) ? item.table : "time_entries" }) as QueueItem)
+      : [];
     return { items, lastStamp: typeof value.lastStamp === "number" ? value.lastStamp : 0 };
   } catch {
     return EMPTY_QUEUE;

@@ -17,6 +17,7 @@ import { SetupScreen } from "./src/screens/SetupScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 import { ProjectDetailScreen } from "./src/screens/ProjectDetailScreen";
+import { PayTeamScreen } from "./src/screens/PayTeamScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TimeScreen } from "./src/screens/TimeScreen";
 import { TimeQueueProvider } from "./src/hooks/useTimeQueue";
@@ -168,6 +169,7 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
             <ProjectsStack.Navigator screenOptions={{ headerShown: false }}>
               <ProjectsStack.Screen name="ProjectsList" component={ProjectsScreen} options={{ title: screens.projects }} />
               <ProjectsStack.Screen name="ProjectDetail" component={ProjectDetailScreen} options={{ title: screens.projects }} />
+              <ProjectsStack.Screen name="PayTeam" component={PayTeamScreen} options={{ title: screens.projects }} />
             </ProjectsStack.Navigator>
           )}
         </Tabs.Screen>

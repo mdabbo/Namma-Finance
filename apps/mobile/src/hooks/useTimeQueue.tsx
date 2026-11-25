@@ -7,15 +7,17 @@ import {
   discard as discardItem,
   EMPTY_QUEUE,
   enqueue as enqueueItem,
+  enqueuePayment,
   flush,
   parseQueue,
   pendingCount,
   prune,
   retry as retryItem,
   type QueueState,
+  type PersonPaymentRow,
   type TimeEntryRow,
 } from "../lib/timeQueue";
-import { sendTimeEntry } from "../lib/timeEntriesCloud";
+import { sendOutboxRow } from "../lib/timeEntriesCloud";
 import { useSupabase } from "./useWorkspace";
 
 /**
@@ -32,6 +34,7 @@ interface TimeQueueApi {
   loaded: boolean;
   sending: boolean;
   save(row: TimeEntryRow): void;
+  pay(row: PersonPaymentRow): void;
   retry(uuid: string): void;
   discard(uuid: string): void;
   sendNow(): void;
@@ -72,11 +75,13 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
       const result = await flush(stateRef.current, {
         serverNow,
         deviceNow: () => Date.now(),
-        send: (row) => sendTimeEntry(client, row),
+        send: (row, table) => sendOutboxRow(client, row, table),
       });
       commit((current) => applyFlush(current, result, new Date().toISOString()));
       if (result.outcomes.some((entry) => entry.outcome.kind === "ok")) {
         void queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+        // A payment changes the team's paid and due figures.
+        void queryClient.invalidateQueries({ queryKey: ["workspace"] });
       }
     } finally {
       busy.current = false;
@@ -125,6 +130,10 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
       sending,
       save: (row) => {
         commit((current) => enqueueItem(current, row, new Date().toISOString()));
+        void sendNow();
+      },
+      pay: (row) => {
+        commit((current) => enqueuePayment(current, row, new Date().toISOString()));
         void sendNow();
       },
       retry: (uuid) => {

@@ -24,6 +24,8 @@ import {
   type TimeEntryDraft,
 } from "../lib/timeEntryForm";
 import type { QueueItem, QueueStatus, TimeEntryRow } from "../lib/timeQueue";
+
+type TimeQueueItem = Extract<QueueItem, { table: "time_entries" }>;
 import { colors, radius, space, type } from "../lib/theme";
 
 /**
@@ -116,8 +118,10 @@ export function TimeScreen() {
 
   const stages = draft.projectId ? lookups.data?.stages.get(draft.projectId) ?? [] : [];
   const dates = openDates(today);
-  const entries = mergeWithQueue(recent.data ?? [], queue.state.items);
-  const outbox = [...queue.state.items].sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
+  // The outbox also carries team payments; this screen shows time entries only.
+  const timeItems = queue.state.items.filter((item): item is TimeQueueItem => item.table === "time_entries");
+  const entries = mergeWithQueue(recent.data ?? [], timeItems);
+  const outbox = [...timeItems].sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   const waiting = outbox.some((item) => item.status === "pending");
 
   const update = (patch: Partial<TimeEntryDraft>) => {
@@ -381,7 +385,7 @@ function OutboxRow({
   retryLabel,
   discardLabel,
 }: {
-  item: QueueItem;
+  item: TimeQueueItem;
   title: string;
   line: string;
   statusLabel: string;
