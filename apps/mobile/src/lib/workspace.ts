@@ -5,8 +5,6 @@ import {
   computeProjectCashValuation,
   computeProjectFinancials,
   computeReadyToBill,
-  computeTeamPayout,
-  parseContractFees,
   parseMilestones,
   toEgpPiasters,
   EGP_VALUATION,
@@ -21,6 +19,7 @@ import {
   type Project,
   type ProjectFinancials,
 } from "@mep/core";
+import { teamMemberStatus, type TeamMember } from "./team";
 
 /**
  * Read-only mirror of the desktop's workspace financials, computed on the
@@ -91,6 +90,8 @@ export interface MobileWorkspace {
   byCurrency: [string, { value: number; collected: number; outstanding: number }][];
   readyToCollect: MobileAlertItem[];
   teamPayables: TeamPayableAlert[];
+  /** Each project's team, by project id: agreed, earned, paid, due, history. */
+  team: Map<number, TeamMember[]>;
   overdueCount: number;
 }
 
@@ -377,10 +378,13 @@ export async function loadMobileWorkspace(client: SupabaseClient, valuation: Cur
   // team payables: certificate paid → pay the matching stage to the person
   const personNames = new Map<number, string>();
   for (const r of peopleRows) personNames.set(ids.people.id(r.uuid), String(r.name ?? ""));
-  const paidByAssignment = new Map<number, number>();
+  const archivedPeople = new Set(peopleRows.filter((r) => r.archived_at != null).map((r) => ids.people.id(r.uuid)));
+  const paymentsByAssignment = new Map<number, Record<string, unknown>[]>();
   for (const r of personPaymentRows) {
     const assignmentId = ids.assignments.id(r.assignment_id);
-    paidByAssignment.set(assignmentId, (paidByAssignment.get(assignmentId) ?? 0) + Number(r.amount_minor ?? 0));
+    const list = paymentsByAssignment.get(assignmentId) ?? [];
+    list.push(r);
+    paymentsByAssignment.set(assignmentId, list);
   }
   const statesByProject = new Map<number, ContractState[]>();
   for (const contract of contracts) {
@@ -388,30 +392,40 @@ export async function loadMobileWorkspace(client: SupabaseClient, valuation: Cur
     list.push(contractStates.get(contract.id)!);
     statesByProject.set(contract.projectId, list);
   }
+  // Same figures as the desktop: voided payments do not count, a cancelled
+  // assignment keeps the amount it had earned, archived ones cannot be paid.
   const teamPayables: TeamPayableAlert[] = [];
+  const team = new Map<number, TeamMember[]>();
   for (const r of assignmentRows) {
     const assignmentId = ids.assignments.id(r.uuid);
     const projectId = ids.projects.id(r.project_id);
     const project = projectById.get(projectId);
-    if (!project) continue;
-    const payout = computeTeamPayout(
-      Number(r.agreed_minor ?? 0),
-      statesByProject.get(projectId) ?? [],
-      paidByAssignment.get(assignmentId) ?? 0,
-      parseContractFees(typeof r.contract_fees === "string" ? r.contract_fees : null),
-    );
-    if (payout.dueMinor > 0) {
+    if (!project) continue; // archived project
+    const personId = ids.people.id(r.person_id);
+    const member = teamMemberStatus({
+      assignment: r,
+      personName: personNames.get(personId) ?? "",
+      personArchived: archivedPeople.has(personId),
+      projectCurrency: project.currency,
+      contractStates: statesByProject.get(projectId) ?? [],
+      paymentRows: paymentsByAssignment.get(assignmentId) ?? [],
+    });
+    const list = team.get(projectId) ?? [];
+    list.push(member);
+    team.set(projectId, list);
+    if (member.payable && member.dueMinor > 0) {
       teamPayables.push({
         key: `tp-${assignmentId}`,
-        personName: personNames.get(ids.people.id(r.person_id)) ?? "",
+        personName: member.personName,
         projectName: project.name,
         projectCode: project.code,
-        currency: String(r.currency ?? project.currency),
-        titles: payout.dueTitles,
-        amountMinor: payout.dueMinor,
+        currency: member.currency,
+        titles: member.stages.filter((stage) => stage.status === "PAYABLE" && stage.amountMinor > 0).map((stage) => stage.title),
+        amountMinor: member.dueMinor,
       });
     }
   }
+  for (const members of team.values()) members.sort((a, b) => a.personName.localeCompare(b.personName));
 
   return {
     currency: valuation.currency,
@@ -421,6 +435,7 @@ export async function loadMobileWorkspace(client: SupabaseClient, valuation: Cur
     byCurrency: [...byCurrencyMap.entries()].sort(([a], [b]) => a.localeCompare(b)),
     readyToCollect,
     teamPayables,
+    team,
     overdueCount: kpis.overdueCertificates,
   };
 }
