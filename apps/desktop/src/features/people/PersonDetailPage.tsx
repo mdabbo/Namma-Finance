@@ -97,7 +97,7 @@ export function PersonDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate("/team/people")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
+      <button onClick={() => navigate("/team/people")} className="mb-3 flex items-center gap-1 text-sm text-muted hover:text-brand-600">
         <BackIcon size={15} /> {t("people.title")}
       </button>
 
@@ -107,7 +107,7 @@ export function PersonDetailPage() {
             <h1 className="text-xl font-semibold">{person.name}</h1>
             <Badge value={person.type === "EMPLOYEE" ? "APPROVED" : "SUBMITTED"} label={t(`personType.${person.type}`)} />
           </div>
-          <p className="mt-0.5 text-sm text-slate-500">
+          <p className="mt-0.5 text-sm text-muted">
             {person.specialization}
             {person.phone ? ` · ${person.phone}` : ""}
           </p>
@@ -150,8 +150,8 @@ export function PersonDetailPage() {
                       <Badge value={a.lifecycleStatus} label={t(`assignments.lifecycle.${a.lifecycleStatus}`)} />
                       {a.archivedAt !== null && <Badge value="CANCELLED" label={t("lifecycle.archived")} />}
                     </div>
-                    <p className="text-xs text-slate-400 tnum">{a.projectCode}</p>
-                    {a.scope && <p className="mt-1 text-sm text-slate-500">{a.scope}</p>}
+                    <p className="text-xs text-muted tnum">{a.projectCode}</p>
+                    {a.scope && <p className="mt-1 text-sm text-muted">{a.scope}</p>}
                   </div>
                   <div className="flex gap-1">
                     {canPay && (
@@ -174,7 +174,7 @@ export function PersonDetailPage() {
                     was frozen, so the earned figure is never mistaken for live
                     progress. */}
                 {cancelled && (
-                  <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/60">
+                  <p className="mb-2 rounded-lg bg-surface-subtle px-3 py-2 text-xs text-muted">
                     {t("assignments.cancelledOn", { date: fmt.date(a.cancelledAt) })}
                     {a.cancellationReason ? ` — ${a.cancellationReason}` : ""}
                   </p>
@@ -182,25 +182,25 @@ export function PersonDetailPage() {
 
                 <div className="mb-2 grid grid-cols-5 gap-4 text-sm">
                   <div>
-                    <p className="text-xs text-slate-400">{t("people.agreedAmount")}</p>
+                    <p className="text-xs text-muted">{t("people.agreedAmount")}</p>
                     {figure(a.agreedMinor)}
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-muted">
                       {cancelled ? t("assignments.earnedFrozen") : t("projects.teamAccrued")}
                     </p>
                     {figure(position?.earnedMinor)}
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400">{t("people.paidToDate")}</p>
+                    <p className="text-xs text-muted">{t("people.paidToDate")}</p>
                     {figure(position?.paidMinor, "text-emerald-600 dark:text-emerald-400")}
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400">{t("team.dueNow")}</p>
+                    <p className="text-xs text-muted">{t("team.dueNow")}</p>
                     {figure(position?.dueMinor, "text-amber-600 dark:text-amber-400")}
                   </div>
                   <div>
-                    <p className="text-xs text-slate-400">{t("projects.teamCommitted")}</p>
+                    <p className="text-xs text-muted">{t("projects.teamCommitted")}</p>
                     {figure(position?.committedMinor)}
                   </div>
                 </div>
@@ -224,19 +224,19 @@ export function PersonDetailPage() {
                 )}
 
                 {a.progressNote && (
-                  <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800/60">{t("people.workProgress")}: {a.progressNote}</p>
+                  <p className="mb-2 rounded-lg bg-surface-subtle px-3 py-2 text-xs text-muted">{t("people.workProgress")}: {a.progressNote}</p>
                 )}
 
                 {assignmentPayments.length > 0 && (
                   <table className="w-full text-sm">
                     <tbody>
                       {assignmentPayments.map((p) => (
-                        <tr key={p.id} className="border-t border-slate-100 dark:border-slate-800">
+                        <tr key={p.id} className="border-t border-border-subtle">
                           <td className="py-1.5 tnum">{fmt.date(p.date)}</td>
-                          <td className="text-slate-500">{p.note}</td>
+                          <td className="text-muted">{p.note}</td>
                           <td className="text-end tnum">{fmt.money(p.amountMinor, a.currency)}</td>
                           <td className="w-10 text-end">
-                            <button className="text-slate-300 hover:text-red-600" onClick={() => mutations.removePersonPayment.mutate(p.id)}>
+                            <button className="text-muted hover:text-red-600" onClick={() => mutations.removePersonPayment.mutate(p.id)}>
                               <Trash2 size={13} />
                             </button>
                           </td>
@@ -396,9 +396,9 @@ function TeamScheduleTable({
   const manyContracts = new Set(payout.stages.map((s) => s.contractNumber)).size > 1;
 
   return (
-    <div className="mb-2 rounded-lg border border-slate-100 dark:border-slate-800">
+    <div className="mb-2 rounded-lg border border-border-subtle">
       <div className="flex items-center justify-between px-3 py-2">
-        <p className="text-xs font-semibold text-slate-500">{t("team.schedule")}</p>
+        <p className="text-xs font-semibold text-muted">{t("team.schedule")}</p>
         {payout.dueMinor > 0 && (
           <span className="text-xs font-semibold tnum text-red-600 dark:text-red-400">
             {t("team.dueNow")}: {fmt.money(payout.dueMinor, currency, { compactFraction: true })}
@@ -408,10 +408,10 @@ function TeamScheduleTable({
       <table className="w-full text-sm">
         <tbody>
           {payout.stages.map((stage, i) => (
-            <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
+            <tr key={i} className="border-t border-border-subtle">
               <td className="px-3 py-1.5">
                 {stage.title || t("team.remainder")}
-                {manyContracts && <span className="ms-1 text-xs text-slate-400 tnum">({stage.contractNumber})</span>}
+                {manyContracts && <span className="ms-1 text-xs text-muted tnum">({stage.contractNumber})</span>}
               </td>
               <td className="py-1.5 text-end tnum">{fmt.money(stage.amountMinor, currency, { compactFraction: true })}</td>
               <td className="px-3 py-1.5 text-end">
