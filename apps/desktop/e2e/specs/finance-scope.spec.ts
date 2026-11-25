@@ -49,6 +49,11 @@ const projectCell = (page: Page) => page.locator("tbody tr td:nth-child(2)");
  */
 async function stableRowCount(page: Page): Promise<number> {
   const rows = page.locator("tbody tr");
+  // Two equal reads are not enough on their own: before the page has rendered
+  // at all, 0 then 0 reads as "settled". Route pages load on demand (C4), so on
+  // a slow runner the first row can arrive later than one 100 ms poll. Wait for
+  // a first row; every caller here expects a non-empty list.
+  await expect(rows.first(), "the list never rendered a row").toBeVisible({ timeout: 15_000 });
   let previous = -1;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const current = await rows.count();
