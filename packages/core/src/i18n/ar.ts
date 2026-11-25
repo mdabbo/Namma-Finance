@@ -1081,7 +1081,6 @@ export const ar: Dictionary = {
     photoProblem: {
       permission: "اسمح بالكاميرا من إعدادات الهاتف لالتقاط صورة، أو اختر صورة بدلًا من ذلك.",
       failed: "تعذرت قراءة الصورة. حاول مرة أخرى.",
-      cancelled: "",
     },
     claimStatus: {
       pending: "لدى المكتب",

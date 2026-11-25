@@ -1082,7 +1082,6 @@ export const en = {
     photoProblem: {
       permission: "Allow the camera in the phone's settings to take a photo, or choose one instead.",
       failed: "The photo could not be read. Try again.",
-      cancelled: "",
     },
     claimStatus: {
       pending: "With the office",

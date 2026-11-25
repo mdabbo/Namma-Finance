@@ -80,7 +80,8 @@ export function ClaimsScreen() {
   const [claimUuid, setClaimUuid] = useState(() => Crypto.randomUUID());
   const [errors, setErrors] = useState<ClaimError[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [photoProblem, setPhotoProblem] = useState<ReceiptFailure | null>(null);
+  // Cancelling the picker is not a problem to report, so it has no message (see pick below).
+  const [photoProblem, setPhotoProblem] = useState<Exclude<ReceiptFailure, "cancelled"> | null>(null);
 
   useEffect(() => {
     void AsyncStorage.getItem(LAST_PERSON_KEY)
