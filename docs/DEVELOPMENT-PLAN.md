@@ -249,7 +249,7 @@ Do not start the step that depends on one of these until it is answered.
 | 4 | What is actually wrong with the current mobile app? The owner reported "a lot of errors" in July 2026 and the list was never captured. | F1 |
 | 5 | Is document control for the office only, or will clients and contractors see it? | E2, F |
 | 6 | Which legal entity issues invoices, and in which country? That decides whether Saudi e-invoicing (ZATCA) applies. Ask him to confirm with his accountant. | D2 |
-| 7 | Should backups be encrypted with a password he must remember? Losing it loses the backup. | B2 |
+| 7 | Should backups be encrypted with a password he must remember? Losing it loses the backup. **Answered 2026-11-25: no — B2 is skipped. Do not re-propose it unless the owner raises it.** | B2 |
 | 8 | Will he buy a code-signing certificate? Without one the installer stays "Beta" and SmartScreen warns. | B5 |
 | 9 | Is `supabase-security-hardening.sql` applied to the live Supabase project? See 5.1. | F0 |
 
@@ -353,7 +353,7 @@ fallback and the sidebar still works. Both languages.
 *Risk*: the CSP and Tauri capability file must allow the log plugin; check
 `src-tauri/capabilities/`.
 
-### B2. Encrypted backups (needs decision 7)
+### B2. Encrypted backups (SKIPPED — owner decided 2026-11-25 not to encrypt backups)
 
 The SQLite file and its backups are unencrypted, and backups are copied to a
 user-chosen folder that is in practice a Google Drive folder. The app lock
