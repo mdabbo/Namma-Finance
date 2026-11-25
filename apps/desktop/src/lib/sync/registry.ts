@@ -167,12 +167,26 @@ export const SYNC_TABLES: SyncTableSpec[] = [
       "is_active", "notes", "created_at"],
     fks: [{ column: "category_id", parent: "expense_categories" }],
   },
+  {
+    // Filed on the phone, decided here (docs/supabase-0025-expense-claims.sql).
+    name: "expense_claims",
+    columns: ["person_id", "project_id", "category_id", "date", "amount_minor", "currency", "description", "supplier",
+      "receipt_storage_key", "receipt_sha256", "submitted_at", "decision", "decided_at", "decided_by", "decision_reason",
+      "created_at"],
+    fks: [
+      { column: "person_id", parent: "people" },
+      { column: "project_id", parent: "projects" },
+      { column: "category_id", parent: "expense_categories" },
+    ],
+  },
 ];
 
 /** Financial facts which must never use silent last-write-wins. */
 export const CONFLICT_PROTECTED_TABLES = new Set([
   "contracts", "contract_revisions", "payment_certificates", "payments",
   "payment_certificate_allocations", "project_assignments", "expenses", "person_payments",
+  // A phone edit racing a desktop decision must surface, never silently undo it.
+  "expense_claims",
 ]);
 
 export const NUMBER_COLLISION_TABLES = new Set([

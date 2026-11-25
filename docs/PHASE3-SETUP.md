@@ -47,6 +47,11 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 17. `supabase-0024-fx-rates.sql` (optional: lets the phone use the desktop's
     exchange rates. Without it sync still works; the desktop's Sync report
     records why the rates were not published, and the phone keeps typed rates)
+18. `supabase-0025-expense-claims.sql` (**required before the first sync from
+    desktop schema 32**: a schema-32 desktop pulls the `expense_claims` table,
+    and without it every sync stops. Apply it BEFORE installing that desktop.
+    Needs 0021 and 0013. Adds the claims table, its rules, and lets finance
+    logins read receipt photos in the `namaa-documents` bucket.)
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by

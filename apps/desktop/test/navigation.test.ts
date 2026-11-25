@@ -73,10 +73,16 @@ describe("Milestone 1 navigation", () => {
       "certificates",
       "payments",
       "expenses",
+      "claims",
       "receivables",
       "cash-flow",
     ]);
     expect(activeSecondaryItemId("/finance", SECONDARY_NAVIGATION.finance)).toBe("overview");
+    expect(activeSecondaryItemId("/finance/claims", SECONDARY_NAVIGATION.finance)).toBe("claims");
+    expect(breadcrumbsForPath("/finance/claims")).toEqual([
+      { labelKey: "nav.finance", to: "/finance" },
+      { labelKey: "claims.title" },
+    ]);
     expect(activeSecondaryItemId("/finance/receivables", SECONDARY_NAVIGATION.finance)).toBe("receivables");
     expect(activeSecondaryItemId("/finance/certificates", SECONDARY_NAVIGATION.finance)).toBe("certificates");
     expect(breadcrumbsForPath("/finance/receivables")).toEqual([

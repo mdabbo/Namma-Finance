@@ -64,6 +64,7 @@ describe("Milestone 6 release integrity", () => {
       "0007_special_person_payments.sql",
       "0008_stage_progress_log.sql",
       "0009_assignment_contract_fees.sql",
+      "0010_expense_claims.sql",
     ]);
     const stamped = migrationNames.flatMap((name) => [
       ...readFileSync(join(root, "apps/desktop/src-tauri/migrations", name), "utf8")

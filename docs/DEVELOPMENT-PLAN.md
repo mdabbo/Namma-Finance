@@ -752,7 +752,12 @@ Site signal is unreliable, so writes must queue.
 `expo-crypto`). The first write feature. Person, project, date, minutes,
 note. Validate with the same core schemas the desktop uses.
 
-**F6. Expense claims with a photo.**
+**F6. Expense claims with a photo.** — DESKTOP + CLOUD BUILT 2026-11-25 (owner: claim flow,
+receipt optional, two PRs). `docs/supabase-0025-expense-claims.sql`, desktop
+migration `0010` (schema 32), `accept_expense_claim_atomic` /
+`reject_expense_claim_atomic`, Finance → Expense claims. Phone capture is the
+second PR. Decided claims are content-immutable for every login (stricter than
+F0 design 5.2, so a late phone edit cannot disagree with the expense).
 Camera capture, upload to Supabase storage under the user's folder (the
 `namaa-documents` bucket policies already scope by `auth.uid()`), then the claim
 row. Compress images on the device.
