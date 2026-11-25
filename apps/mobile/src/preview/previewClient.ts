@@ -124,6 +124,15 @@ rows.expenses!.push(
 rows.project_assignments!.push(
   { uuid: "as-1", person_id: "pe-1", project_id: "pr-102", agreed_minor: money(900_000), currency: "EGP", fx_rate_micro: 1_000_000, lifecycle_status: "ACTIVE" },
   { uuid: "as-2", person_id: "pe-2", project_id: "pr-101", agreed_minor: money(60_000), currency: "SAR", fx_rate_micro: 12_800_000, lifecycle_status: "ACTIVE" },
+  { uuid: "as-3", person_id: "pe-2", project_id: "pr-102", agreed_minor: money(400_000), currency: "EGP", fx_rate_micro: 1_000_000, lifecycle_status: "CANCELLED", earned_minor_at_cancellation: money(120_000) },
+  { uuid: "as-4", person_id: "pe-1", project_id: "pr-101", agreed_minor: money(40_000), currency: "SAR", fx_rate_micro: 12_800_000, lifecycle_status: "ACTIVE", archived_at: iso(-5) },
+);
+rows.person_payments!.push(
+  { uuid: "pp-1", assignment_id: "as-1", date: iso(-90), amount_minor: money(150_000), note: "First stage", payment_kind: "EARNED", voided_at: null },
+  { uuid: "pp-2", assignment_id: "as-1", date: iso(-40), amount_minor: money(80_000), note: "Entered twice", payment_kind: "EARNED", voided_at: iso(-39) },
+  { uuid: "pp-3", assignment_id: "as-1", date: iso(-20), amount_minor: money(50_000), note: "Advance", payment_kind: "SPECIAL", voided_at: null },
+  { uuid: "pp-4", assignment_id: "as-2", date: iso(-60), amount_minor: money(9_000), note: null, payment_kind: "EARNED", voided_at: null },
+  { uuid: "pp-5", assignment_id: "as-3", date: iso(-100), amount_minor: money(100_000), note: null, payment_kind: "EARNED", voided_at: null },
 );
 
 // A few time entries, so the Time screen has something to list.

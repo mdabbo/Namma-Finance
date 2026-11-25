@@ -1,8 +1,8 @@
 # Phase 4 — NAMAA Finance mobile companion (Expo)
 
 A phone app that shows the office's live financials from the same Supabase
-backend the desktop syncs to, and logs **time entries** — the one thing it
-writes. All figures are computed on the
+backend the desktop syncs to. It writes two things: **time entries**, and
+**earned payments to the team**. All figures are computed on the
 phone by the **same `@mep/core` engine** as the desktop — the two can never
 disagree. Arabic + English.
 
@@ -33,9 +33,18 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 
 ## Notes / current limits (v0.1)
 
-- **Time entries are the only write.** Certificates, payments and every other
-  financial record stay on the desktop (a test holds every cloud write to
-  `time_entries`). An entry is saved on the phone first and sent when the
+- **Time entries and team payments are the only writes.** Certificates,
+  client payments and every other financial record stay on the desktop (a test
+  holds every cloud write to `time_entries` and `person_payments`).
+- **Paying the team** (project page → Team → Pay; owner decision 2026-11-25):
+  only an earned payment, capped at what is due now. "Due" follows the
+  desktop's own rule (`assignment_person_payment_due`): voided payments do not
+  count, a cancelled assignment keeps its frozen earnings, archived ones cannot
+  be paid, and an exact twin (same date, amount and note) is refused. The
+  desktop checks the payment again when it pulls it and adds the linked expense;
+  changing or voiding a payment is done on the desktop. This assumes ONE desktop
+  syncs: with two, each would add its own linked expense before seeing the
+  other's. An entry is saved on the phone first and sent when the
   cloud answers, so a dropped signal never loses it; its uuid is the cloud key,
   so a resend never makes a second entry. `updated_at` comes from the cloud's
   clock (the `Date` header of `/auth/v1/health`), so a phone with a slow clock
