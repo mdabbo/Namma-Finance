@@ -40,6 +40,8 @@ export interface Option {
   id: string;
   label: string;
   hint?: string;
+  /** A project's own currency, so a claim for it can default to it. */
+  currency?: string;
 }
 
 export interface TimeLookups {
@@ -73,7 +75,7 @@ const byLabel = (a: Option, b: Option) => a.label.localeCompare(b.label);
 export async function loadTimeLookups(client: SupabaseClient): Promise<TimeLookups> {
   const [people, projects, stages] = await Promise.all([
     liveRows(client, "people", "uuid,name,archived_at"),
-    liveRows(client, "projects", "uuid,code,name,status,archived_at"),
+    liveRows(client, "projects", "uuid,code,name,status,archived_at,currency"),
     liveRows(client, "project_stages", "uuid,project_id,name,sort_order"),
   ]);
   const stageMap = new Map<string, Option[]>();
@@ -87,7 +89,7 @@ export async function loadTimeLookups(client: SupabaseClient): Promise<TimeLooku
   const liveProjects = projects.filter((row) => row.archived_at == null);
   const open = liveProjects.filter((row) => row.status !== "COMPLETED");
   const done = liveProjects.filter((row) => row.status === "COMPLETED");
-  const toOption = (row: Row): Option => ({ id: str(row.uuid), label: str(row.name), hint: str(row.code) || undefined });
+  const toOption = (row: Row): Option => ({ id: str(row.uuid), label: str(row.name), hint: str(row.code) || undefined, currency: str(row.currency) || undefined });
   return {
     people: people.filter((row) => row.archived_at == null).map((row) => ({ id: str(row.uuid), label: str(row.name) })).sort(byLabel),
     projects: [...open.map(toOption).sort(byLabel), ...done.map(toOption).sort(byLabel)],

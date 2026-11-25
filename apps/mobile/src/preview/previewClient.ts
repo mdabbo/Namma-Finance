@@ -142,6 +142,13 @@ rows.fx_rates = [
 ];
 
 // A few time entries, so the Time screen has something to list.
+// Claims as the office sees them: one waiting, one accepted, one rejected.
+rows.expense_claims = [
+  { uuid: "ec-1", person_id: "pe-1", project_id: "pr-102", date: iso(-1), amount_minor: money(1_500), currency: "EGP", description: "Printing the drawings", supplier: "Copy Centre", receipt_storage_key: null, receipt_sha256: null, submitted_at: new Date(Date.now() - DAY).toISOString(), created_at: `${iso(-1)} 09:00:00`, decision: null, decision_reason: null, deleted_at: null },
+  { uuid: "ec-2", person_id: "pe-2", project_id: "pr-103", date: iso(-6), amount_minor: money(420), currency: "SAR", description: "Taxi to site", supplier: null, receipt_storage_key: null, receipt_sha256: null, submitted_at: new Date(Date.now() - 6 * DAY).toISOString(), created_at: `${iso(-6)} 09:00:00`, decision: "ACCEPTED", decision_reason: null, deleted_at: null },
+  { uuid: "ec-3", person_id: "pe-1", project_id: null, date: iso(-9), amount_minor: money(90), currency: "EGP", description: "Lunch", supplier: null, receipt_storage_key: null, receipt_sha256: null, submitted_at: new Date(Date.now() - 9 * DAY).toISOString(), created_at: `${iso(-9)} 09:00:00`, decision: "REJECTED", decision_reason: "Personal purchase", deleted_at: null },
+];
+
 rows.time_entries = [
   { uuid: "te-1", person_id: "pe-1", project_id: "pr-102", stage_id: null, date: iso(0), minutes: 180, billable: 1, note: "Coordination meeting on site", created_at: `${iso(0)} 08:00:00`, deleted_at: null },
   { uuid: "te-2", person_id: "pe-2", project_id: "pr-106", stage_id: "st-2", date: iso(-1), minutes: 450, billable: 1, note: null, created_at: `${iso(-1)} 09:00:00`, deleted_at: null },
