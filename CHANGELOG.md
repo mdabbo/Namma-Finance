@@ -14,12 +14,21 @@ follow Semantic Versioning.
   getting a share of one agreed fee by value. Contracts left empty share the
   rest proportionally, and assignments without per-contract fees are unchanged.
   Fees are keyed by contract number so they sync between devices.
+- Expense claims (Finance → Expense claims). Claims filed on the phone arrive
+  through sync; accepting one creates a numbered expense from the claim's own
+  date, amount, description and supplier (the office picks the category and
+  project), and rejecting one records a reason. A decided claim cannot be
+  changed. Receipt photos are shown only if they match the fingerprint they
+  were filed with.
 
 ### Changed
 
 - Schema advances to **31** (migration 0009, `project_assignments.contract_fees`).
   **Before the first sync from this build the cloud project needs
   `docs/supabase-0022-assignment-contract-fees.sql`.**
+- Schema advances to **32** (migration 0010, `expense_claims`).
+  **Apply `docs/supabase-0025-expense-claims.sql` to the cloud project before
+  installing this build: a schema-32 desktop cannot sync without it.**
 
 ## [0.8.0] - 2026-11-15
 

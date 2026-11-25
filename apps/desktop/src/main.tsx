@@ -19,6 +19,7 @@ import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { CertificatesPage } from "./features/certificates/CertificatesPage";
 import { PaymentsPage } from "./features/payments/PaymentsPage";
 import { ExpensesPage } from "./features/expenses/ExpensesPage";
+import { ExpenseClaimsPage } from "./features/expenses/ExpenseClaimsPage";
 import { FinanceOverviewPage } from "./features/finance/FinanceOverviewPage";
 import { ReceivablesPage } from "./features/finance/ReceivablesPage";
 import { PeoplePage } from "./features/people/PeoplePage";
@@ -60,6 +61,7 @@ const router = createHashRouter([
       { path: "finance/certificates", element: <CertificatesPage /> },
       { path: "finance/payments", element: <PaymentsPage /> },
       { path: "finance/expenses", element: <ExpensesPage /> },
+      { path: "finance/claims", element: <ExpenseClaimsPage /> },
       { path: "finance/receivables", element: <ReceivablesPage /> },
       { path: "finance/cash-flow", element: <CashflowView /> },
 
