@@ -122,7 +122,7 @@ export function ClientsPage() {
         }
       />
 
-      <label className="mb-3 flex items-center gap-2 text-sm text-slate-600">
+      <label className="mb-3 flex items-center gap-2 text-sm text-foreground">
         <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
         {t("lifecycle.includeArchived")}
       </label>

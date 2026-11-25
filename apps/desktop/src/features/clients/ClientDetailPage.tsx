@@ -34,7 +34,7 @@ export function ClientDetailPage() {
 
   return (
     <div>
-      <button onClick={() => navigate("/projects/clients")} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600">
+      <button onClick={() => navigate("/projects/clients")} className="mb-3 flex items-center gap-1 text-sm text-muted hover:text-brand-600">
         <BackIcon size={15} /> {t("clients.title")}
       </button>
 
@@ -82,23 +82,23 @@ export function ClientDetailPage() {
       <div className="grid grid-cols-3 gap-4">
         <Card className="p-4 text-sm">
           <h2 className="mb-3 font-semibold">{t("clients.single")}</h2>
-          <dl className="space-y-2 text-slate-600 dark:text-slate-300">
+          <dl className="space-y-2 text-foreground">
             {client.phone && (
-              <div className="flex items-center gap-2"><Phone size={14} className="text-slate-400" /><span className="tnum">{client.phone}</span></div>
+              <div className="flex items-center gap-2"><Phone size={14} className="text-muted" /><span className="tnum">{client.phone}</span></div>
             )}
             {client.email && (
-              <div className="flex items-center gap-2"><Mail size={14} className="text-slate-400" /><span dir="ltr">{client.email}</span></div>
+              <div className="flex items-center gap-2"><Mail size={14} className="text-muted" /><span dir="ltr">{client.email}</span></div>
             )}
             {client.address && (
-              <div className="flex items-center gap-2"><MapPin size={14} className="text-slate-400" />{client.address}</div>
+              <div className="flex items-center gap-2"><MapPin size={14} className="text-muted" />{client.address}</div>
             )}
             {client.taxNumber && (
-              <div className="flex items-center gap-2"><ReceiptText size={14} className="text-slate-400" /><span className="tnum">{client.taxNumber}</span></div>
+              <div className="flex items-center gap-2"><ReceiptText size={14} className="text-muted" /><span className="tnum">{client.taxNumber}</span></div>
             )}
             {client.contacts && (
-              <div className="flex items-start gap-2"><Building2 size={14} className="mt-0.5 text-slate-400" /><span className="whitespace-pre-wrap">{client.contacts}</span></div>
+              <div className="flex items-start gap-2"><Building2 size={14} className="mt-0.5 text-muted" /><span className="whitespace-pre-wrap">{client.contacts}</span></div>
             )}
-            {client.notes && <p className="border-t border-slate-100 pt-2 text-slate-500 dark:border-slate-800">{client.notes}</p>}
+            {client.notes && <p className="border-t border-border-subtle pt-2 text-muted">{client.notes}</p>}
           </dl>
         </Card>
 
@@ -114,11 +114,11 @@ export function ClientDetailPage() {
                   <Link
                     key={p.id}
                     to={`/projects/${p.id}`}
-                    className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2.5 hover:border-brand-200 hover:bg-brand-50/40 dark:border-slate-800 dark:hover:bg-slate-800/60"
+                    className="flex items-center justify-between rounded-lg border border-border-subtle px-3 py-2.5 hover:border-brand-200 hover:bg-brand-50/40 dark:hover:bg-surface-subtle"
                   >
                     <div>
                       <p className="text-sm font-medium">{p.name}</p>
-                      <p className="text-xs text-slate-400 tnum">{p.code}</p>
+                      <p className="text-xs text-muted tnum">{p.code}</p>
                     </div>
                     <div className="flex items-center gap-4">
                       <span className="text-sm tnum">{readModelAmount(fin, (f) => base.format(f.contractValueEgp))}</span>
