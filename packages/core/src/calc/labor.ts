@@ -17,33 +17,33 @@ export function laborCostMinor(minutes: number, hourlyRateMinor: number | null |
 
 export interface ProjectCosting extends ProjectProfitability {
   /** Allocated labor cost from time entries, consolidated to EGP. */
-  laborCostEgp: number;
+  laborCostReporting: number;
   /** Direct expenses + labor + allocated overhead. */
-  trueCostEgp: number;
+  trueCostReporting: number;
   /** Revenue − true cost (fully loaded). Distinct from the cash net profit. */
-  fullyLoadedProfitEgp: number;
+  fullyLoadedProfitReporting: number;
   fullyLoadedMarginBp: number;
 }
 
 /**
- * Layer labor cost onto the per-project profitability rows. `laborByProjectEgp`
+ * Layer labor cost onto the per-project profitability rows. `laborByProjectReporting`
  * is the summed, EGP-converted labor cost per project (the repository does the
  * currency conversion, since rates live on people in their own currency).
  */
 export function computeCosting(
   rows: ProjectProfitability[],
-  laborByProjectEgp: ReadonlyMap<number, number>,
+  laborByProjectReporting: ReadonlyMap<number, number>,
 ): ProjectCosting[] {
   return rows.map((r) => {
-    const labor = laborByProjectEgp.get(r.projectId) ?? 0;
-    const trueCost = r.directCostEgp + labor + r.overheadEgp;
-    const fullyLoaded = r.revenueEgp - trueCost;
+    const labor = laborByProjectReporting.get(r.projectId) ?? 0;
+    const trueCost = r.directCostReporting + labor + r.overheadReporting;
+    const fullyLoaded = r.revenueReporting - trueCost;
     return {
       ...r,
-      laborCostEgp: labor,
-      trueCostEgp: trueCost,
-      fullyLoadedProfitEgp: fullyLoaded,
-      fullyLoadedMarginBp: ratioBp(fullyLoaded, r.revenueEgp),
+      laborCostReporting: labor,
+      trueCostReporting: trueCost,
+      fullyLoadedProfitReporting: fullyLoaded,
+      fullyLoadedMarginBp: ratioBp(fullyLoaded, r.revenueReporting),
     };
   });
 }

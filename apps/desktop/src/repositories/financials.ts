@@ -21,7 +21,7 @@ import {
   type ProjectFinancials,
   type ProjectCostProfile,
   type AssignmentLifecycle,
-  type ProjectCashValuationEgp,
+  type ProjectCashValuationReporting,
   type CurrencyValuation,
 } from "@mep/core";
 import { useReportingValuation } from "../lib/baseCurrency";
@@ -80,7 +80,7 @@ export interface ReadyToCollectItem {
   currency: string;
   achievedTitles: string[];
   readyMinor: number;
-  readyEgp: number;
+  readyReporting: number;
 }
 
 export interface TeamPayableItem {
@@ -92,7 +92,7 @@ export interface TeamPayableItem {
   projectCode: string;
   currency: string;
   dueMinor: number;
-  dueEgp: number;
+  dueReporting: number;
   /** Released stage titles not yet paid to the person. */
   dueTitles: string[];
 }
@@ -122,7 +122,7 @@ export interface WorkspaceFinancials {
   /**
    * The valuation every consolidated figure below was built with. Anything
    * derived further from this workspace must use THIS valuation — a second one
-   * would add two currencies together. Fields named `…Egp` hold amounts in
+   * would add two currencies together. Fields named `…Reporting` hold amounts in
    * `valuation.currency`; they are already in the reporting currency and must
    * not be converted again.
    */
@@ -147,7 +147,7 @@ export interface WorkspaceFinancials {
   teamAccounts: TeamAccountItem[];
   /** Analytical labor cost per project (EGP) from logged time — costing only,
    *  deliberately NOT part of cash net profit (salaries stay overhead). */
-  laborByProjectEgp: Map<number, number>;
+  laborByProjectReporting: Map<number, number>;
   /** Separate cash, accrual, commitment, and forecast views by project. */
   costsByProject: Map<number, ProjectCostProfile>;
 }
@@ -245,7 +245,7 @@ async function loadWorkspaceFinancialsOnce(
 
   // One shared implementation with the mobile workspace: the split has to be
   // exact, and two copies of "exact" drift. See computeProjectCashValuation.
-  const cashValuationByProject = new Map<number, ProjectCashValuationEgp>();
+  const cashValuationByProject = new Map<number, ProjectCashValuationReporting>();
   for (const project of projects) {
     const projectContracts = contracts.filter((item) => item.projectId === project.id);
     const contractIds = new Set(projectContracts.map((contract) => contract.id));
@@ -297,7 +297,7 @@ async function loadWorkspaceFinancialsOnce(
       egpMinor: valuation.value(p.amountMinor, fx.currency, fx.fxRateMicro),
     }];
   });
-  const cashInByProjectEgp = new Map<number, number>();
+  const cashInByProjectReporting = new Map<number, number>();
   for (const payment of payments) {
     const project = projectByContract.get(payment.contractId);
     if (!project) continue;
@@ -305,8 +305,8 @@ async function loadWorkspaceFinancialsOnce(
       currency: project.currency,
       fxRateMicro: project.fxRateMicro,
     };
-    const amountEgp = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
-    cashInByProjectEgp.set(project.id, (cashInByProjectEgp.get(project.id) ?? 0) + amountEgp);
+    const amountReporting = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
+    cashInByProjectReporting.set(project.id, (cashInByProjectReporting.get(project.id) ?? 0) + amountReporting);
   }
 
   // achieved-milestone billing alerts (milestones link to completed stages or are checked manually)
@@ -344,11 +344,11 @@ async function loadWorkspaceFinancialsOnce(
         currency: project.currency,
         achievedTitles: ready.achievedTitles,
         readyMinor: ready.readyMinor,
-        readyEgp: valuation.value(ready.readyMinor, project.currency, project.fxRateMicro),
+        readyReporting: valuation.value(ready.readyMinor, project.currency, project.fxRateMicro),
       });
     }
   }
-  readyToCollect.sort((a, b) => b.readyEgp - a.readyEgp);
+  readyToCollect.sort((a, b) => b.readyReporting - a.readyReporting);
 
   // team payables: client paid a certificate → the matching stage of every
   // assignment on that project becomes payable to the team member
@@ -403,7 +403,7 @@ async function loadWorkspaceFinancialsOnce(
       paidOutMinor: payout.paidOutMinor,
       earnedAtCancellationMinor: a.earned_minor_at_cancellation,
     });
-    const toEgp = (minor: number) => valuation.value(minor, a.currency, a.fx_rate_micro);
+    const toReporting = (minor: number) => valuation.value(minor, a.currency, a.fx_rate_micro);
     teamAccounts.push({
       assignmentId: a.id,
       projectId: project.id,
@@ -417,11 +417,11 @@ async function loadWorkspaceFinancialsOnce(
     });
     committedTeamByProject.set(
       project.id,
-      (committedTeamByProject.get(project.id) ?? 0) + toEgp(position.committedMinor),
+      (committedTeamByProject.get(project.id) ?? 0) + toReporting(position.committedMinor),
     );
     accruedByProject.set(
       project.id,
-      (accruedByProject.get(project.id) ?? 0) + toEgp(position.dueMinor),
+      (accruedByProject.get(project.id) ?? 0) + toReporting(position.dueMinor),
     );
     if (assignmentRaisesAlerts({
       archived: a.archived_at !== null,
@@ -437,13 +437,13 @@ async function loadWorkspaceFinancialsOnce(
         projectCode: project.code,
         currency: a.currency,
         dueMinor: position.dueMinor,
-        dueEgp: toEgp(position.dueMinor),
+        dueReporting: toReporting(position.dueMinor),
         // A cancelled assignment owes a frozen balance, not further stages.
         dueTitles: a.lifecycle_status === "CANCELLED" ? [] : payout.dueTitles,
       });
     }
   }
-  teamPayables.sort((a, b) => b.dueEgp - a.dueEgp);
+  teamPayables.sort((a, b) => b.dueReporting - a.dueReporting);
 
   // analytical labor cost per project: Σ (minutes × person hourly rate),
   // each entry converted to EGP at the person currency's stored rate
@@ -458,12 +458,12 @@ async function loadWorkspaceFinancialsOnce(
      JOIN projects p ON p.id=te.project_id
      WHERE p.archived_at IS NULL`,
   );
-  const laborByProjectEgp = new Map<number, number>();
+  const laborByProjectReporting = new Map<number, number>();
   for (const row of laborRows) {
     const costMinor = laborCostMinor(row.minutes, row.hourly_rate_minor);
     if (costMinor === 0) continue;
     const egp = valuation.value(costMinor, row.currency, rateByCurrency.get(row.currency) ?? 1_000_000);
-    laborByProjectEgp.set(row.project_id, (laborByProjectEgp.get(row.project_id) ?? 0) + egp);
+    laborByProjectReporting.set(row.project_id, (laborByProjectReporting.get(row.project_id) ?? 0) + egp);
   }
 
   const nonTeamExpenseByProject = new Map<number, number>();
@@ -481,12 +481,12 @@ async function loadWorkspaceFinancialsOnce(
     const project = financial.project;
     costsByProject.set(project.id, computeProjectCostProfile({
       projectId: project.id,
-      recognizedRevenueEgp: financial.revenueEgp,
-      forecastRevenueEgp: financial.contractValueEgp,
-      actualCashInEgp: cashInByProjectEgp.get(project.id) ?? 0,
-      actualPaidCostEgp: financial.expensesEgp,
-      accruedCostEgp: accruedByProject.get(project.id) ?? 0,
-      committedCostEgp: (committedTeamByProject.get(project.id) ?? 0) + (nonTeamExpenseByProject.get(project.id) ?? 0),
+      recognizedRevenueReporting: financial.revenueReporting,
+      forecastRevenueReporting: financial.contractValueReporting,
+      actualCashInReporting: cashInByProjectReporting.get(project.id) ?? 0,
+      actualPaidCostReporting: financial.expensesReporting,
+      accruedCostReporting: accruedByProject.get(project.id) ?? 0,
+      committedCostReporting: (committedTeamByProject.get(project.id) ?? 0) + (nonTeamExpenseByProject.get(project.id) ?? 0),
     }));
   }
 
@@ -499,7 +499,7 @@ async function loadWorkspaceFinancialsOnce(
     readyToCollect,
     teamPayables,
     teamAccounts,
-    laborByProjectEgp,
+    laborByProjectReporting,
     costsByProject,
   };
 }

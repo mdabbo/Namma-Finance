@@ -3,9 +3,9 @@ import { EGP_VALUATION, reportingValuation, type CurrencyValuation } from "@mep/
 /**
  * The currency the phone's consolidated totals are shown in (plan step F7).
  *
- * The desktop keeps its reporting currency and rates in its own database,
- * which is not synced, so the phone keeps its own: a currency and, for SAR or
- * USD, that currency's rate in EGP. The valuation rule itself is the shared
+ * The reporting currency is chosen on the phone. Its rate in EGP comes from
+ * the desktop when it has published one (lib/fxRates.ts), and otherwise from a
+ * rate typed on the phone. The valuation rule itself is the shared
  * one from @mep/core — an amount already in the reporting currency is taken at
  * face value, anything else goes through the EGP pivot at its own stored rate.
  *

@@ -55,9 +55,9 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     expect(state.totalActualCashInMinor).toBe(42_000_00);
     expect(state.outstandingReceivablesMinor).toBe(34_500_00);
     expect(state.remainingUncertifiedMinor).toBe(50_000_00);
-    expect(project.revenueEgp).toBe(50_000_00);
-    expect(project.totalActualCashInEgp).toBe(42_000_00);
-    expect(workspace.costsByProject.get(projectId)!.recognizedRevenueEgp).toBe(50_000_00);
+    expect(project.revenueReporting).toBe(50_000_00);
+    expect(project.totalActualCashInReporting).toBe(42_000_00);
+    expect(workspace.costsByProject.get(projectId)!.recognizedRevenueReporting).toBe(50_000_00);
 
     rawExec(`UPDATE contracts SET archived_at='2026-05-01' WHERE id=${contractId}`);
     const activeScope = await loadWorkspaceFinancials(EGP_VALUATION);
@@ -100,18 +100,18 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
     const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION);
 
-    expect(overview.certificateCollectionsEgp).toBe(15_000_00);
-    expect(overview.advanceReceivedEgp).toBe(10_000_00);
-    expect(overview.retentionReleasedEgp).toBe(3_000_00);
-    expect(overview.unallocatedCustomerCreditEgp).toBe(10_000_00);
-    expect(overview.totalCashInEgp).toBe(38_000_00);
+    expect(overview.certificateCollectionsReporting).toBe(15_000_00);
+    expect(overview.advanceReceivedReporting).toBe(10_000_00);
+    expect(overview.retentionReleasedReporting).toBe(3_000_00);
+    expect(overview.unallocatedCustomerCreditReporting).toBe(10_000_00);
+    expect(overview.totalCashInReporting).toBe(38_000_00);
 
     // The headline is emphatically not the collection figure.
-    expect(overview.totalCashInEgp).not.toBe(overview.certificateCollectionsEgp);
+    expect(overview.totalCashInReporting).not.toBe(overview.certificateCollectionsReporting);
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
 
     // Net cash position remains total actual cash in less actual cash out.
-    expect(overview.netCashPositionEgp).toBe(overview.totalCashInEgp - overview.cashOutEgp);
+    expect(overview.netCashPositionReporting).toBe(overview.totalCashInReporting - overview.cashOutReporting);
   });
 
   /**
@@ -159,10 +159,10 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
 
     // 40,000.00 USD at 60 EGP/USD — the rate when the money actually arrived,
     // not the 50 captured on the certificate.
-    expect(overview.totalCashInEgp).toBe(2_400_000_00);
-    expect(overview.certificateCollectionsEgp).toBe(2_400_000_00);
-    expect(overview.certificateCollectionsEgp).not.toBe(2_000_000_00);
-    expect(overview.unallocatedCustomerCreditEgp).toBe(0);
+    expect(overview.totalCashInReporting).toBe(2_400_000_00);
+    expect(overview.certificateCollectionsReporting).toBe(2_400_000_00);
+    expect(overview.certificateCollectionsReporting).not.toBe(2_000_000_00);
+    expect(overview.unallocatedCustomerCreditReporting).toBe(0);
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
   });
 
@@ -191,7 +191,7 @@ describe("Milestone 7 cash-in and revenue definitions", () => {
       EGP_VALUATION,
     );
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
-    expect(overview.certificateCollectionsEgp + overview.unallocatedCustomerCreditEgp)
-      .toBe(overview.totalCashInEgp);
+    expect(overview.certificateCollectionsReporting + overview.unallocatedCustomerCreditReporting)
+      .toBe(overview.totalCashInReporting);
   });
 });

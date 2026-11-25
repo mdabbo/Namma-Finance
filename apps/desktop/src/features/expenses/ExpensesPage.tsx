@@ -137,23 +137,23 @@ export function ExpensesPage() {
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("financeSection.kpis")}>
           <KpiCard
             label={t("financeSection.totalSpend")}
-            value={base.format(kpis.totalEgp)}
+            value={base.format(kpis.totalReporting)}
             icon={Receipt}
             hint={t("dashboard.reportingCurrency", { currency: base.code })}
           />
           <KpiCard
             label={t("financeSection.spendMonth")}
-            value={base.format(kpis.monthEgp)}
+            value={base.format(kpis.monthReporting)}
             icon={CalendarDays}
           />
           <KpiCard
             label={t("financeSection.projectSpend")}
-            value={base.format(kpis.projectEgp)}
+            value={base.format(kpis.projectReporting)}
             icon={FolderKanban}
           />
           <KpiCard
             label={t("financeSection.overheadSpend")}
-            value={base.format(kpis.overheadEgp)}
+            value={base.format(kpis.overheadReporting)}
             icon={Building2}
           />
         </div>

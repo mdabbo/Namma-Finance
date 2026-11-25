@@ -132,7 +132,7 @@ export function PeoplePage() {
             <option value="EMPLOYEE">{t("personType.EMPLOYEE")}</option>
             <option value="FREELANCER">{t("personType.FREELANCER")}</option>
           </Select>
-          <label className="flex items-center gap-2 text-sm text-slate-600">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} />
             {t("lifecycle.includeArchived")}
           </label>

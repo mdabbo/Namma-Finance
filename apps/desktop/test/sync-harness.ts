@@ -79,6 +79,7 @@ export function resetRig(): void {
   active = null;
   remote.clear();
   timestamptzColumns.clear();
+  failingTables.clear();
   transactionDepth = 0;
 }
 
@@ -208,6 +209,15 @@ export function respellRemote(table: string): void {
   for (const row of tableStore(table).values()) respell(table, row);
 }
 
+/** Tables whose writes the fake cloud refuses, as a cloud missing the table would. */
+const failingTables = new Map<string, string>();
+
+/** Make every upsert into `table` fail with `message` (null restores it). */
+export function failTable(table: string, message: string | null): void {
+  if (message === null) failingTables.delete(table);
+  else failingTables.set(table, message);
+}
+
 /** All live (non-tombstoned) remote rows in a table, for assertions. */
 export function remoteRows(name: string): Row[] {
   return [...(remote.get(name)?.values() ?? [])];
@@ -278,14 +288,17 @@ class FakeQuery implements PromiseLike<QueryResult> {
   }
 
   /**
-   * Upsert resolves immediately (not via then). onConflict is always uuid.
+   * Upsert resolves immediately (not via then). The key is the onConflict
+   * column (uuid for every synced table; code for fx_rates).
    * Models the backend's nf_lww_guard BEFORE UPDATE trigger: an update to an
    * existing row is rejected unless it is strictly newer (inserts are exempt).
    */
-  upsert(payload: Row[], _opts: { onConflict: string }): Promise<QueryResult> {
+  upsert(payload: Row[], opts: { onConflict: string }): Promise<QueryResult> {
+    const failure = failingTables.get(this.table);
+    if (failure) return Promise.resolve({ data: null, error: { message: failure } });
     const store = tableStore(this.table);
     for (const row of payload) {
-      const key = String(row.uuid);
+      const key = String(row[opts.onConflict]);
       const existing = store.get(key);
       if (existing && Date.parse(row.updated_at as string) <= Date.parse(existing.updated_at as string)) {
         continue; // older-or-equal write loses; stored row stays

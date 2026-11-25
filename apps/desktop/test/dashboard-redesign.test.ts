@@ -33,11 +33,11 @@ function expense(
 function project(
   id: number,
   status: ProjectStatus,
-  contractValueEgp: number,
+  contractValueReporting: number,
 ): ProjectFinancials {
   return {
     project: { id, status, name: `Project ${id}` },
-    contractValueEgp,
+    contractValueReporting,
   } as ProjectFinancials;
 }
 
@@ -84,21 +84,21 @@ describe("Milestone 3 dashboard model", () => {
     expect(series).toEqual([
       {
         month: "2026-04",
-        cashInEgp: 25_00,
-        cashOutEgp: 5_000_00,
-        netEgp: -4_975_00,
+        cashInReporting: 25_00,
+        cashOutReporting: 5_000_00,
+        netReporting: -4_975_00,
       },
       {
         month: "2026-05",
-        cashInEgp: 120_00,
-        cashOutEgp: 40_00,
-        netEgp: 80_00,
+        cashInReporting: 120_00,
+        cashOutReporting: 40_00,
+        netReporting: 80_00,
       },
     ]);
     for (const point of series) {
-      expect(Number.isSafeInteger(point.cashInEgp)).toBe(true);
-      expect(Number.isSafeInteger(point.cashOutEgp)).toBe(true);
-      expect(Number.isSafeInteger(point.netEgp)).toBe(true);
+      expect(Number.isSafeInteger(point.cashInReporting)).toBe(true);
+      expect(Number.isSafeInteger(point.cashOutReporting)).toBe(true);
+      expect(Number.isSafeInteger(point.netReporting)).toBe(true);
     }
   });
 
