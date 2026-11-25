@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, type ComponentType } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createHashRouter, Navigate, RouterProvider, useParams } from "react-router-dom";
@@ -11,26 +11,23 @@ import { isLockEnabled } from "./lib/lock";
 import { LockScreen } from "./components/LockScreen";
 import { finalizePendingBackupMetadata, runDailyBackupIfDue } from "./repositories/backups";
 import { Layout } from "./app/Layout";
-import { DashboardPage } from "./features/dashboard/DashboardPage";
-import { ClientsPage } from "./features/clients/ClientsPage";
-import { ClientDetailPage } from "./features/clients/ClientDetailPage";
-import { ProjectsPage } from "./features/projects/ProjectsPage";
-import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
-import { CertificatesPage } from "./features/certificates/CertificatesPage";
-import { PaymentsPage } from "./features/payments/PaymentsPage";
-import { ExpensesPage } from "./features/expenses/ExpensesPage";
-import { FinanceOverviewPage } from "./features/finance/FinanceOverviewPage";
-import { ReceivablesPage } from "./features/finance/ReceivablesPage";
-import { PeoplePage } from "./features/people/PeoplePage";
-import { PersonDetailPage } from "./features/people/PersonDetailPage";
-import { TimePage } from "./features/time/TimePage";
-import { ReportsPage } from "./features/reports/ReportsPage";
-import { CashflowView } from "./features/reports/CashflowView";
-import { SettingsPage } from "./features/settings/SettingsPage";
 import { finalizePendingRestoreAudit } from "./repositories/audit";
 import { getRuntimeReleaseInfo } from "./lib/db";
 import { ErrorBoundary, RouteErrorElement } from "./components/ErrorBoundary";
 import { installGlobalErrorLogging, logError } from "./lib/logger";
+
+/**
+ * Route pages load on demand (plan step C4), so the first paint ships the shell
+ * — layout, lock screen, error screens — instead of every feature. React Router
+ * resolves `lazy` BEFORE it commits the navigation: the previous page stays
+ * on screen until the next chunk has arrived, so there is no loading flash.
+ *
+ * The lock screen, the layout, the error boundary and the startup-compatibility
+ * screen are deliberately NOT lazy: they must render when nothing else can load.
+ */
+function page<K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) {
+  return async () => ({ Component: (await load())[name] });
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, retry: 1 } },
@@ -42,6 +39,8 @@ const router = createHashRouter([
     element: <Layout />,
     // Errors in the layout itself (sidebar, header) fall back to a full-window screen.
     errorElement: <RouteErrorElement variant="app" />,
+    // Shown only while the first page chunk loads; blank rather than a flash of unstyled UI.
+    HydrateFallback: () => null,
     children: [
       {
         // Pathless wrapper: a page that throws renders the fallback inside the
@@ -49,31 +48,31 @@ const router = createHashRouter([
         errorElement: <RouteErrorElement />,
         children: [
       { index: true, element: <Navigate to="/overview" replace /> },
-      { path: "overview", element: <DashboardPage /> },
+      { path: "overview", lazy: page(() => import("./features/dashboard/DashboardPage"), "DashboardPage") },
 
-      { path: "projects", element: <ProjectsPage /> },
-      { path: "projects/clients", element: <ClientsPage /> },
-      { path: "projects/clients/:id", element: <ClientDetailPage /> },
-      { path: "projects/:id", element: <ProjectDetailPage /> },
+      { path: "projects", lazy: page(() => import("./features/projects/ProjectsPage"), "ProjectsPage") },
+      { path: "projects/clients", lazy: page(() => import("./features/clients/ClientsPage"), "ClientsPage") },
+      { path: "projects/clients/:id", lazy: page(() => import("./features/clients/ClientDetailPage"), "ClientDetailPage") },
+      { path: "projects/:id", lazy: page(() => import("./features/projects/ProjectDetailPage"), "ProjectDetailPage") },
 
-      { path: "finance", element: <FinanceOverviewPage /> },
-      { path: "finance/certificates", element: <CertificatesPage /> },
-      { path: "finance/payments", element: <PaymentsPage /> },
-      { path: "finance/expenses", element: <ExpensesPage /> },
-      { path: "finance/receivables", element: <ReceivablesPage /> },
-      { path: "finance/cash-flow", element: <CashflowView /> },
+      { path: "finance", lazy: page(() => import("./features/finance/FinanceOverviewPage"), "FinanceOverviewPage") },
+      { path: "finance/certificates", lazy: page(() => import("./features/certificates/CertificatesPage"), "CertificatesPage") },
+      { path: "finance/payments", lazy: page(() => import("./features/payments/PaymentsPage"), "PaymentsPage") },
+      { path: "finance/expenses", lazy: page(() => import("./features/expenses/ExpensesPage"), "ExpensesPage") },
+      { path: "finance/receivables", lazy: page(() => import("./features/finance/ReceivablesPage"), "ReceivablesPage") },
+      { path: "finance/cash-flow", lazy: page(() => import("./features/reports/CashflowView"), "CashflowView") },
 
       { path: "team", element: <Navigate to="/team/people" replace /> },
-      { path: "team/people", element: <PeoplePage /> },
-      { path: "team/people/:id", element: <PersonDetailPage /> },
-      { path: "team/time", element: <TimePage /> },
+      { path: "team/people", lazy: page(() => import("./features/people/PeoplePage"), "PeoplePage") },
+      { path: "team/people/:id", lazy: page(() => import("./features/people/PersonDetailPage"), "PersonDetailPage") },
+      { path: "team/time", lazy: page(() => import("./features/time/TimePage"), "TimePage") },
 
       { path: "reports", element: <Navigate to="/reports/profitability" replace /> },
-      { path: "reports/:view", element: <ReportsPage /> },
+      { path: "reports/:view", lazy: page(() => import("./features/reports/ReportsPage"), "ReportsPage") },
       { path: "settings", element: <Navigate to="/settings/general" replace /> },
       // Audit is a settings section like any other, so it renders inside
       // SettingsPage and keeps the single Settings navigator on screen.
-      { path: "settings/:section", element: <SettingsPage /> },
+      { path: "settings/:section", lazy: page(() => import("./features/settings/SettingsPage"), "SettingsPage") },
 
       // Milestone 1 compatibility: preserve every pre-redesign route.
       { path: "clients", element: <Navigate to="/projects/clients" replace /> },
