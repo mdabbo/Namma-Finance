@@ -84,16 +84,16 @@ export function ProjectsPage() {
       // The consolidated currency is named in the header so the export cannot
       // be read as some other currency.
       header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
-      value: (p) => finOf(p.id)?.contractValueEgp ?? 0,
+      value: (p) => finOf(p.id)?.contractValueReporting ?? 0,
       // Sorting uses exact EGP piasters; the export carries major units. A row
       // the read model has not produced yet exports blank, never a zero a
       // spreadsheet would sum as a real contract value.
       exportValue: (p) =>
         readModelExport(finOf(p.id), (fin) =>
-          minorToInput(fin.contractValueEgp, currencyInfo(base.code).exponent)),
+          minorToInput(fin.contractValueReporting, currencyInfo(base.code).exponent)),
       render: (p) => (
         <span className="tnum">
-          {readModelDisplay(finOf(p.id), (fin) => base.format(fin.contractValueEgp))}
+          {readModelDisplay(finOf(p.id), (fin) => base.format(fin.contractValueReporting))}
         </span>
       ),
       align: "end",

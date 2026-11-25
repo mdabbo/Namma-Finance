@@ -11,7 +11,7 @@ const SRC = join(import.meta.dirname, "..", "src");
 
 const LOG_CALL = /\b(?:logError|logWarn|logInfo|console\.(?:error|warn|log|info|debug))\s*\(/g;
 // Identifiers that suggest business data. `error`, `err`, `e` and `reason` are the only values a call may pass.
-const SENSITIVE = /(amount|egp|total|balance|price|fee|cost|salary|rate|paid|due|net|gross|vat|retention|name|client|person|email|password|token|secret|key|note|phone|address|iban|contract|payment|certificate|invoice)/i;
+const SENSITIVE = /(amount|egp|reporting|total|balance|price|fee|cost|salary|rate|paid|due|net|gross|vat|retention|name|client|person|email|password|token|secret|key|note|phone|address|iban|contract|payment|certificate|invoice)/i;
 
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -73,9 +73,13 @@ describe("B1 logging call sites", () => {
   it("the scanner catches what it is meant to catch", () => {
     /* eslint-disable no-template-curly-in-string */
     expect(violations('"pay failed", error')).toEqual([]);
-    expect(violations("`paid ${payment.amountEgp}`")).not.toEqual([]);
+    expect(violations("`paid ${payment.amountReporting}`")).not.toEqual([]);
     expect(violations('"failed", client.name')).not.toEqual([]);
-    expect(violations('"x " + totalEgp')).not.toEqual([]);
+    expect(violations('"x " + totalReporting')).not.toEqual([]);
+    // C2 renamed the `…Egp` figures to `…Reporting`; a stem that names no
+    // money word (profit, revenue) must still be caught by its suffix.
+    expect(violations('"done", fin.profitReporting')).not.toEqual([]);
+    expect(violations("`kpi ${kpis.revenueReporting}`")).not.toEqual([]);
     expect(violations("`command ${command} failed`, error")).toEqual([]);
     /* eslint-enable no-template-curly-in-string */
   });

@@ -51,10 +51,10 @@ describe("Milestone 6 repository cost views", () => {
     });
 
     let profile = (await loadWorkspaceFinancials(EGP_VALUATION)).costsByProject.get(projectId)!;
-    expect(profile.committedCostEgp).toBe(20_000_00);
-    expect(profile.accruedCostEgp).toBe(0);
-    expect(profile.actualPaidCostEgp).toBe(0);
-    expect(profile.forecastCostEgp).toBe(20_000_00);
+    expect(profile.committedCostReporting).toBe(20_000_00);
+    expect(profile.accruedCostReporting).toBe(0);
+    expect(profile.actualPaidCostReporting).toBe(0);
+    expect(profile.forecastCostReporting).toBe(20_000_00);
 
     await updateStage(stageId, {
       projectId, name: "IFC", sortOrder: 0, startDate: "2026-01-01", endDate: "2026-02-01",
@@ -73,9 +73,9 @@ describe("Milestone 6 repository cost views", () => {
 
     let workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     profile = workspace.costsByProject.get(projectId)!;
-    expect(profile.actualCashInEgp).toBe(payable);
-    expect(profile.accruedCostEgp).toBe(20_000_00);
-    expect(profile.actualPaidCostEgp).toBe(0);
+    expect(profile.actualCashInReporting).toBe(payable);
+    expect(profile.accruedCostReporting).toBe(20_000_00);
+    expect(profile.actualPaidCostReporting).toBe(0);
     expect(workspace.teamAccounts).toContainEqual({
       assignmentId,
       projectId,
@@ -92,10 +92,10 @@ describe("Milestone 6 repository cost views", () => {
     await createPersonPayment({ assignmentId, date: "2026-03-02", amountMinor: 5_000_00, note: "First fee" });
     workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     profile = workspace.costsByProject.get(projectId)!;
-    expect(profile.actualPaidCostEgp).toBe(5_000_00);
-    expect(profile.accruedCostEgp).toBe(15_000_00);
-    expect(profile.committedCostEgp).toBe(20_000_00);
-    expect(profile.forecastCostEgp).toBe(20_000_00);
+    expect(profile.actualPaidCostReporting).toBe(5_000_00);
+    expect(profile.accruedCostReporting).toBe(15_000_00);
+    expect(profile.committedCostReporting).toBe(20_000_00);
+    expect(profile.forecastCostReporting).toBe(20_000_00);
     expect(workspace.teamAccounts.find((row) => row.assignmentId === assignmentId)).toMatchObject({
       accruedMinor: 20_000_00,
       paidMinor: 5_000_00,
@@ -104,9 +104,9 @@ describe("Milestone 6 repository cost views", () => {
 
     rawExec(`UPDATE project_assignments SET archived_at='2026-03-03' WHERE id=${assignmentId}`);
     profile = (await loadWorkspaceFinancials(EGP_VALUATION)).costsByProject.get(projectId)!;
-    expect(profile.actualPaidCostEgp).toBe(5_000_00);
-    expect(profile.accruedCostEgp).toBe(15_000_00);
-    expect(profile.committedCostEgp).toBe(20_000_00);
+    expect(profile.actualPaidCostReporting).toBe(5_000_00);
+    expect(profile.accruedCostReporting).toBe(15_000_00);
+    expect(profile.committedCostReporting).toBe(20_000_00);
   });
 
   it("counts unallocated client money in cash profit without treating it as collection", async () => {
@@ -125,8 +125,8 @@ describe("Milestone 6 repository cost views", () => {
 
     const ws = await loadWorkspaceFinancials(EGP_VALUATION);
     const profile = ws.costsByProject.get(projectId)!;
-    expect(profile.actualCashInEgp).toBe(1_000_00);
-    expect(profile.cashProfitEgp).toBe(1_000_00);
+    expect(profile.actualCashInReporting).toBe(1_000_00);
+    expect(profile.cashProfitReporting).toBe(1_000_00);
     expect(ws.projects.find((row) => row.project.id === projectId)!.totalPaidMinor).toBe(0);
   });
 });

@@ -85,8 +85,8 @@ function stateOf(c: Contract, certs: PaymentCertificate[], payments: Payment[] =
 }
 
 const NO_CASH = {
-  certificateCollectionsEgp: 0, advanceReceivedEgp: 0, retentionReleasedEgp: 0,
-  totalActualCashInEgp: 0, unallocatedCustomerCreditEgp: 0,
+  certificateCollectionsReporting: 0, advanceReceivedReporting: 0, retentionReleasedReporting: 0,
+  totalActualCashInReporting: 0, unallocatedCustomerCreditReporting: 0,
 };
 
 describe("valuation primitives", () => {
@@ -128,20 +128,20 @@ describe("the reported defect: a SAR contract on a SAR dashboard", () => {
     // the error — 2.45% on these rates, on a contract whose value never moved.
     const fin = computeProjectFinancials(project(), [stateOf(contract(), [cert()])], [], NO_CASH, EGP_VALUATION);
     const overview = computeDashboardOverview([fin], [], EGP_VALUATION);
-    expect(fromEgpPiasters(overview.contractValueEgp, "SAR", SAR_TODAY)).toBe(31_703_120); // SAR 317,031.20
-    expect(fromEgpPiasters(overview.outstandingReceivablesEgp, "SAR", SAR_TODAY)).toBe(7_925_780); // SAR 79,257.80
+    expect(fromEgpPiasters(overview.contractValueReporting, "SAR", SAR_TODAY)).toBe(31_703_120); // SAR 317,031.20
+    expect(fromEgpPiasters(overview.outstandingReceivablesReporting, "SAR", SAR_TODAY)).toBe(7_925_780); // SAR 79,257.80
   });
 
   it("reads the contract and its receivable at face value", () => {
     const fin = computeProjectFinancials(project(), [stateOf(contract(), [cert()])], [], NO_CASH, SAR);
     const overview = computeDashboardOverview([fin], [], SAR);
-    expect(overview.contractValueEgp).toBe(32_500_000); // SAR 325,000.00
-    expect(overview.outstandingReceivablesEgp).toBe(8_125_000); // SAR 81,250.00
-    expect(fin.revenueEgp).toBe(8_125_000);
+    expect(overview.contractValueReporting).toBe(32_500_000); // SAR 325,000.00
+    expect(overview.outstandingReceivablesReporting).toBe(8_125_000); // SAR 81,250.00
+    expect(fin.revenueReporting).toBe(8_125_000);
     // The consolidated figures now agree with the per-project ones the
     // contract page shows.
-    expect(overview.contractValueEgp).toBe(fin.contractValueMinor);
-    expect(overview.outstandingReceivablesEgp).toBe(fin.outstandingReceivablesMinor);
+    expect(overview.contractValueReporting).toBe(fin.contractValueMinor);
+    expect(overview.outstandingReceivablesReporting).toBe(fin.outstandingReceivablesMinor);
   });
 
   it("does not move when today's rate moves", () => {
@@ -149,7 +149,7 @@ describe("the reported defect: a SAR contract on a SAR dashboard", () => {
       const valuation = reportingValuation("SAR", rateToday);
       const fin = computeProjectFinancials(project(), [stateOf(contract(), [cert()])], [expense()], NO_CASH, valuation);
       const overview = computeDashboardOverview([fin], [expense()], valuation);
-      return [overview.contractValueEgp, overview.outstandingReceivablesEgp, overview.cashOutEgp, fin.profitEgp];
+      return [overview.contractValueReporting, overview.outstandingReceivablesReporting, overview.cashOutReporting, fin.profitReporting];
     });
     expect(values[1]).toEqual(values[0]);
     expect(values[2]).toEqual(values[0]);
@@ -159,13 +159,13 @@ describe("the reported defect: a SAR contract on a SAR dashboard", () => {
   it("keeps face value when a certificate carries a later revision's rate snapshot", () => {
     const revised = cert({ currencySnapshot: "SAR", fxRateMicroSnapshot: 13_400_000 });
     const fin = computeProjectFinancials(project(), [stateOf(contract(), [revised])], [], NO_CASH, SAR);
-    expect(fin.revenueEgp).toBe(8_125_000);
-    expect(fin.outstandingEgp).toBe(8_125_000);
+    expect(fin.revenueReporting).toBe(8_125_000);
+    expect(fin.outstandingReporting).toBe(8_125_000);
     const [row] = selectOpenReceivables(
       [{ state: stateOf(contract(), [revised]), projectCurrency: "SAR", projectFxRateMicro: SAR_AT_SIGNING }],
       SAR,
     );
-    expect(row?.unpaidEgp).toBe(row?.unpaidMinor);
+    expect(row?.unpaidReporting).toBe(row?.unpaidMinor);
   });
 });
 
@@ -183,13 +183,13 @@ describe("cash in the reporting currency", () => {
       resolveFx: () => ({ currency: "SAR", fxRateMicro: 13_333_333 }),
     }, SAR);
 
-    expect(cash.totalActualCashInEgp).toBe(8_125_000 + 3_250_000 + 405_133);
-    expect(cash.certificateCollectionsEgp).toBe(5_000_001);
-    expect(cash.unallocatedCustomerCreditEgp).toBe(8_125_000 - 5_000_001);
+    expect(cash.totalActualCashInReporting).toBe(8_125_000 + 3_250_000 + 405_133);
+    expect(cash.certificateCollectionsReporting).toBe(5_000_001);
+    expect(cash.unallocatedCustomerCreditReporting).toBe(8_125_000 - 5_000_001);
     expect(
-      cash.certificateCollectionsEgp + cash.unallocatedCustomerCreditEgp
-      + cash.advanceReceivedEgp + cash.retentionReleasedEgp,
-    ).toBe(cash.totalActualCashInEgp);
+      cash.certificateCollectionsReporting + cash.unallocatedCustomerCreditReporting
+      + cash.advanceReceivedReporting + cash.retentionReleasedReporting,
+    ).toBe(cash.totalActualCashInReporting);
   });
 
   it("still partitions exactly when the receipts are foreign and rounding is involved", () => {
@@ -236,17 +236,17 @@ describe("a mixed portfolio on a SAR report", () => {
     const overview = computeDashboardOverview(projects, expenses, SAR);
     const usdToSar = (minor: number) => fromEgpPiasters(toEgpPiasters(minor, "USD", USD_AT_SIGNING), "SAR", SAR_TODAY);
 
-    expect(overview.contractValueEgp).toBe(32_500_000 + usdToSar(10_000_000));
-    expect(overview.outstandingReceivablesEgp).toBe(8_125_000 + usdToSar(2_000_000));
+    expect(overview.contractValueReporting).toBe(32_500_000 + usdToSar(10_000_000));
+    expect(overview.outstandingReceivablesReporting).toBe(8_125_000 + usdToSar(2_000_000));
     // SAR expense at face value + EGP 260,000.00 at today's SAR rate.
-    expect(overview.cashOutEgp).toBe(1_000_000 + 2_000_000);
+    expect(overview.cashOutReporting).toBe(1_000_000 + 2_000_000);
   });
 
   it("holds profit = revenue - expenses in the reporting currency", () => {
     const { projects, expenses } = build();
     const kpis = computeDashboardKpis(projects, expenses, SAR);
-    expect(kpis.profitEgp).toBe(kpis.revenueEgp - kpis.expensesEgp);
-    for (const fin of projects) expect(fin.profitEgp).toBe(fin.revenueEgp - fin.expensesEgp);
+    expect(kpis.profitReporting).toBe(kpis.revenueReporting - kpis.expensesReporting);
+    for (const fin of projects) expect(fin.profitReporting).toBe(fin.revenueReporting - fin.expensesReporting);
   });
 
   it("leaves an EGP report exactly as it was", () => {
@@ -255,9 +255,9 @@ describe("a mixed portfolio on a SAR report", () => {
       computeProjectFinancials(usdProject, [stateOf(usdContract, [usdCert])], [], NO_CASH, EGP_VALUATION),
     ];
     const overview = computeDashboardOverview(projects, [expense(), egpOverhead], EGP_VALUATION);
-    expect(overview.contractValueEgp).toBe(
+    expect(overview.contractValueReporting).toBe(
       toEgpPiasters(32_500_000, "SAR", SAR_AT_SIGNING) + toEgpPiasters(10_000_000, "USD", USD_AT_SIGNING),
     );
-    expect(overview.cashOutEgp).toBe(toEgpPiasters(1_000_000, "SAR", SAR_AT_SIGNING) + 26_000_000);
+    expect(overview.cashOutReporting).toBe(toEgpPiasters(1_000_000, "SAR", SAR_AT_SIGNING) + 26_000_000);
   });
 });
