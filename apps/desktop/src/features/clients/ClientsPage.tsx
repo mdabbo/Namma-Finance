@@ -43,38 +43,38 @@ export function ClientsPage() {
     {
       key: "contracts",
       header: `${t("cash.contractValueExcludingVat")} (${base.code})`,
-      value: (c) => rollup(c.id)?.contractValueEgp ?? 0,
-      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.contractValueEgp)),
-      render: (c) => <span className="tnum">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.contractValueEgp))}</span>,
+      value: (c) => rollup(c.id)?.contractValueReporting ?? 0,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.contractValueReporting)),
+      render: (c) => <span className="tnum">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.contractValueReporting))}</span>,
       align: "end",
     },
     {
       key: "certificateCollections",
       header: `${t("cash.certificateCollections")} (${base.code})`,
-      value: (c) => rollup(c.id)?.certificateCollectionsEgp ?? 0,
-      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.certificateCollectionsEgp)),
-      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.certificateCollectionsEgp))}</span>,
+      value: (c) => rollup(c.id)?.certificateCollectionsReporting ?? 0,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.certificateCollectionsReporting)),
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.certificateCollectionsReporting))}</span>,
       align: "end",
     },
     {
       key: "totalCashIn",
       header: `${t("cash.totalActualCashIn")} (${base.code})`,
-      value: (c) => rollup(c.id)?.totalActualCashInEgp ?? 0,
-      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.totalActualCashInEgp)),
-      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.totalActualCashInEgp))}</span>,
+      value: (c) => rollup(c.id)?.totalActualCashInReporting ?? 0,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.totalActualCashInReporting)),
+      render: (c) => <span className="tnum text-emerald-600 dark:text-emerald-400">{readModelDisplay(rollup(c.id), (fin) => base.format(fin.totalActualCashInReporting))}</span>,
       align: "end",
     },
     {
       key: "outstanding",
       header: `${t("cash.outstandingReceivables")} (${base.code})`,
-      value: (c) => rollup(c.id)?.outstandingEgp ?? 0,
-      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.outstandingEgp)),
+      value: (c) => rollup(c.id)?.outstandingReporting ?? 0,
+      exportValue: (c) => readModelExport(rollup(c.id), (fin) => exportBase(fin.outstandingReporting)),
       render: (c) => {
         const fin = rollup(c.id);
-        const owed = (fin?.outstandingEgp ?? 0) > 0;
+        const owed = (fin?.outstandingReporting ?? 0) > 0;
         return (
           <span className={`tnum ${owed ? "text-amber-600 dark:text-amber-400" : ""}`}>
-            {readModelDisplay(fin, (row) => base.format(row.outstandingEgp))}
+            {readModelDisplay(fin, (row) => base.format(row.outstandingReporting))}
           </span>
         );
       },

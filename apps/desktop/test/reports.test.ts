@@ -163,12 +163,12 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
       expect(Number.isFinite(v), `KPI ${key} not finite`).toBe(true);
     }
     // identities
-    expect(k.revenueEgp).toBe(ws.projects.reduce((s, p) => s + p.revenueEgp, 0));
-    expect(k.collectedEgp).toBe(ws.projects.reduce((s, p) => s + p.collectedEgp, 0));
-    expect(k.outstandingEgp).toBe(ws.projects.reduce((s, p) => s + p.outstandingEgp, 0));
-    expect(k.expensesEgp).toBe(ws.allExpenses.reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0));
-    expect(k.profitEgp).toBe(k.revenueEgp - k.expensesEgp);
-    expect(k.outstandingEgp).toBeGreaterThanOrEqual(0);
+    expect(k.revenueReporting).toBe(ws.projects.reduce((s, p) => s + p.revenueReporting, 0));
+    expect(k.collectedReporting).toBe(ws.projects.reduce((s, p) => s + p.collectedReporting, 0));
+    expect(k.outstandingReporting).toBe(ws.projects.reduce((s, p) => s + p.outstandingReporting, 0));
+    expect(k.expensesReporting).toBe(ws.allExpenses.reduce((s, e) => s + toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro), 0));
+    expect(k.profitReporting).toBe(k.revenueReporting - k.expensesReporting);
+    expect(k.outstandingReporting).toBeGreaterThanOrEqual(0);
 
     // project-status partition adds up
     const total = ws.projects.length;
@@ -193,10 +193,10 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
     for (const p of ws.cashIn) cashIn += p.egpMinor;
     for (const e of ws.allExpenses) expenses += toEgpPiasters(e.amountMinor, e.currency, e.fxRateMicro);
 
-    expect(revenue).toBe(k.revenueEgp);
-    expect(expenses).toBe(k.expensesEgp);
+    expect(revenue).toBe(k.revenueReporting);
+    expect(expenses).toBe(k.expensesReporting);
     // cashIn (all payments incl. advances) is at least the certificate-allocated collected
-    expect(cashIn).toBeGreaterThanOrEqual(k.collectedEgp);
+    expect(cashIn).toBeGreaterThanOrEqual(k.collectedReporting);
   });
 
   it("profitability report: overhead allocates exactly and ties back to the dashboard profit", async () => {
@@ -209,17 +209,17 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
     const rows = computeProfitability(ws.projects, totalOverhead, "REVENUE");
 
     // largest-remainder allocation sums EXACTLY to the overhead total
-    expect(rows.reduce((s, r) => s + r.overheadEgp, 0)).toBe(totalOverhead);
+    expect(rows.reduce((s, r) => s + r.overheadReporting, 0)).toBe(totalOverhead);
     // per-row identities
     for (const r of rows) {
-      expect(r.grossProfitEgp).toBe(r.revenueEgp - r.directCostEgp);
-      expect(r.netProfitEgp).toBe(r.grossProfitEgp - r.overheadEgp);
+      expect(r.grossProfitReporting).toBe(r.revenueReporting - r.directCostReporting);
+      expect(r.netProfitReporting).toBe(r.grossProfitReporting - r.overheadReporting);
     }
     // sum of net profit == dashboard profit (revenue − direct − overhead)
-    expect(rows.reduce((s, r) => s + r.netProfitEgp, 0)).toBe(k.profitEgp);
+    expect(rows.reduce((s, r) => s + r.netProfitReporting, 0)).toBe(k.profitReporting);
     // sorted by net profit descending
     for (let i = 1; i < rows.length; i++) {
-      expect(rows[i - 1]!.netProfitEgp).toBeGreaterThanOrEqual(rows[i]!.netProfitEgp);
+      expect(rows[i - 1]!.netProfitReporting).toBeGreaterThanOrEqual(rows[i]!.netProfitReporting);
     }
   });
 
@@ -237,7 +237,7 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
           items.push({
             certificateId: cs.certificate.id, certificateNumber: cs.certificate.number,
             projectName: project?.name ?? "", clientName: "",
-            dueDate: cs.dueDate, unpaidEgp: toEgp(cs.unpaidMinor),
+            dueDate: cs.dueDate, unpaidReporting: toEgp(cs.unpaidMinor),
           });
         }
       }
@@ -249,7 +249,7 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
     // every unpaid billable certificate appears exactly once
     expect(aging.rows.length).toBe(items.length);
     // aging grand total == dashboard outstanding (both are unpaid billable, in EGP)
-    expect(near(aging.grandTotal, k.outstandingEgp, ws.projects.length)).toBe(true);
+    expect(near(aging.grandTotal, k.outstandingReporting, ws.projects.length)).toBe(true);
     // overdue submitted/approved certs must NOT sit in CURRENT
     const overdue = aging.rows.filter((r) => r.daysOverdue > 0);
     for (const r of overdue) expect(r.bucket).not.toBe("CURRENT");
@@ -264,7 +264,7 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
       const project = ws.projects.find((p) => p.project.id === state.contract.projectId)?.project;
       return state.certificates
         .filter((cs) => isBillable(cs.certificate.status) && cs.unpaidMinor > 0)
-        .map((cs) => ({ dueDate: cs.dueDate, unpaidEgp: project ? toEgpPiasters(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor }));
+        .map((cs) => ({ dueDate: cs.dueDate, unpaidReporting: project ? toEgpPiasters(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor }));
     });
 
     const rows = buildCashflow({
@@ -283,7 +283,7 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
     // forecast receivables in-window sum to the open receivables that fall in range
     const totalForecast = rows.reduce((s, r) => s + r.inForecast, 0);
     expect(totalForecast).toBeGreaterThan(0);
-    expect(totalForecast).toBeLessThanOrEqual(openReceivables.reduce((s, r) => s + r.unpaidEgp, 0) + 2);
+    expect(totalForecast).toBeLessThanOrEqual(openReceivables.reduce((s, r) => s + r.unpaidReporting, 0) + 2);
   });
 
   it("reports stay consistent even while a reconcile storm mutates data underneath", async () => {
@@ -299,8 +299,8 @@ describe("dashboard & reports — heavy multi-currency workload", () => {
 
     const ws = await loadWorkspaceFinancials(EGP_VALUATION);
     const k = computeDashboardKpis(ws.projects, ws.allExpenses, EGP_VALUATION);
-    expect(Number.isFinite(k.profitEgp)).toBe(true);
-    expect(k.outstandingEgp).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(k.profitReporting)).toBe(true);
+    expect(k.outstandingReporting).toBeGreaterThanOrEqual(0);
     // no contract grew duplicate live certificates during the storm
     for (const state of ws.contractStates.values()) {
       const numbers = state.certificates.filter((c) => !c.certificate.deletedAt).map((c) => c.certificate.number);
@@ -322,13 +322,13 @@ async function assertUniversalIdentities(label: string): Promise<void> {
     expect(Number.isFinite(v), `${label}: KPI ${key} not finite`).toBe(true);
     expect(Number.isSafeInteger(v as number) || key === "marginBp", `${label}: KPI ${key} unsafe integer`).toBe(true);
   }
-  expect(k.profitEgp, `${label}: profit identity`).toBe(k.revenueEgp - k.expensesEgp);
-  expect(k.outstandingEgp, `${label}: outstanding negative`).toBeGreaterThanOrEqual(0);
-  expect(k.revenueEgp, `${label}: revenue sum`).toBe(ws.projects.reduce((s, p) => s + p.revenueEgp, 0));
+  expect(k.profitReporting, `${label}: profit identity`).toBe(k.revenueReporting - k.expensesReporting);
+  expect(k.outstandingReporting, `${label}: outstanding negative`).toBeGreaterThanOrEqual(0);
+  expect(k.revenueReporting, `${label}: revenue sum`).toBe(ws.projects.reduce((s, p) => s + p.revenueReporting, 0));
 
   // overhead allocates exactly; net profit ties back to the dashboard
-  expect(profit.reduce((s, r) => s + r.overheadEgp, 0), `${label}: overhead allocation`).toBe(totalOverhead);
-  expect(profit.reduce((s, r) => s + r.netProfitEgp, 0), `${label}: net-profit sum`).toBe(k.profitEgp);
+  expect(profit.reduce((s, r) => s + r.overheadReporting, 0), `${label}: overhead allocation`).toBe(totalOverhead);
+  expect(profit.reduce((s, r) => s + r.netProfitReporting, 0), `${label}: net-profit sum`).toBe(k.profitReporting);
 
   // aging grand total == dashboard outstanding
   const items: AgingInput[] = [];
@@ -337,13 +337,13 @@ async function assertUniversalIdentities(label: string): Promise<void> {
     const toEgp = (m: number) => (project ? toEgpPiasters(m, project.currency, project.fxRateMicro) : m);
     for (const cs of state.certificates) {
       if (isBillable(cs.certificate.status) && cs.unpaidMinor > 0) {
-        items.push({ certificateId: cs.certificate.id, certificateNumber: cs.certificate.number, projectName: "", clientName: "", dueDate: cs.dueDate, unpaidEgp: toEgp(cs.unpaidMinor) });
+        items.push({ certificateId: cs.certificate.id, certificateNumber: cs.certificate.number, projectName: "", clientName: "", dueDate: cs.dueDate, unpaidReporting: toEgp(cs.unpaidMinor) });
       }
     }
   }
   const aging = computeAging(items, "2026-07-19");
   expect(Object.values(aging.totals).reduce((s, v) => s + v, 0), `${label}: aging bucket sum`).toBe(aging.grandTotal);
-  expect(near(aging.grandTotal, k.outstandingEgp, ws.projects.length + 2), `${label}: aging vs outstanding`).toBe(true);
+  expect(near(aging.grandTotal, k.outstandingReporting, ws.projects.length + 2), `${label}: aging vs outstanding`).toBe(true);
 
   // no contract carries duplicate live certificate numbers
   for (const state of ws.contractStates.values()) {

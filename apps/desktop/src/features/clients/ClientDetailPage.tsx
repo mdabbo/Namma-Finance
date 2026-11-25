@@ -68,14 +68,14 @@ export function ClientDetailPage() {
       />
 
       <div className="mb-4 grid grid-cols-4 gap-3">
-        <KpiCard label={t("cash.contractValueExcludingVat")} value={readModelAmount(rollup, (r) => base.format(r.contractValueEgp))} icon={Briefcase} />
-        <KpiCard label={t("cash.certificateCollections")} value={readModelAmount(rollup, (r) => base.format(r.certificateCollectionsEgp))} icon={Banknote} tone="positive" />
-        <KpiCard label={t("cash.totalActualCashIn")} value={readModelAmount(rollup, (r) => base.format(r.totalActualCashInEgp))} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.contractValueExcludingVat")} value={readModelAmount(rollup, (r) => base.format(r.contractValueReporting))} icon={Briefcase} />
+        <KpiCard label={t("cash.certificateCollections")} value={readModelAmount(rollup, (r) => base.format(r.certificateCollectionsReporting))} icon={Banknote} tone="positive" />
+        <KpiCard label={t("cash.totalActualCashIn")} value={readModelAmount(rollup, (r) => base.format(r.totalActualCashInReporting))} icon={Banknote} tone="positive" />
         <KpiCard
           label={t("cash.outstandingReceivables")}
-          value={readModelAmount(rollup, (r) => base.format(r.outstandingEgp))}
+          value={readModelAmount(rollup, (r) => base.format(r.outstandingReporting))}
           icon={Wallet}
-          tone={rollup && rollup.outstandingEgp > 0 ? "warning" : "default"}
+          tone={rollup && rollup.outstandingReporting > 0 ? "warning" : "default"}
         />
       </div>
 
@@ -121,7 +121,7 @@ export function ClientDetailPage() {
                       <p className="text-xs text-muted tnum">{p.code}</p>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="text-sm tnum">{readModelAmount(fin, (f) => base.format(f.contractValueEgp))}</span>
+                      <span className="text-sm tnum">{readModelAmount(fin, (f) => base.format(f.contractValueReporting))}</span>
                       <Badge value={p.status} label={t(`status.${p.status}`)} />
                     </div>
                   </Link>

@@ -235,15 +235,15 @@ export function CertificatesPage() {
         <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
           <KpiCard
             label={t("financeSection.invoiced")}
-            value={base.format(kpis.invoicedEgp)}
+            value={base.format(kpis.invoicedReporting)}
             icon={FileCheck2}
             hint={t("dashboard.reportingCurrency", { currency: base.code })}
           />
           <KpiCard
             label={t("financeSection.outstanding")}
-            value={base.format(kpis.outstandingEgp)}
+            value={base.format(kpis.outstandingReporting)}
             icon={Hourglass}
-            tone={kpis.outstandingEgp > 0 ? "warning" : "default"}
+            tone={kpis.outstandingReporting > 0 ? "warning" : "default"}
           />
           <KpiCard
             label={t("financeSection.overdueCount")}

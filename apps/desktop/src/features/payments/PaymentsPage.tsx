@@ -152,21 +152,21 @@ export function PaymentsPage() {
         <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
           <KpiCard
             label={t("financeSection.cashIn")}
-            value={base.format(kpis.totalCashInEgp)}
+            value={base.format(kpis.totalCashInReporting)}
             icon={Wallet}
             tone="positive"
             hint={t("dashboard.reportingCurrency", { currency: base.code })}
           />
           <KpiCard
             label={t("financeSection.cashInMonth")}
-            value={base.format(kpis.monthCashInEgp)}
+            value={base.format(kpis.monthCashInReporting)}
             icon={CalendarDays}
           />
           <KpiCard
             label={t("financeSection.customerCredit")}
-            value={base.format(kpis.unallocatedCreditEgp)}
+            value={base.format(kpis.unallocatedCreditReporting)}
             icon={Coins}
-            tone={kpis.unallocatedCreditEgp > 0 ? "warning" : "default"}
+            tone={kpis.unallocatedCreditReporting > 0 ? "warning" : "default"}
           />
         </div>
       )}

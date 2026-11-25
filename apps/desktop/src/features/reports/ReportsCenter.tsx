@@ -87,16 +87,16 @@ export function ReportsCenter() {
           [t("projects.client")]: clients.find((c) => c.id === p.project.clientId)?.name ?? "",
           [t("projects.discipline")]: t(`discipline.${p.project.discipline}`),
           [t("common.status")]: t(`status.${p.project.status}`),
-          [t("cash.contractValueExcludingVat")]: money(p.contractValueEgp),
-          [t("cash.billableRevenue")]: money(p.billableRevenueEgp),
-          [t("cash.certifiedRevenue")]: money(p.revenueEgp),
-          [t("cash.invoicedAmount")]: money(p.invoicedAmountEgp),
-          [t("cash.certificateCollections")]: money(p.certificateCollectionsEgp),
-          [t("cash.advanceReceived")]: money(p.advanceReceivedEgp),
-          [t("cash.retentionReleased")]: money(p.retentionReleasedEgp),
-          [t("cash.totalActualCashIn")]: money(p.totalActualCashInEgp),
-          [t("cash.customerCredit")]: money(p.unallocatedCustomerCreditEgp),
-          [t("cash.outstandingReceivables")]: money(p.outstandingEgp),
+          [t("cash.contractValueExcludingVat")]: money(p.contractValueReporting),
+          [t("cash.billableRevenue")]: money(p.billableRevenueReporting),
+          [t("cash.certifiedRevenue")]: money(p.revenueReporting),
+          [t("cash.invoicedAmount")]: money(p.invoicedAmountReporting),
+          [t("cash.certificateCollections")]: money(p.certificateCollectionsReporting),
+          [t("cash.advanceReceived")]: money(p.advanceReceivedReporting),
+          [t("cash.retentionReleased")]: money(p.retentionReleasedReporting),
+          [t("cash.totalActualCashIn")]: money(p.totalActualCashInReporting),
+          [t("cash.customerCredit")]: money(p.unallocatedCustomerCreditReporting),
+          [t("cash.outstandingReceivables")]: money(p.outstandingReporting),
         }));
       case "clients":
         return clients.map((c) => {
@@ -105,13 +105,13 @@ export function ReportsCenter() {
             [t("common.name")]: c.name,
             [t("clients.company")]: c.company ?? "",
             [t("clients.projects")]: own.length,
-            [t("cash.contractValueExcludingVat")]: money(own.reduce((s, p) => s + p.contractValueEgp, 0)),
-            [t("cash.certificateCollections")]: money(own.reduce((s, p) => s + p.certificateCollectionsEgp, 0)),
-            [t("cash.advanceReceived")]: money(own.reduce((s, p) => s + p.advanceReceivedEgp, 0)),
-            [t("cash.retentionReleased")]: money(own.reduce((s, p) => s + p.retentionReleasedEgp, 0)),
-            [t("cash.totalActualCashIn")]: money(own.reduce((s, p) => s + p.totalActualCashInEgp, 0)),
-            [t("cash.customerCredit")]: money(own.reduce((s, p) => s + p.unallocatedCustomerCreditEgp, 0)),
-            [t("cash.outstandingReceivables")]: money(own.reduce((s, p) => s + p.outstandingEgp, 0)),
+            [t("cash.contractValueExcludingVat")]: money(own.reduce((s, p) => s + p.contractValueReporting, 0)),
+            [t("cash.certificateCollections")]: money(own.reduce((s, p) => s + p.certificateCollectionsReporting, 0)),
+            [t("cash.advanceReceived")]: money(own.reduce((s, p) => s + p.advanceReceivedReporting, 0)),
+            [t("cash.retentionReleased")]: money(own.reduce((s, p) => s + p.retentionReleasedReporting, 0)),
+            [t("cash.totalActualCashIn")]: money(own.reduce((s, p) => s + p.totalActualCashInReporting, 0)),
+            [t("cash.customerCredit")]: money(own.reduce((s, p) => s + p.unallocatedCustomerCreditReporting, 0)),
+            [t("cash.outstandingReceivables")]: money(own.reduce((s, p) => s + p.outstandingReporting, 0)),
           };
         });
       case "certificates":
@@ -191,11 +191,11 @@ export function ReportsCenter() {
         return computeProfitability(financials.projects, overhead, settings?.overheadRule ?? "REVENUE").map((r, i) => ({
           "#": i + 1,
           [t("projects.single")]: `${r.projectCode} ${r.projectName}`,
-          [t("reports.revenue")]: money(r.revenueEgp),
-          [t("reports.directCosts")]: money(r.directCostEgp),
-          [t("reports.grossProfit")]: money(r.grossProfitEgp),
-          [t("reports.overheadShare")]: money(r.overheadEgp),
-          [t("reports.netProfit")]: money(r.netProfitEgp),
+          [t("reports.revenue")]: money(r.revenueReporting),
+          [t("reports.directCosts")]: money(r.directCostReporting),
+          [t("reports.grossProfit")]: money(r.grossProfitReporting),
+          [t("reports.overheadShare")]: money(r.overheadReporting),
+          [t("reports.netProfit")]: money(r.netProfitReporting),
           [t("reports.netMargin")]: fmt.percent(r.netMarginBp),
         }));
       }
@@ -210,7 +210,7 @@ export function ReportsCenter() {
               projectName: project?.name ?? "",
               clientName: clients.find((c) => c.id === project?.clientId)?.name ?? "",
               dueDate: certificateDueDate(cs.certificate, state.contract.paymentTermsDays),
-              unpaidEgp: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
+              unpaidReporting: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
             }));
         });
         const summary = computeAging(inputs, todayIso());
@@ -220,7 +220,7 @@ export function ReportsCenter() {
           [t("clients.single")]: r.clientName,
           [t("certificates.dueDate")]: r.dueDate ?? "",
           [t("reports.daysOverdue")]: r.daysOverdue,
-          [t("certificates.unpaid")]: money(r.unpaidEgp),
+          [t("certificates.unpaid")]: money(r.unpaidReporting),
           [t("common.status")]: t(`reports.aging${r.bucket}`),
         }));
       }

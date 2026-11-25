@@ -44,7 +44,7 @@ describe("Milestone 4 project workspace", () => {
     expect(projectAttentionSummary({
       projectId: 7,
       overdueCertificates: 2,
-      unallocatedCustomerCreditEgp: 1,
+      unallocatedCustomerCreditReporting: 1,
       readyToCollect: [{ projectId: 7 }, { projectId: 8 }, { projectId: 7 }],
       teamPayables: [{ projectId: 8 }, { projectId: 7 }],
     })).toEqual({
@@ -108,12 +108,12 @@ describe("workspace summary never asserts money it has not measured", () => {
   });
 
   it.each([
-    ["contractValueEgp"],
-    ["revenueEgp"],
-    ["certificateCollectionsEgp"],
-    ["outstandingEgp"],
-    ["actualPaidCostEgp"],
-    ["actualProfitEgp"],
+    ["contractValueReporting"],
+    ["revenueReporting"],
+    ["certificateCollectionsReporting"],
+    ["outstandingReporting"],
+    ["actualPaidCostReporting"],
+    ["actualProfitReporting"],
   ])("guards %s instead of coalescing it to zero", (field) => {
     // Double-escaped on purpose: a single `\?` in a template literal is just
     // `?`, which makes the pattern a quantifier and the assertion vacuous.
@@ -127,7 +127,7 @@ describe("workspace summary never asserts money it has not measured", () => {
   });
 
   it("applies the same rule to the client detail KPIs", () => {
-    expect(clientDetail).not.toMatch(/Egp \?\? 0/);
+    expect(clientDetail).not.toMatch(/Reporting \?\? 0/);
     expect(clientDetail).toContain("readModelAmount(");
   });
 });

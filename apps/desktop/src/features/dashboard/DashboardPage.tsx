@@ -128,10 +128,10 @@ export function DashboardPage() {
     // record when it was loaded. Converting here is what once turned a
     // SAR 325,000 contract into SAR 317,031.19.
     return {
-      contractValue: overview.contractValueEgp,
-      totalCashIn: overview.totalCashInEgp,
-      outstanding: overview.outstandingReceivablesEgp,
-      netCash: overview.netCashPositionEgp,
+      contractValue: overview.contractValueReporting,
+      totalCashIn: overview.totalCashInReporting,
+      outstanding: overview.outstandingReceivablesReporting,
+      netCash: overview.netCashPositionReporting,
     };
   }, [financials]);
 
@@ -166,8 +166,8 @@ export function DashboardPage() {
         }] : [];
       }),
       projects: financials.projects,
-      readyToInvoiceEgp: financials.readyToCollect.map((item) => item.readyEgp),
-      teamPaymentsDueEgp: financials.teamPayables.map((item) => item.dueEgp),
+      readyToInvoiceReporting: financials.readyToCollect.map((item) => item.readyReporting),
+      teamPaymentsDueReporting: financials.teamPayables.map((item) => item.dueReporting),
     }, financials.valuation);
 
     return [
@@ -178,7 +178,7 @@ export function DashboardPage() {
           count: summary.overdueCertificates.count,
         }),
         count: summary.overdueCertificates.count,
-        amount: summary.overdueCertificates.amountEgp,
+        amount: summary.overdueCertificates.amountReporting,
         to: DASHBOARD_ATTENTION_ROUTES.overdue,
         icon: AlarmClock,
         tone: "danger" as const,
@@ -190,7 +190,7 @@ export function DashboardPage() {
           count: summary.readyToInvoice.count,
         }),
         count: summary.readyToInvoice.count,
-        amount: summary.readyToInvoice.amountEgp,
+        amount: summary.readyToInvoice.amountReporting,
         to: DASHBOARD_ATTENTION_ROUTES.readyToInvoice,
         icon: FileCheck2,
         tone: "success" as const,
@@ -202,7 +202,7 @@ export function DashboardPage() {
           count: summary.unallocatedPayments.count,
         }),
         count: summary.unallocatedPayments.count,
-        amount: summary.unallocatedPayments.amountEgp,
+        amount: summary.unallocatedPayments.amountReporting,
         to: DASHBOARD_ATTENTION_ROUTES.unallocated,
         icon: WalletCards,
         tone: "warning" as const,
@@ -214,7 +214,7 @@ export function DashboardPage() {
           count: summary.teamPaymentsDue.count,
         }),
         count: summary.teamPaymentsDue.count,
-        amount: summary.teamPaymentsDue.amountEgp,
+        amount: summary.teamPaymentsDue.amountReporting,
         to: DASHBOARD_ATTENTION_ROUTES.teamPayments,
         icon: HandCoins,
         tone: "info" as const,
@@ -290,8 +290,8 @@ export function DashboardPage() {
   const currencyScale = minorPerMajor(base.code);
   const cashChart = monthly.map((point) => ({
     month: point.month,
-    cashIn: point.cashInEgp / currencyScale,
-    cashOut: point.cashOutEgp / currencyScale,
+    cashIn: point.cashInReporting / currencyScale,
+    cashOut: point.cashOutReporting / currencyScale,
   }));
   const healthChart = healthProjects.map((project) => ({
     name:
@@ -522,7 +522,7 @@ export function DashboardPage() {
                     </p>
                     <p className="truncate text-xs text-muted tnum">
                       {project.project.code} ·{" "}
-                      {base.format(project.contractValueEgp)}
+                      {base.format(project.contractValueReporting)}
                     </p>
                   </div>
                   <Badge

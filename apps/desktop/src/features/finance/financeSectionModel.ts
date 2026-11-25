@@ -139,11 +139,11 @@ export function financeContractInputs(input: {
  */
 export interface ProjectMoneyFacts {
   project: { id: number };
-  invoicedAmountEgp: number;
-  outstandingEgp: number;
+  invoicedAmountReporting: number;
+  outstandingReporting: number;
   overdueCertificates: number;
-  totalActualCashInEgp: number;
-  unallocatedCustomerCreditEgp: number;
+  totalActualCashInReporting: number;
+  unallocatedCustomerCreditReporting: number;
 }
 
 export interface ExpenseMoneyFacts {
@@ -167,8 +167,8 @@ function sameMonth(dateIso: string, todayIso: string): boolean {
 }
 
 export interface CertificateSectionKpis {
-  invoicedEgp: number;
-  outstandingEgp: number;
+  invoicedReporting: number;
+  outstandingReporting: number;
   overdueCount: number;
 }
 
@@ -178,16 +178,16 @@ export function certificateSectionKpis(
 ): CertificateSectionKpis {
   const own = scoped(projects, projectId);
   return {
-    invoicedEgp: sum(own.map((p) => p.invoicedAmountEgp)),
-    outstandingEgp: sum(own.map((p) => p.outstandingEgp)),
+    invoicedReporting: sum(own.map((p) => p.invoicedAmountReporting)),
+    outstandingReporting: sum(own.map((p) => p.outstandingReporting)),
     overdueCount: sum(own.map((p) => p.overdueCertificates)),
   };
 }
 
 export interface PaymentSectionKpis {
-  totalCashInEgp: number;
-  monthCashInEgp: number;
-  unallocatedCreditEgp: number;
+  totalCashInReporting: number;
+  monthCashInReporting: number;
+  unallocatedCreditReporting: number;
 }
 
 export function paymentSectionKpis(input: {
@@ -199,21 +199,21 @@ export function paymentSectionKpis(input: {
   const own = scoped(input.projects, input.projectId);
   const cash = input.cashIn.filter((item) => inProjectScope(item.projectId, input.projectId));
   return {
-    totalCashInEgp: sum(own.map((p) => p.totalActualCashInEgp)),
-    monthCashInEgp: sum(cash.filter((item) => sameMonth(item.date, input.todayIso)).map((item) => item.egpMinor)),
-    unallocatedCreditEgp: sum(own.map((p) => p.unallocatedCustomerCreditEgp)),
+    totalCashInReporting: sum(own.map((p) => p.totalActualCashInReporting)),
+    monthCashInReporting: sum(cash.filter((item) => sameMonth(item.date, input.todayIso)).map((item) => item.egpMinor)),
+    unallocatedCreditReporting: sum(own.map((p) => p.unallocatedCustomerCreditReporting)),
   };
 }
 
 export interface ExpenseSectionKpis {
-  totalEgp: number;
-  monthEgp: number;
-  overheadEgp: number;
-  projectEgp: number;
+  totalReporting: number;
+  monthReporting: number;
+  overheadReporting: number;
+  projectReporting: number;
 }
 
 /** The KPI strip before any workspace has loaded: nothing to value yet. */
-export const NO_EXPENSE_KPIS: ExpenseSectionKpis = { totalEgp: 0, monthEgp: 0, overheadEgp: 0, projectEgp: 0 };
+export const NO_EXPENSE_KPIS: ExpenseSectionKpis = { totalReporting: 0, monthReporting: 0, overheadReporting: 0, projectReporting: 0 };
 
 export function expenseSectionKpis(
   expenses: readonly ExpenseMoneyFacts[],
@@ -224,9 +224,9 @@ export function expenseSectionKpis(
   const own = expenses.filter((expense) => inProjectScope(expense.projectId, projectId));
   const egp = (expense: ExpenseMoneyFacts) => valuation.value(expense.amountMinor, expense.currency, expense.fxRateMicro);
   return {
-    totalEgp: sum(own.map(egp)),
-    monthEgp: sum(own.filter((expense) => sameMonth(expense.date, todayIso)).map(egp)),
-    overheadEgp: sum(own.filter((expense) => expense.projectId === null).map(egp)),
-    projectEgp: sum(own.filter((expense) => expense.projectId !== null).map(egp)),
+    totalReporting: sum(own.map(egp)),
+    monthReporting: sum(own.filter((expense) => sameMonth(expense.date, todayIso)).map(egp)),
+    overheadReporting: sum(own.filter((expense) => expense.projectId === null).map(egp)),
+    projectReporting: sum(own.filter((expense) => expense.projectId !== null).map(egp)),
   };
 }

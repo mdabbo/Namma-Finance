@@ -11,8 +11,8 @@ import type { ContractState } from "./contract";
  * `CurrencyValuation` — see money/currencyValuation.ts for why the currency decision is made
  * per record rather than after summing.
  *
- * NAMING: the consolidated fields still carry an `Egp` suffix from when the
- * pivot was the only valuation. They hold amounts in `valuation.currency`:
+ * NAMING: the consolidated fields carry a `Reporting` suffix (they were named
+ * `…Egp` until plan step C2). They hold amounts in `valuation.currency`:
  * EGP piasters under EGP_VALUATION, the reporting currency's minor units
  * otherwise. Never convert them again.
  */
@@ -42,30 +42,30 @@ export interface ProjectFinancials {
   collectionRatioBp: number;
 
   // Consolidated to EGP piasters:
-  contractValueEgp: number;
-  revenueEgp: number; // certified base (excl. VAT)
-  billableRevenueEgp: number;
-  invoicedAmountEgp: number;
-  /** @deprecated Use certificateCollectionsEgp. */
-  collectedEgp: number;
-  certificateCollectionsEgp: number;
-  advanceReceivedEgp: number;
-  retentionReleasedEgp: number;
-  totalActualCashInEgp: number;
-  unallocatedCustomerCreditEgp: number;
-  outstandingEgp: number;
-  expensesEgp: number; // direct project expenses
-  profitEgp: number; // revenue − direct expenses
+  contractValueReporting: number;
+  revenueReporting: number; // certified base (excl. VAT)
+  billableRevenueReporting: number;
+  invoicedAmountReporting: number;
+  /** @deprecated Use certificateCollectionsReporting. */
+  collectedReporting: number;
+  certificateCollectionsReporting: number;
+  advanceReceivedReporting: number;
+  retentionReleasedReporting: number;
+  totalActualCashInReporting: number;
+  unallocatedCustomerCreditReporting: number;
+  outstandingReporting: number;
+  expensesReporting: number; // direct project expenses
+  profitReporting: number; // revenue − direct expenses
   marginBp: number;
   overdueCertificates: number;
 }
 
-export interface ProjectCashValuationEgp {
-  certificateCollectionsEgp: number;
-  advanceReceivedEgp: number;
-  retentionReleasedEgp: number;
-  totalActualCashInEgp: number;
-  unallocatedCustomerCreditEgp: number;
+export interface ProjectCashValuationReporting {
+  certificateCollectionsReporting: number;
+  advanceReceivedReporting: number;
+  retentionReleasedReporting: number;
+  totalActualCashInReporting: number;
+  unallocatedCustomerCreditReporting: number;
 }
 
 /**
@@ -79,7 +79,7 @@ export function computeProjectFinancials(
   project: Project,
   contractStates: ContractState[],
   projectExpenses: Expense[],
-  cashValuation: ProjectCashValuationEgp,
+  cashValuation: ProjectCashValuationReporting,
   valuation: CurrencyValuation,
 ): ProjectFinancials {
   const contractValue = sum(contractStates.map((c) => c.contract.valueMinor));
@@ -95,8 +95,8 @@ export function computeProjectFinancials(
   const remainingUncertified = sum(contractStates.map((c) => c.remainingUncertifiedMinor));
   const retentionHeld = sum(contractStates.map((c) => c.retentionHeldMinor));
 
-  const toEgp = (minor: number) => valuation.value(minor, project.currency, project.fxRateMicro);
-  const certificateEgp = (
+  const toReporting = (minor: number) => valuation.value(minor, project.currency, project.fxRateMicro);
+  const certificateReporting = (
     pick: (state: ContractState["certificates"][number]) => number,
     billableOnly: boolean,
   ) => sum(contractStates.flatMap((contractState) =>
@@ -108,11 +108,11 @@ export function computeProjectFinancials(
         state.certificate.fxRateMicroSnapshot ?? project.fxRateMicro,
       )),
   ));
-  const expensesEgp = sum(projectExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
-  const revenueEgp = certificateEgp((state) => state.breakdown.baseMinor, true);
-  const invoicedAmountEgp = certificateEgp((state) => state.breakdown.netPayableMinor, true);
-  const outstandingEgp = certificateEgp((state) => state.unpaidMinor, true);
-  const profitEgp = revenueEgp - expensesEgp;
+  const expensesReporting = sum(projectExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
+  const revenueReporting = certificateReporting((state) => state.breakdown.baseMinor, true);
+  const invoicedAmountReporting = certificateReporting((state) => state.breakdown.netPayableMinor, true);
+  const outstandingReporting = certificateReporting((state) => state.unpaidMinor, true);
+  const profitReporting = revenueReporting - expensesReporting;
 
   return {
     project,
@@ -134,20 +134,20 @@ export function computeProjectFinancials(
     retentionHeldMinor: retentionHeld,
     certifiedRatioBp: ratioBp(certifiedBase, contractValue),
     collectionRatioBp: ratioBp(totalPaid, totalDue),
-    contractValueEgp: toEgp(contractValue),
-    revenueEgp,
-    billableRevenueEgp: certificateEgp((state) => state.breakdown.baseMinor, false),
-    invoicedAmountEgp,
-    collectedEgp: cashValuation.certificateCollectionsEgp,
-    certificateCollectionsEgp: cashValuation.certificateCollectionsEgp,
-    advanceReceivedEgp: cashValuation.advanceReceivedEgp,
-    retentionReleasedEgp: cashValuation.retentionReleasedEgp,
-    totalActualCashInEgp: cashValuation.totalActualCashInEgp,
-    unallocatedCustomerCreditEgp: cashValuation.unallocatedCustomerCreditEgp,
-    outstandingEgp,
-    expensesEgp,
-    profitEgp,
-    marginBp: ratioBp(profitEgp, revenueEgp),
+    contractValueReporting: toReporting(contractValue),
+    revenueReporting,
+    billableRevenueReporting: certificateReporting((state) => state.breakdown.baseMinor, false),
+    invoicedAmountReporting,
+    collectedReporting: cashValuation.certificateCollectionsReporting,
+    certificateCollectionsReporting: cashValuation.certificateCollectionsReporting,
+    advanceReceivedReporting: cashValuation.advanceReceivedReporting,
+    retentionReleasedReporting: cashValuation.retentionReleasedReporting,
+    totalActualCashInReporting: cashValuation.totalActualCashInReporting,
+    unallocatedCustomerCreditReporting: cashValuation.unallocatedCustomerCreditReporting,
+    outstandingReporting,
+    expensesReporting,
+    profitReporting,
+    marginBp: ratioBp(profitReporting, revenueReporting),
     overdueCertificates: sum(contractStates.map((c) => c.certificates.filter((s) => s.overdue).length)),
   };
 }
@@ -155,14 +155,14 @@ export function computeProjectFinancials(
 export interface ClientFinancials {
   clientId: number;
   projectCount: number;
-  contractValueEgp: number;
-  collectedEgp: number;
-  certificateCollectionsEgp: number;
-  advanceReceivedEgp: number;
-  retentionReleasedEgp: number;
-  totalActualCashInEgp: number;
-  unallocatedCustomerCreditEgp: number;
-  outstandingEgp: number;
+  contractValueReporting: number;
+  collectedReporting: number;
+  certificateCollectionsReporting: number;
+  advanceReceivedReporting: number;
+  retentionReleasedReporting: number;
+  totalActualCashInReporting: number;
+  unallocatedCustomerCreditReporting: number;
+  outstandingReporting: number;
 }
 
 export function computeClientFinancials(clientId: number, projects: ProjectFinancials[]): ClientFinancials {
@@ -170,29 +170,29 @@ export function computeClientFinancials(clientId: number, projects: ProjectFinan
   return {
     clientId,
     projectCount: own.length,
-    contractValueEgp: sum(own.map((p) => p.contractValueEgp)),
-    collectedEgp: sum(own.map((p) => p.collectedEgp)),
-    certificateCollectionsEgp: sum(own.map((p) => p.certificateCollectionsEgp)),
-    advanceReceivedEgp: sum(own.map((p) => p.advanceReceivedEgp)),
-    retentionReleasedEgp: sum(own.map((p) => p.retentionReleasedEgp)),
-    totalActualCashInEgp: sum(own.map((p) => p.totalActualCashInEgp)),
-    unallocatedCustomerCreditEgp: sum(own.map((p) => p.unallocatedCustomerCreditEgp)),
-    outstandingEgp: sum(own.map((p) => p.outstandingEgp)),
+    contractValueReporting: sum(own.map((p) => p.contractValueReporting)),
+    collectedReporting: sum(own.map((p) => p.collectedReporting)),
+    certificateCollectionsReporting: sum(own.map((p) => p.certificateCollectionsReporting)),
+    advanceReceivedReporting: sum(own.map((p) => p.advanceReceivedReporting)),
+    retentionReleasedReporting: sum(own.map((p) => p.retentionReleasedReporting)),
+    totalActualCashInReporting: sum(own.map((p) => p.totalActualCashInReporting)),
+    unallocatedCustomerCreditReporting: sum(own.map((p) => p.unallocatedCustomerCreditReporting)),
+    outstandingReporting: sum(own.map((p) => p.outstandingReporting)),
   };
 }
 
 export interface DashboardKpis {
-  contractValueEgp: number;
-  revenueEgp: number;
-  collectedEgp: number;
-  certificateCollectionsEgp: number;
-  advanceReceivedEgp: number;
-  retentionReleasedEgp: number;
-  totalActualCashInEgp: number;
-  unallocatedCustomerCreditEgp: number;
-  outstandingEgp: number;
-  expensesEgp: number; // ALL expenses incl. overhead
-  profitEgp: number; // revenue − all expenses
+  contractValueReporting: number;
+  revenueReporting: number;
+  collectedReporting: number;
+  certificateCollectionsReporting: number;
+  advanceReceivedReporting: number;
+  retentionReleasedReporting: number;
+  totalActualCashInReporting: number;
+  unallocatedCustomerCreditReporting: number;
+  outstandingReporting: number;
+  expensesReporting: number; // ALL expenses incl. overhead
+  profitReporting: number; // revenue − all expenses
   marginBp: number;
   activeProjects: number;
   completedProjects: number;
@@ -204,22 +204,22 @@ export function computeDashboardKpis(
   allExpenses: Expense[],
   valuation: CurrencyValuation,
 ): DashboardKpis {
-  const expensesEgp = sum(allExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
-  const revenueEgp = sum(projects.map((p) => p.revenueEgp));
-  const profitEgp = revenueEgp - expensesEgp;
+  const expensesReporting = sum(allExpenses.map((e) => valuation.value(e.amountMinor, e.currency, e.fxRateMicro)));
+  const revenueReporting = sum(projects.map((p) => p.revenueReporting));
+  const profitReporting = revenueReporting - expensesReporting;
   return {
-    contractValueEgp: sum(projects.map((p) => p.contractValueEgp)),
-    revenueEgp,
-    collectedEgp: sum(projects.map((p) => p.collectedEgp)),
-    certificateCollectionsEgp: sum(projects.map((p) => p.certificateCollectionsEgp)),
-    advanceReceivedEgp: sum(projects.map((p) => p.advanceReceivedEgp)),
-    retentionReleasedEgp: sum(projects.map((p) => p.retentionReleasedEgp)),
-    totalActualCashInEgp: sum(projects.map((p) => p.totalActualCashInEgp)),
-    unallocatedCustomerCreditEgp: sum(projects.map((p) => p.unallocatedCustomerCreditEgp)),
-    outstandingEgp: sum(projects.map((p) => p.outstandingEgp)),
-    expensesEgp,
-    profitEgp,
-    marginBp: ratioBp(profitEgp, revenueEgp),
+    contractValueReporting: sum(projects.map((p) => p.contractValueReporting)),
+    revenueReporting,
+    collectedReporting: sum(projects.map((p) => p.collectedReporting)),
+    certificateCollectionsReporting: sum(projects.map((p) => p.certificateCollectionsReporting)),
+    advanceReceivedReporting: sum(projects.map((p) => p.advanceReceivedReporting)),
+    retentionReleasedReporting: sum(projects.map((p) => p.retentionReleasedReporting)),
+    totalActualCashInReporting: sum(projects.map((p) => p.totalActualCashInReporting)),
+    unallocatedCustomerCreditReporting: sum(projects.map((p) => p.unallocatedCustomerCreditReporting)),
+    outstandingReporting: sum(projects.map((p) => p.outstandingReporting)),
+    expensesReporting,
+    profitReporting,
+    marginBp: ratioBp(profitReporting, revenueReporting),
     activeProjects: projects.filter((p) => p.project.status === "ACTIVE").length,
     completedProjects: projects.filter((p) => p.project.status === "COMPLETED").length,
     overdueCertificates: sum(projects.map((p) => p.overdueCertificates)),

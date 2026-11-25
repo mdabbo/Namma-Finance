@@ -2,83 +2,83 @@ import { ratioBp } from "../money/money";
 
 export interface ProjectCostProfile {
   projectId: number;
-  recognizedRevenueEgp: number;
-  forecastRevenueEgp: number;
-  actualCashInEgp: number;
-  actualPaidCostEgp: number;
-  accruedCostEgp: number;
-  committedCostEgp: number;
-  forecastCostEgp: number;
-  actualProfitEgp: number;
-  cashProfitEgp: number;
-  committedProfitEgp: number;
-  forecastProfitEgp: number;
+  recognizedRevenueReporting: number;
+  forecastRevenueReporting: number;
+  actualCashInReporting: number;
+  actualPaidCostReporting: number;
+  accruedCostReporting: number;
+  committedCostReporting: number;
+  forecastCostReporting: number;
+  actualProfitReporting: number;
+  cashProfitReporting: number;
+  committedProfitReporting: number;
+  forecastProfitReporting: number;
   actualMarginBp: number;
   forecastMarginBp: number;
 }
 
 export interface ProjectCostInput {
   projectId: number;
-  recognizedRevenueEgp: number;
-  forecastRevenueEgp: number;
-  actualCashInEgp: number;
-  actualPaidCostEgp: number;
-  accruedCostEgp: number;
-  committedCostEgp: number;
+  recognizedRevenueReporting: number;
+  forecastRevenueReporting: number;
+  actualCashInReporting: number;
+  actualPaidCostReporting: number;
+  accruedCostReporting: number;
+  committedCostReporting: number;
 }
 
 export interface PortfolioCostTotals {
-  directActualPaidCostEgp: number;
-  overheadPaidCostEgp: number;
-  actualPaidCostEgp: number;
-  accruedCostEgp: number;
-  committedCostEgp: number;
-  forecastCostEgp: number;
+  directActualPaidCostReporting: number;
+  overheadPaidCostReporting: number;
+  actualPaidCostReporting: number;
+  accruedCostReporting: number;
+  committedCostReporting: number;
+  forecastCostReporting: number;
 }
 
 /** Derive cash, accrual, commitment, and forecast views without storing totals. */
 export function computeProjectCostProfile(input: ProjectCostInput): ProjectCostProfile {
-  const incurred = input.actualPaidCostEgp + input.accruedCostEgp;
-  const forecastCost = Math.max(incurred, input.committedCostEgp);
-  const actualProfit = input.recognizedRevenueEgp - incurred;
-  const forecastProfit = input.forecastRevenueEgp - forecastCost;
+  const incurred = input.actualPaidCostReporting + input.accruedCostReporting;
+  const forecastCost = Math.max(incurred, input.committedCostReporting);
+  const actualProfit = input.recognizedRevenueReporting - incurred;
+  const forecastProfit = input.forecastRevenueReporting - forecastCost;
   return {
     ...input,
-    forecastCostEgp: forecastCost,
-    actualProfitEgp: actualProfit,
-    cashProfitEgp: input.actualCashInEgp - input.actualPaidCostEgp,
-    committedProfitEgp: input.forecastRevenueEgp - input.committedCostEgp,
-    forecastProfitEgp: forecastProfit,
-    actualMarginBp: ratioBp(actualProfit, input.recognizedRevenueEgp),
-    forecastMarginBp: ratioBp(forecastProfit, input.forecastRevenueEgp),
+    forecastCostReporting: forecastCost,
+    actualProfitReporting: actualProfit,
+    cashProfitReporting: input.actualCashInReporting - input.actualPaidCostReporting,
+    committedProfitReporting: input.forecastRevenueReporting - input.committedCostReporting,
+    forecastProfitReporting: forecastProfit,
+    actualMarginBp: ratioBp(actualProfit, input.recognizedRevenueReporting),
+    forecastMarginBp: ratioBp(forecastProfit, input.forecastRevenueReporting),
   };
 }
 
 /** Apply allocated overhead consistently to every cost/profit view. */
-export function withAllocatedOverhead(profile: ProjectCostProfile, overheadEgp: number): ProjectCostProfile {
+export function withAllocatedOverhead(profile: ProjectCostProfile, overheadReporting: number): ProjectCostProfile {
   return computeProjectCostProfile({
     projectId: profile.projectId,
-    recognizedRevenueEgp: profile.recognizedRevenueEgp,
-    forecastRevenueEgp: profile.forecastRevenueEgp,
-    actualCashInEgp: profile.actualCashInEgp,
-    actualPaidCostEgp: profile.actualPaidCostEgp + overheadEgp,
-    accruedCostEgp: profile.accruedCostEgp,
-    committedCostEgp: profile.committedCostEgp + overheadEgp,
+    recognizedRevenueReporting: profile.recognizedRevenueReporting,
+    forecastRevenueReporting: profile.forecastRevenueReporting,
+    actualCashInReporting: profile.actualCashInReporting,
+    actualPaidCostReporting: profile.actualPaidCostReporting + overheadReporting,
+    accruedCostReporting: profile.accruedCostReporting,
+    committedCostReporting: profile.committedCostReporting + overheadReporting,
   });
 }
 
 /** Sum project forecasts after each project's incurred/commitment maximum is resolved. */
 export function aggregateProjectCostTotals(
   profiles: readonly ProjectCostProfile[],
-  overheadPaidEgp: number,
+  overheadPaidReporting: number,
 ): PortfolioCostTotals {
-  const directActualPaidCostEgp = profiles.reduce((sum, profile) => sum + profile.actualPaidCostEgp, 0);
+  const directActualPaidCostReporting = profiles.reduce((sum, profile) => sum + profile.actualPaidCostReporting, 0);
   return {
-    directActualPaidCostEgp,
-    overheadPaidCostEgp: overheadPaidEgp,
-    actualPaidCostEgp: directActualPaidCostEgp + overheadPaidEgp,
-    accruedCostEgp: profiles.reduce((sum, profile) => sum + profile.accruedCostEgp, 0),
-    committedCostEgp: profiles.reduce((sum, profile) => sum + profile.committedCostEgp, 0) + overheadPaidEgp,
-    forecastCostEgp: profiles.reduce((sum, profile) => sum + profile.forecastCostEgp, 0) + overheadPaidEgp,
+    directActualPaidCostReporting,
+    overheadPaidCostReporting: overheadPaidReporting,
+    actualPaidCostReporting: directActualPaidCostReporting + overheadPaidReporting,
+    accruedCostReporting: profiles.reduce((sum, profile) => sum + profile.accruedCostReporting, 0),
+    committedCostReporting: profiles.reduce((sum, profile) => sum + profile.committedCostReporting, 0) + overheadPaidReporting,
+    forecastCostReporting: profiles.reduce((sum, profile) => sum + profile.forecastCostReporting, 0) + overheadPaidReporting,
   };
 }

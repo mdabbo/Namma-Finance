@@ -14,30 +14,30 @@ import type { ContractState } from "./contract";
  * total is named for what it measures and the components are reported beside it.
  *
  * The four components partition the total exactly — each live inflow lands in
- * exactly one of them — so they sum to totalCashInEgp with nothing double
+ * exactly one of them — so they sum to totalCashInReporting with nothing double
  * counted. `dashboardCashInComponentsReconcile` asserts that.
  */
 export interface DashboardOverview {
-  contractValueEgp: number;
+  contractValueReporting: number;
   /** All live incoming payments: collections, advances, retention, credit. */
-  totalCashInEgp: number;
+  totalCashInReporting: number;
   /** Payment money actually allocated to certificates. */
-  certificateCollectionsEgp: number;
-  advanceReceivedEgp: number;
-  retentionReleasedEgp: number;
+  certificateCollectionsReporting: number;
+  advanceReceivedReporting: number;
+  retentionReleasedReporting: number;
   /** Certificate-payment cash received but not yet allocated to a certificate. */
-  unallocatedCustomerCreditEgp: number;
-  outstandingReceivablesEgp: number;
-  cashOutEgp: number;
+  unallocatedCustomerCreditReporting: number;
+  outstandingReceivablesReporting: number;
+  cashOutReporting: number;
   /** Total actual cash in less actual cash out. */
-  netCashPositionEgp: number;
+  netCashPositionReporting: number;
 }
 
 export interface DashboardAttentionSummary {
-  overdueCertificates: { count: number; amountEgp: number };
-  readyToInvoice: { count: number; amountEgp: number };
-  unallocatedPayments: { count: number; amountEgp: number };
-  teamPaymentsDue: { count: number; amountEgp: number };
+  overdueCertificates: { count: number; amountReporting: number };
+  readyToInvoice: { count: number; amountReporting: number };
+  unallocatedPayments: { count: number; amountReporting: number };
+  teamPaymentsDue: { count: number; amountReporting: number };
 }
 
 export interface DashboardAttentionInput {
@@ -47,8 +47,8 @@ export interface DashboardAttentionInput {
     projectFxRateMicro: number;
   }[];
   projects: readonly ProjectFinancials[];
-  readyToInvoiceEgp: readonly number[];
-  teamPaymentsDueEgp: readonly number[];
+  readyToInvoiceReporting: readonly number[];
+  teamPaymentsDueReporting: readonly number[];
 }
 
 /** Derive alert counts and amounts without allowing the view to control financial facts. */
@@ -57,14 +57,14 @@ export function computeDashboardAttention(
   valuation: CurrencyValuation,
 ): DashboardAttentionSummary {
   let overdueCount = 0;
-  let overdueAmountEgp = 0;
+  let overdueAmountReporting = 0;
   let unallocatedCount = 0;
   for (const { state, projectCurrency, projectFxRateMicro } of input.contracts) {
     if (state.unallocatedCustomerCreditMinor > 0) unallocatedCount += 1;
     for (const certificate of state.certificates) {
       if (!certificate.overdue || certificate.unpaidMinor <= 0) continue;
       overdueCount += 1;
-      overdueAmountEgp += valuation.value(
+      overdueAmountReporting += valuation.value(
         certificate.unpaidMinor,
         certificate.certificate.currencySnapshot ?? projectCurrency,
         certificate.certificate.fxRateMicroSnapshot ?? projectFxRateMicro,
@@ -72,18 +72,18 @@ export function computeDashboardAttention(
     }
   }
   return {
-    overdueCertificates: { count: overdueCount, amountEgp: overdueAmountEgp },
+    overdueCertificates: { count: overdueCount, amountReporting: overdueAmountReporting },
     readyToInvoice: {
-      count: input.readyToInvoiceEgp.length,
-      amountEgp: sum([...input.readyToInvoiceEgp]),
+      count: input.readyToInvoiceReporting.length,
+      amountReporting: sum([...input.readyToInvoiceReporting]),
     },
     unallocatedPayments: {
       count: unallocatedCount,
-      amountEgp: sum(input.projects.map((project) => project.unallocatedCustomerCreditEgp)),
+      amountReporting: sum(input.projects.map((project) => project.unallocatedCustomerCreditReporting)),
     },
     teamPaymentsDue: {
-      count: input.teamPaymentsDueEgp.length,
-      amountEgp: sum([...input.teamPaymentsDueEgp]),
+      count: input.teamPaymentsDueReporting.length,
+      amountReporting: sum([...input.teamPaymentsDueReporting]),
     },
   };
 }
@@ -97,21 +97,21 @@ export function computeDashboardOverview(
   expenses: Expense[],
   valuation: CurrencyValuation,
 ): DashboardOverview {
-  const contractValueEgp = sum(projects.map((project) => project.contractValueEgp));
-  const totalCashInEgp = sum(projects.map((project) => project.totalActualCashInEgp));
-  const outstandingReceivablesEgp = sum(projects.map((project) => project.outstandingEgp));
-  const cashOutEgp = sum(expenses.map((expense) =>
+  const contractValueReporting = sum(projects.map((project) => project.contractValueReporting));
+  const totalCashInReporting = sum(projects.map((project) => project.totalActualCashInReporting));
+  const outstandingReceivablesReporting = sum(projects.map((project) => project.outstandingReporting));
+  const cashOutReporting = sum(expenses.map((expense) =>
     valuation.value(expense.amountMinor, expense.currency, expense.fxRateMicro)));
   return {
-    contractValueEgp,
-    totalCashInEgp,
-    certificateCollectionsEgp: sum(projects.map((project) => project.certificateCollectionsEgp)),
-    advanceReceivedEgp: sum(projects.map((project) => project.advanceReceivedEgp)),
-    retentionReleasedEgp: sum(projects.map((project) => project.retentionReleasedEgp)),
-    unallocatedCustomerCreditEgp: sum(projects.map((project) => project.unallocatedCustomerCreditEgp)),
-    outstandingReceivablesEgp,
-    cashOutEgp,
-    netCashPositionEgp: totalCashInEgp - cashOutEgp,
+    contractValueReporting,
+    totalCashInReporting,
+    certificateCollectionsReporting: sum(projects.map((project) => project.certificateCollectionsReporting)),
+    advanceReceivedReporting: sum(projects.map((project) => project.advanceReceivedReporting)),
+    retentionReleasedReporting: sum(projects.map((project) => project.retentionReleasedReporting)),
+    unallocatedCustomerCreditReporting: sum(projects.map((project) => project.unallocatedCustomerCreditReporting)),
+    outstandingReceivablesReporting,
+    cashOutReporting,
+    netCashPositionReporting: totalCashInReporting - cashOutReporting,
   };
 }
 
@@ -123,11 +123,11 @@ export function computeDashboardOverview(
  */
 export function dashboardCashInComponentsReconcile(overview: DashboardOverview): boolean {
   return (
-    overview.certificateCollectionsEgp
-    + overview.advanceReceivedEgp
-    + overview.retentionReleasedEgp
-    + overview.unallocatedCustomerCreditEgp
-  ) === overview.totalCashInEgp;
+    overview.certificateCollectionsReporting
+    + overview.advanceReceivedReporting
+    + overview.retentionReleasedReporting
+    + overview.unallocatedCustomerCreditReporting
+  ) === overview.totalCashInReporting;
 }
 
 export interface DashboardCashIn {
@@ -137,9 +137,9 @@ export interface DashboardCashIn {
 
 export interface MonthlyCashPoint {
   month: string;
-  cashInEgp: number;
-  cashOutEgp: number;
-  netEgp: number;
+  cashInReporting: number;
+  cashOutReporting: number;
+  netReporting: number;
 }
 
 /** Build a display series from immutable source rows while retaining integer piasters. */
@@ -148,16 +148,16 @@ export function buildMonthlyCashSeries(
   expenses: readonly Expense[],
   valuation: CurrencyValuation,
 ): MonthlyCashPoint[] {
-  const buckets = new Map<string, { cashInEgp: number; cashOutEgp: number }>();
+  const buckets = new Map<string, { cashInReporting: number; cashOutReporting: number }>();
   const bucket = (date: string) => {
     const month = date.slice(0, 7);
-    const current = buckets.get(month) ?? { cashInEgp: 0, cashOutEgp: 0 };
+    const current = buckets.get(month) ?? { cashInReporting: 0, cashOutReporting: 0 };
     buckets.set(month, current);
     return current;
   };
-  for (const payment of cashIn) bucket(payment.date).cashInEgp += payment.egpMinor;
+  for (const payment of cashIn) bucket(payment.date).cashInReporting += payment.egpMinor;
   for (const expense of expenses) {
-    bucket(expense.date).cashOutEgp += valuation.value(
+    bucket(expense.date).cashOutReporting += valuation.value(
       expense.amountMinor,
       expense.currency,
       expense.fxRateMicro,
@@ -169,7 +169,7 @@ export function buildMonthlyCashSeries(
     .map(([month, amounts]) => ({
       month,
       ...amounts,
-      netEgp: amounts.cashInEgp - amounts.cashOutEgp,
+      netReporting: amounts.cashInReporting - amounts.cashOutReporting,
     }));
 }
 
@@ -217,7 +217,7 @@ export interface ReceivableCertificate {
   overdue: boolean;
   currency: string;
   unpaidMinor: number;
-  unpaidEgp: number;
+  unpaidReporting: number;
 }
 
 /**
@@ -245,7 +245,7 @@ export function selectOpenReceivables(
         overdue: certificate.overdue,
         currency,
         unpaidMinor: certificate.unpaidMinor,
-        unpaidEgp: valuation.value(
+        unpaidReporting: valuation.value(
           certificate.unpaidMinor,
           currency,
           certificate.certificate.fxRateMicroSnapshot ?? projectFxRateMicro,
@@ -260,7 +260,7 @@ export function selectOpenReceivables(
 
 export interface UpcomingCollections {
   items: ReceivableCertificate[];
-  totalEgp: number;
+  totalReporting: number;
   horizonEndIso: string;
 }
 
@@ -286,7 +286,7 @@ export function selectUpcomingCollections(
     !item.overdue && item.dueDate !== null && item.dueDate <= horizonEndIso);
   return {
     items,
-    totalEgp: sum(items.map((item) => item.unpaidEgp)),
+    totalReporting: sum(items.map((item) => item.unpaidReporting)),
     horizonEndIso,
   };
 }
@@ -299,7 +299,7 @@ export function selectOperationalProjectHealth(
   const operational = new Set<ProjectStatus>(["ACTIVE", "ON_HOLD"]);
   return projects
     .filter(({ project }) => operational.has(project.status))
-    .sort((left, right) => right.contractValueEgp - left.contractValueEgp)
+    .sort((left, right) => right.contractValueReporting - left.contractValueReporting)
     .slice(0, Math.max(0, limit));
 }
 
