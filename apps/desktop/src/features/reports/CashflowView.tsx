@@ -35,7 +35,7 @@ export function CashflowView() {
         .filter((cs) => isBillable(cs.certificate.status) && cs.unpaidMinor > 0)
         .map((cs) => ({
           dueDate: cs.dueDate,
-          unpaidEgp: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
+          unpaidReporting: project ? financials.valuation.value(cs.unpaidMinor, project.currency, project.fxRateMicro) : cs.unpaidMinor,
         }));
     });
     return buildCashflow({

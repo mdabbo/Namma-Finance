@@ -142,8 +142,8 @@ describe("dashboard financial hardening", () => {
 
     const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects[0]).toMatchObject({
-      revenueEgp: 510_000,
-      totalActualCashInEgp: 510_000,
+      revenueReporting: 510_000,
+      totalActualCashInReporting: 510_000,
     });
     expect(workspace.cashIn.map((row) => row.egpMinor)).toEqual([10_000, 500_000]);
     expect(workspace.cashIn.map(({ number, projectId: cashProjectId }) => ({
@@ -173,7 +173,7 @@ describe("dashboard financial hardening", () => {
     const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     expect(workspace.projects).toHaveLength(0);
     expect(workspace.allExpenses).toHaveLength(0);
-    expect(computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION).cashOutEgp).toBe(0);
+    expect(computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION).cashOutReporting).toBe(0);
   });
 
   it("retries when a financial mutation commits during a pooled read", async () => {

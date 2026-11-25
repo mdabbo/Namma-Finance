@@ -82,7 +82,7 @@ export interface TeamPayableAlert extends MobileAlertItem {
 }
 
 export interface MobileWorkspace {
-  /** The currency every consolidated figure (the `…Egp` fields, kpis) is in. */
+  /** The currency every consolidated figure (the `…Reporting` fields, kpis) is in. */
   currency: string;
   projects: ProjectFinancials[];
   contractStates: Map<number, ContractState>;

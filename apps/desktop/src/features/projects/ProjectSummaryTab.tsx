@@ -63,7 +63,7 @@ export function ProjectSummary({
   const attention = projectAttentionSummary({
     projectId: project.id,
     overdueCertificates: fin?.overdueCertificates ?? 0,
-    unallocatedCustomerCreditEgp: fin?.unallocatedCustomerCreditEgp ?? 0,
+    unallocatedCustomerCreditReporting: fin?.unallocatedCustomerCreditReporting ?? 0,
     readyToCollect: financials?.readyToCollect ?? [],
     teamPayables: financials?.teamPayables ?? [],
   });
@@ -90,33 +90,33 @@ export function ProjectSummary({
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <ProjectMetric
               label={t("cash.contractValueExcludingVat")}
-              value={readModelAmount(fin, (f) => base.format(f.contractValueEgp))}
+              value={readModelAmount(fin, (f) => base.format(f.contractValueReporting))}
             />
             <ProjectMetric
               label={t("cash.certifiedRevenue")}
-              value={readModelAmount(fin, (f) => base.format(f.revenueEgp))}
+              value={readModelAmount(fin, (f) => base.format(f.revenueReporting))}
               hint={fin ? fmt.percent(fin.certifiedRatioBp) : undefined}
             />
             <ProjectMetric
               label={t("cash.certificateCollections")}
-              value={readModelAmount(fin, (f) => base.format(f.certificateCollectionsEgp))}
+              value={readModelAmount(fin, (f) => base.format(f.certificateCollectionsReporting))}
               hint={fin ? fmt.percent(fin.collectionRatioBp) : undefined}
               tone={fin ? "success" : "neutral"}
             />
             <ProjectMetric
               label={t("cash.outstandingReceivables")}
-              value={readModelAmount(fin, (f) => base.format(f.outstandingEgp))}
+              value={readModelAmount(fin, (f) => base.format(f.outstandingReporting))}
               tone={fin ? "warning" : "neutral"}
             />
             <ProjectMetric
               label={t("projects.projectCost")}
-              value={readModelAmount(cost, (c) => base.format(c.actualPaidCostEgp))}
+              value={readModelAmount(cost, (c) => base.format(c.actualPaidCostReporting))}
             />
             <ProjectMetric
               label={t("costs.actualProfit")}
-              value={readModelAmount(cost, (c) => base.format(c.actualProfitEgp))}
+              value={readModelAmount(cost, (c) => base.format(c.actualProfitReporting))}
               hint={cost ? fmt.percent(cost.actualMarginBp) : undefined}
-              tone={cost ? (cost.actualProfitEgp >= 0 ? "success" : "danger") : "neutral"}
+              tone={cost ? (cost.actualProfitReporting >= 0 ? "success" : "danger") : "neutral"}
             />
           </div>
         </section>

@@ -48,17 +48,17 @@ describe("project cash valuation", () => {
       resolveFx: atRate("EGP", 1_000_000),
     }, EGP_VALUATION);
 
-    expect(valuation.certificateCollectionsEgp).toBe(60_000);
-    expect(valuation.unallocatedCustomerCreditEgp).toBe(40_000);
-    expect(valuation.advanceReceivedEgp).toBe(30_000);
-    expect(valuation.retentionReleasedEgp).toBe(5_000);
-    expect(valuation.totalActualCashInEgp).toBe(135_000);
+    expect(valuation.certificateCollectionsReporting).toBe(60_000);
+    expect(valuation.unallocatedCustomerCreditReporting).toBe(40_000);
+    expect(valuation.advanceReceivedReporting).toBe(30_000);
+    expect(valuation.retentionReleasedReporting).toBe(5_000);
+    expect(valuation.totalActualCashInReporting).toBe(135_000);
     expect(
-      valuation.certificateCollectionsEgp
-      + valuation.unallocatedCustomerCreditEgp
-      + valuation.advanceReceivedEgp
-      + valuation.retentionReleasedEgp,
-    ).toBe(valuation.totalActualCashInEgp);
+      valuation.certificateCollectionsReporting
+      + valuation.unallocatedCustomerCreditReporting
+      + valuation.advanceReceivedReporting
+      + valuation.retentionReleasedReporting,
+    ).toBe(valuation.totalActualCashInReporting);
   });
 
   it("ignores allocations against draft certificates", () => {
@@ -68,9 +68,9 @@ describe("project cash valuation", () => {
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("EGP", 1_000_000),
     }, EGP_VALUATION);
-    expect(valuation.certificateCollectionsEgp).toBe(60_000);
+    expect(valuation.certificateCollectionsReporting).toBe(60_000);
     // The draft's 25 000 stays customer credit rather than becoming a collection.
-    expect(valuation.unallocatedCustomerCreditEgp).toBe(40_000);
+    expect(valuation.unallocatedCustomerCreditReporting).toBe(40_000);
   });
 
   /**
@@ -87,8 +87,8 @@ describe("project cash valuation", () => {
       resolveFx: atRate("USD", 47_333_333),
     }, EGP_VALUATION);
     expect(
-      valuation.certificateCollectionsEgp + valuation.unallocatedCustomerCreditEgp,
-    ).toBe(valuation.totalActualCashInEgp);
+      valuation.certificateCollectionsReporting + valuation.unallocatedCustomerCreditReporting,
+    ).toBe(valuation.totalActualCashInReporting);
   });
 
   it("clamps an over-allocated receipt instead of reporting negative credit", () => {
@@ -98,9 +98,9 @@ describe("project cash valuation", () => {
       billableCertificateIds: new Set([10]),
       resolveFx: atRate("EGP", 1_000_000),
     }, EGP_VALUATION);
-    expect(valuation.certificateCollectionsEgp).toBe(50_000);
-    expect(valuation.unallocatedCustomerCreditEgp).toBe(0);
-    expect(valuation.totalActualCashInEgp).toBe(50_000);
+    expect(valuation.certificateCollectionsReporting).toBe(50_000);
+    expect(valuation.unallocatedCustomerCreditReporting).toBe(0);
+    expect(valuation.totalActualCashInReporting).toBe(50_000);
   });
 
   it("satisfies the dashboard reconciliation the components are shown under", () => {
@@ -115,17 +115,17 @@ describe("project cash valuation", () => {
     }, EGP_VALUATION);
     expect(
       dashboardCashInComponentsReconcile({
-        contractValueEgp: 0,
-        outstandingReceivablesEgp: 0,
-        cashOutEgp: 0,
-        netCashPositionEgp: 0,
-        certificateCollectionsEgp: valuation.certificateCollectionsEgp,
-        advanceReceivedEgp: valuation.advanceReceivedEgp,
-        retentionReleasedEgp: valuation.retentionReleasedEgp,
-        unallocatedCustomerCreditEgp: valuation.unallocatedCustomerCreditEgp,
-        // DashboardOverview names this totalCashInEgp; the valuation calls the
-        // same figure totalActualCashInEgp.
-        totalCashInEgp: valuation.totalActualCashInEgp,
+        contractValueReporting: 0,
+        outstandingReceivablesReporting: 0,
+        cashOutReporting: 0,
+        netCashPositionReporting: 0,
+        certificateCollectionsReporting: valuation.certificateCollectionsReporting,
+        advanceReceivedReporting: valuation.advanceReceivedReporting,
+        retentionReleasedReporting: valuation.retentionReleasedReporting,
+        unallocatedCustomerCreditReporting: valuation.unallocatedCustomerCreditReporting,
+        // DashboardOverview names this totalCashInReporting; the valuation calls the
+        // same figure totalActualCashInReporting.
+        totalCashInReporting: valuation.totalActualCashInReporting,
       }),
     ).toBe(true);
   });

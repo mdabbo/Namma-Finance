@@ -30,27 +30,27 @@ describe("computeCosting", () => {
   const rows: ProjectProfitability[] = [
     {
       projectId: 1, projectCode: "P1", projectName: "One",
-      revenueEgp: 1_000_000, directCostEgp: 200_000, grossProfitEgp: 800_000, grossMarginBp: 8000,
-      overheadEgp: 100_000, netProfitEgp: 700_000, netMarginBp: 7000,
+      revenueReporting: 1_000_000, directCostReporting: 200_000, grossProfitReporting: 800_000, grossMarginBp: 8000,
+      overheadReporting: 100_000, netProfitReporting: 700_000, netMarginBp: 7000,
     },
   ];
 
   it("adds labor to get true cost and fully-loaded profit, leaving cash net profit intact", () => {
     const costing = computeCosting(rows, new Map([[1, 300_000]]));
-    expect(costing[0]!.laborCostEgp).toBe(300_000);
+    expect(costing[0]!.laborCostReporting).toBe(300_000);
     // true cost = 200,000 direct + 300,000 labor + 100,000 overhead
-    expect(costing[0]!.trueCostEgp).toBe(600_000);
+    expect(costing[0]!.trueCostReporting).toBe(600_000);
     // fully loaded = 1,000,000 − 600,000
-    expect(costing[0]!.fullyLoadedProfitEgp).toBe(400_000);
+    expect(costing[0]!.fullyLoadedProfitReporting).toBe(400_000);
     expect(costing[0]!.fullyLoadedMarginBp).toBe(4000);
     // cash figures pass through untouched (no double count)
-    expect(costing[0]!.netProfitEgp).toBe(700_000);
+    expect(costing[0]!.netProfitReporting).toBe(700_000);
   });
 
   it("defaults labor to zero for projects with no logged time", () => {
     const costing = computeCosting(rows, new Map());
-    expect(costing[0]!.laborCostEgp).toBe(0);
-    expect(costing[0]!.fullyLoadedProfitEgp).toBe(700_000); // = net profit when no labor
+    expect(costing[0]!.laborCostReporting).toBe(0);
+    expect(costing[0]!.fullyLoadedProfitReporting).toBe(700_000); // = net profit when no labor
   });
 });
 

@@ -44,13 +44,13 @@ export function FinanceOverviewPage() {
     if (!financials) return null;
     const overview = computeDashboardOverview(financials.projects, financials.allExpenses, financials.valuation);
     const receivables = selectOpenReceivables(financeContractInputs(financials), financials.valuation);
-    const overdueEgp = receivables
+    const overdueReporting = receivables
       .filter((item) => item.overdue)
-      .reduce((total, item) => total + item.unpaidEgp, 0);
+      .reduce((total, item) => total + item.unpaidReporting, 0);
     return {
       overview,
       receivables,
-      overdueEgp,
+      overdueReporting,
       upcoming: selectUpcomingCollections(receivables, todayIso(), 60),
     };
   }, [financials]);
@@ -114,32 +114,32 @@ export function FinanceOverviewPage() {
       >
         <KpiCard
           label={t("financeSection.currentReceivables")}
-          value={base.format(model.overview.outstandingReceivablesEgp)}
+          value={base.format(model.overview.outstandingReceivablesReporting)}
           icon={CircleDollarSign}
-          tone={model.overview.outstandingReceivablesEgp > 0 ? "warning" : "default"}
+          tone={model.overview.outstandingReceivablesReporting > 0 ? "warning" : "default"}
         />
         <KpiCard
           label={t("financeSection.overdueReceivables")}
-          value={base.format(model.overdueEgp)}
+          value={base.format(model.overdueReporting)}
           icon={AlarmClock}
-          tone={model.overdueEgp > 0 ? "negative" : "positive"}
+          tone={model.overdueReporting > 0 ? "negative" : "positive"}
         />
         <KpiCard
           label={t("dashboard.totalCashIn")}
-          value={base.format(model.overview.totalCashInEgp)}
+          value={base.format(model.overview.totalCashInReporting)}
           icon={Banknote}
           tone="positive"
         />
         <KpiCard
           label={t("dashboard.cashOut")}
-          value={base.format(model.overview.cashOutEgp)}
+          value={base.format(model.overview.cashOutReporting)}
           icon={Receipt}
         />
         <KpiCard
           label={t("financeSection.customerCredit")}
-          value={base.format(model.overview.unallocatedCustomerCreditEgp)}
+          value={base.format(model.overview.unallocatedCustomerCreditReporting)}
           icon={WalletCards}
-          tone={model.overview.unallocatedCustomerCreditEgp > 0 ? "warning" : "default"}
+          tone={model.overview.unallocatedCustomerCreditReporting > 0 ? "warning" : "default"}
         />
       </section>
 
@@ -155,10 +155,10 @@ export function FinanceOverviewPage() {
         />
         <dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[
-            { key: "certificateCollections", value: model.overview.certificateCollectionsEgp },
-            { key: "advanceReceived", value: model.overview.advanceReceivedEgp },
-            { key: "retentionReleased", value: model.overview.retentionReleasedEgp },
-            { key: "customerCredit", value: model.overview.unallocatedCustomerCreditEgp },
+            { key: "certificateCollections", value: model.overview.certificateCollectionsReporting },
+            { key: "advanceReceived", value: model.overview.advanceReceivedReporting },
+            { key: "retentionReleased", value: model.overview.retentionReleasedReporting },
+            { key: "customerCredit", value: model.overview.unallocatedCustomerCreditReporting },
           ].map((part) => (
             <div
               key={part.key}
@@ -171,7 +171,7 @@ export function FinanceOverviewPage() {
         </dl>
         <p className="mt-3 text-xs text-muted">
           {t("dashboard.totalCashIn")}:{" "}
-          <span className="tnum font-medium">{base.format(model.overview.totalCashInEgp)}</span>
+          <span className="tnum font-medium">{base.format(model.overview.totalCashInReporting)}</span>
         </p>
       </Card>
 
@@ -180,7 +180,7 @@ export function FinanceOverviewPage() {
           title={t("financeSection.upcomingCollections")}
           description={t("financeSection.upcomingHorizon", {
             date: fmt.date(model.upcoming.horizonEndIso),
-            amount: base.format(model.upcoming.totalEgp),
+            amount: base.format(model.upcoming.totalReporting),
           })}
           actions={
             <Link
@@ -211,7 +211,7 @@ export function FinanceOverviewPage() {
                   </div>
                   <span className="text-xs text-muted tnum">{fmt.date(item.dueDate)}</span>
                   <span className="text-end text-sm font-medium tnum">
-                    {base.format(item.unpaidEgp)}
+                    {base.format(item.unpaidReporting)}
                   </span>
                   <ArrowRight size={14} className="text-slate-400 rtl:rotate-180" aria-hidden="true" />
                 </Link>

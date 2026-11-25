@@ -37,7 +37,7 @@ export function CostingView() {
       .filter((e) => e.projectId === null)
       .reduce((s, e) => s + financials.valuation.value(e.amountMinor, e.currency, e.fxRateMicro), 0);
     const profitability = computeProfitability(financials.projects, overheadTotal, settings?.overheadRule ?? "REVENUE");
-    return computeCosting(profitability, financials.laborByProjectEgp);
+    return computeCosting(profitability, financials.laborByProjectReporting);
   }, [financials, settings?.overheadRule]);
 
   if (!financials) return <EmptyState message={t("common.loading")} />;
@@ -74,13 +74,13 @@ export function CostingView() {
                   <p className="font-medium">{r.projectName}</p>
                   <p className="text-xs text-slate-400 tnum">{r.projectCode}</p>
                 </td>
-                <td className="text-end tnum">{base.format(r.revenueEgp)}</td>
-                <td className="text-end tnum">{base.format(r.directCostEgp)}</td>
-                <td className="text-end tnum text-brand-700 dark:text-brand-300">{base.format(r.laborCostEgp)}</td>
-                <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(r.overheadEgp)}</td>
-                <td className="text-end tnum">{base.format(r.trueCostEgp)}</td>
-                <td className={cx("text-end tnum font-semibold", r.fullyLoadedProfitEgp >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
-                  {base.format(r.fullyLoadedProfitEgp)}
+                <td className="text-end tnum">{base.format(r.revenueReporting)}</td>
+                <td className="text-end tnum">{base.format(r.directCostReporting)}</td>
+                <td className="text-end tnum text-brand-700 dark:text-brand-300">{base.format(r.laborCostReporting)}</td>
+                <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(r.overheadReporting)}</td>
+                <td className="text-end tnum">{base.format(r.trueCostReporting)}</td>
+                <td className={cx("text-end tnum font-semibold", r.fullyLoadedProfitReporting >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600")}>
+                  {base.format(r.fullyLoadedProfitReporting)}
                 </td>
                 <td className="text-end tnum text-slate-500">{fmt.percent(r.fullyLoadedMarginBp)}</td>
               </tr>

@@ -47,33 +47,33 @@ export function HomeScreen() {
           {/* Hero: the whole portfolio, and how much of it has been certified. */}
           <View style={[styles.hero, lift]}>
             <Text style={styles.heroLabel}>{t("dashboard.kpiContractValue")}</Text>
-            <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>{money(data.kpis.contractValueEgp)}</Text>
+            <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>{money(data.kpis.contractValueReporting)}</Text>
             <View style={styles.heroProgressHead}>
               <Text style={styles.heroCaption}>{t("projects.certified")}</Text>
               <Text style={styles.heroCaptionStrong}>
-                {formatBp(ratio(data.kpis.revenueEgp, data.kpis.contractValueEgp), locale)}
+                {formatBp(ratio(data.kpis.revenueReporting, data.kpis.contractValueReporting), locale)}
               </Text>
             </View>
             <SegmentBar
-              total={data.kpis.contractValueEgp}
-              segments={[{ value: data.kpis.revenueEgp, color: colors.accent }]}
+              total={data.kpis.contractValueReporting}
+              segments={[{ value: data.kpis.revenueReporting, color: colors.accent }]}
               track="rgba(255,255,255,0.16)"
             />
             <View style={styles.heroStats}>
-              <HeroStat label={t("dashboard.kpiCollected")} value={money(data.kpis.collectedEgp)} />
+              <HeroStat label={t("dashboard.kpiCollected")} value={money(data.kpis.collectedReporting)} />
               <View style={styles.heroDivider} />
-              <HeroStat label={t("dashboard.kpiOutstanding")} value={money(data.kpis.outstandingEgp)} />
+              <HeroStat label={t("dashboard.kpiOutstanding")} value={money(data.kpis.outstandingReporting)} />
             </View>
           </View>
 
           <View style={styles.tiles}>
-            <Tile icon="file-text" tone="blue" label={t("dashboard.kpiRevenue")} value={money(data.kpis.revenueEgp)} />
-            <Tile icon="trending-down" tone="red" label={t("dashboard.kpiExpenses")} value={money(data.kpis.expensesEgp)} />
+            <Tile icon="file-text" tone="blue" label={t("dashboard.kpiRevenue")} value={money(data.kpis.revenueReporting)} />
+            <Tile icon="trending-down" tone="red" label={t("dashboard.kpiExpenses")} value={money(data.kpis.expensesReporting)} />
             <Tile
               icon="trending-up"
-              tone={data.kpis.profitEgp >= 0 ? "green" : "red"}
+              tone={data.kpis.profitReporting >= 0 ? "green" : "red"}
               label={t("dashboard.kpiProfit")}
-              value={money(data.kpis.profitEgp)}
+              value={money(data.kpis.profitReporting)}
               note={`${t("mobile.margin")} ${formatBp(data.kpis.marginBp, locale)}`}
             />
             <Tile
