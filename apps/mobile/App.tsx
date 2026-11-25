@@ -17,12 +17,17 @@ import { SetupScreen } from "./src/screens/SetupScreen";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { ProjectsScreen } from "./src/screens/ProjectsScreen";
 import { ProjectDetailScreen } from "./src/screens/ProjectDetailScreen";
+import { PayTeamScreen } from "./src/screens/PayTeamScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
+import { TimeScreen } from "./src/screens/TimeScreen";
+import { TimeQueueProvider } from "./src/hooks/useTimeQueue";
+import { AppLockGate } from "./src/hooks/useAppLock";
+import { fetchServerNow } from "./src/lib/timeEntriesCloud";
 import { colors } from "./src/lib/theme";
 import { fontFamilyFor, layoutDirection, TAJAWAL } from "./src/lib/layout";
 import { Icon, type IconName } from "./src/components/ui";
 
-const TAB_ICONS: Record<string, IconName> = { Home: "home", Projects: "briefcase", Settings: "settings" };
+const TAB_ICONS: Record<string, IconName> = { Home: "home", Projects: "briefcase", Time: "clock", Settings: "settings" };
 import { syncNativeDirection } from "./src/lib/nativeDirection";
 import type { ProjectsStackParams } from "./src/navigation";
 
@@ -85,14 +90,18 @@ export default function App() {
 
   return (
     <DirectionRoot>
+      <AppLockGate>
       <QueryClientProvider client={queryClient}>
         <SupabaseContext.Provider value={PREVIEW ? previewClient() : getClient(boot.config)}>
           <StatusBar style="dark" />
           <ReportingCurrencyProvider>
+          <TimeQueueProvider serverNow={serverClock(boot.config)}>
           <MainNavigator onSignedOut={() => setBoot({ phase: "setup", config: boot.config })} />
+          </TimeQueueProvider>
           </ReportingCurrencyProvider>
         </SupabaseContext.Provider>
       </QueryClientProvider>
+      </AppLockGate>
     </DirectionRoot>
   );
 }
@@ -130,6 +139,7 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
     () => ({
       home: t("nav.dashboard"),
       projects: t("nav.projects"),
+      time: t("nav.time"),
       settings: t("nav.settings"),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -159,13 +169,30 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
             <ProjectsStack.Navigator screenOptions={{ headerShown: false }}>
               <ProjectsStack.Screen name="ProjectsList" component={ProjectsScreen} options={{ title: screens.projects }} />
               <ProjectsStack.Screen name="ProjectDetail" component={ProjectDetailScreen} options={{ title: screens.projects }} />
+              <ProjectsStack.Screen name="PayTeam" component={PayTeamScreen} options={{ title: screens.projects }} />
             </ProjectsStack.Navigator>
           )}
         </Tabs.Screen>
+        <Tabs.Screen name="Time" component={TimeScreen} options={{ title: screens.time }} />
         <Tabs.Screen name="Settings" options={{ title: screens.settings }}>
           {() => <SettingsScreen onSignedOut={onSignedOut} />}
         </Tabs.Screen>
       </Tabs.Navigator>
     </NavigationContainer>
   );
+}
+
+/**
+ * The cloud's clock, for stamping time entries (see lib/timeQueue.ts). The
+ * browser preview has no cloud, so it uses the computer's clock.
+ */
+const clocks = new Map<string, () => Promise<number>>();
+function serverClock(config: SyncConfig): () => Promise<number> {
+  const key = `${config.url}::${config.anonKey}`;
+  let clock = clocks.get(key);
+  if (!clock) {
+    clock = PREVIEW ? async () => Date.now() : () => fetchServerNow(config.url, config.anonKey);
+    clocks.set(key, clock);
+  }
+  return clock;
 }

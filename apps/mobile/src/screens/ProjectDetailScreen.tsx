@@ -1,9 +1,11 @@
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { RouteProp } from "@react-navigation/native";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, type NavigationProp } from "@react-navigation/native";
 import { formatBp, formatIsoDate, formatMinor, isBillable, type AppLocale } from "@mep/core";
 import { useWorkspace } from "../hooks/useWorkspace";
+import { useTimeQueue } from "../hooks/useTimeQueue";
+import { TeamSection } from "../components/TeamSection";
 import { Text } from "../components/AppText";
 import { ScreenHeader } from "../components/ScreenHeader";
 import { Badge, Card, Empty, IconBadge, LegendDot, SectionHeader, SegmentBar } from "../components/ui";
@@ -18,8 +20,9 @@ export function ProjectDetailScreen() {
   const { t, i18n } = useTranslation();
   const locale = (i18n.language as AppLocale) ?? "ar";
   const route = useRoute<RouteProp<ProjectsStackParams, "ProjectDetail">>();
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ProjectsStackParams>>();
   const { data, refetch, isRefetching } = useWorkspace();
+  const queue = useTimeQueue();
 
   const fin = data?.projects.find((p) => p.project.id === route.params.projectId);
   if (!fin) {
@@ -79,6 +82,12 @@ export function ProjectDetailScreen() {
           <Figure label={t("dashboard.cashIn")} value={money(cashIn)} />
           <Figure label={t("contracts.retentionHeld")} value={money(retentionHeld)} />
         </View>
+
+        <TeamSection
+          members={data?.team.get(fin.project.id) ?? []}
+          queueItems={queue.state.items}
+          onPay={(assignmentUuid) => navigation.navigate("PayTeam", { projectId: fin.project.id, assignmentUuid })}
+        />
 
         <SectionHeader title={t("certificates.title")} aside={t("mobile.itemsCount", { count: certificates.length })} />
         {certificates.length === 0 ? (
