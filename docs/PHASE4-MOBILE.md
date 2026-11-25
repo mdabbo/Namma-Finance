@@ -52,9 +52,15 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 - The phone keeps the **14-day window** itself: an office login is not bound by
   the cloud guard in `supabase-0021`, which only binds an engineer's own login.
   Older entries are changed on the desktop.
-- Consolidated KPIs are in **EGP** (each project's stored rate); the
-  per-currency section shows face values. The desktop's display-currency
-  setting is local to the desktop.
+- Consolidated KPIs are in the reporting currency chosen in Settings (EGP,
+  SAR or USD); the per-currency section shows face values.
+- **Exchange rates come from the desktop.** At the end of each sync the desktop
+  publishes its rates (Central Bank of Egypt or typed, table `currencies`) to
+  the cloud table `fx_rates` (`docs/supabase-0024-fx-rates.sql`). The phone
+  uses that rate, shows when the desktop last changed it, and warns when it is
+  14 days old or more. Publishing is best effort: it never fails a sync. A rate
+  typed on the phone is only the fallback until the desktop has published one.
+  The phone never writes `fx_rates` (only finance logins may).
 - **Arabic is right-to-left on every screen**, and English left-to-right. The
   switch in Settings re-lays-out the whole app at once, with no restart: the
   layout direction is an explicit style on the root view (`App.tsx`), not the

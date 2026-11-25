@@ -44,6 +44,9 @@ schema 23, run these forward-only files in the SQL Editor in this exact order:
 16. `supabase-0023-assignment-contract-fees.sql` (**required** before the first
     sync from desktop schema 31: without it every sync stops with "Could not
     find the 'contract_fees' column of 'project_assignments' in the schema cache")
+17. `supabase-0024-fx-rates.sql` (optional: lets the phone use the desktop's
+    exchange rates. Without it sync still works; the desktop's Sync report
+    records why the rates were not published, and the phone keeps typed rates)
 
 If migration 0014 rolls back on a cloud database that already contains expense
 rows, first resolve the exact duplicates reported by

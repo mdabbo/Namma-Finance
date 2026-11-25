@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { useSupabase, useWorkspace } from "../hooks/useWorkspace";
 import { useReportingCurrency } from "../hooks/useReportingCurrency";
 import { useAppLock } from "../hooks/useAppLock";
+import { formatIsoDate, type AppLocale } from "@mep/core";
+import { rateAgeDays, STALE_RATE_DAYS } from "../lib/fxRates";
 import { formatRateMicro, parseRateMicro, REPORTING_CURRENCIES, suggestRate, type ReportingCurrency } from "../lib/reporting";
 import { saveLanguage } from "../lib/supabase";
 import { Text, TextInput } from "../components/AppText";
@@ -178,8 +180,9 @@ function LockSection() {
 
 /** Which currency the totals are shown in, and that currency's rate in EGP. */
 function CurrencySection() {
-  const { t } = useTranslation();
-  const { currency, fxRateMicro, valuation, setCurrency, setRate } = useReportingCurrency();
+  const { t, i18n } = useTranslation();
+  const { currency, fxRateMicro, rateSource, rateUpdatedAt, valuation, setCurrency, setRate } = useReportingCurrency();
+  const age = rateAgeDays(rateUpdatedAt, Date.now());
   const { data } = useWorkspace();
   const [draft, setDraft] = useState("");
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
@@ -227,9 +230,28 @@ function CurrencySection() {
         </View>
         <Text style={styles.hint}>{t("mobile.reportingCurrencyHint")}</Text>
 
-        {currency !== "EGP" ? (
+        {currency !== "EGP" && rateSource === "desktop" && fxRateMicro ? (
           <View style={styles.rateBlock}>
             <Text style={styles.rateLabel}>{t("mobile.rateLabel", { currency })}</Text>
+            <View style={styles.desktopRate}>
+              <IconBadge name="monitor" tone="blue" size={32} />
+              <View style={styles.desktopRateText}>
+                <Text style={[styles.desktopRateValue, styles.ltr]}>{formatRateMicro(fxRateMicro)}</Text>
+                <Text style={styles.hint}>
+                  {t("mobile.desktopRate")}
+                  {rateUpdatedAt ? ` · ${t("mobile.updated", { time: formatIsoDate(rateUpdatedAt.slice(0, 10), (i18n.language as AppLocale) ?? "ar") })}` : ""}
+                </Text>
+              </View>
+            </View>
+            {age != null && age >= STALE_RATE_DAYS ? (
+              <Text style={[styles.rateMessage, { color: colors.amber }]}>{t("mobile.rateOld", { days: age })}</Text>
+            ) : null}
+            <Text style={styles.hint}>{t("mobile.desktopRateHint")}</Text>
+          </View>
+        ) : currency !== "EGP" ? (
+          <View style={styles.rateBlock}>
+            <Text style={styles.rateLabel}>{t("mobile.rateLabel", { currency })}</Text>
+            <Text style={styles.hint}>{t("mobile.noDesktopRate")}</Text>
             <View style={styles.rateRow}>
               <TextInput
                 style={styles.rateInput}
@@ -279,6 +301,9 @@ const styles = StyleSheet.create({
   segmented: { flexDirection: "row", padding: 4, gap: 4 },
   currencyCard: { padding: space.md, gap: space.sm },
   segmentedInner: { flexDirection: "row", gap: 4, backgroundColor: colors.chipBg, borderRadius: radius.md, padding: 4 },
+  desktopRate: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md, borderRadius: radius.md, backgroundColor: colors.blueTint },
+  desktopRateText: { flex: 1, gap: 2 },
+  desktopRateValue: { fontSize: 20, fontWeight: "700", color: colors.text },
   rateBlock: { gap: space.sm, marginTop: space.xs },
   rateLabel: { ...type.label, color: colors.text },
   rateRow: { flexDirection: "row", gap: space.sm },

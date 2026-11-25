@@ -135,6 +135,12 @@ rows.person_payments!.push(
   { uuid: "pp-5", assignment_id: "as-3", date: iso(-100), amount_minor: money(100_000), note: null, payment_kind: "EARNED", voided_at: null },
 );
 
+// The rates the desktop publishes (supabase-0024): SAR recent, USD old.
+rows.fx_rates = [
+  { code: "SAR", fx_rate_micro: 12_850_000, updated_at: new Date(Date.now() - 2 * DAY).toISOString() },
+  { code: "USD", fx_rate_micro: 48_650_000, updated_at: new Date(Date.now() - 40 * DAY).toISOString() },
+];
+
 // A few time entries, so the Time screen has something to list.
 rows.time_entries = [
   { uuid: "te-1", person_id: "pe-1", project_id: "pr-102", stage_id: null, date: iso(0), minutes: 180, billable: 1, note: "Coordination meeting on site", created_at: `${iso(0)} 08:00:00`, deleted_at: null },

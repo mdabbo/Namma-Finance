@@ -1058,6 +1058,10 @@ export const en = {
     errAmount: "Enter an amount, e.g. 1500 or 1,500.50",
     voided: "Voided",
     special: "Special",
+    desktopRate: "Rate from the desktop",
+    desktopRateHint: "Taken from the desktop's exchange rates, so both apps report the same figures. To change it, update the rate on the desktop and sync.",
+    noDesktopRate: "The desktop has not shared its rates yet. Type a rate here until it does.",
+    rateOld: "This rate is {{days}} days old. Update the rates on the desktop and sync.",
     refusal: {
       STALE: "A newer change to this entry is already in the cloud.",
       TIME_ENTRY_LOCKED: "The entry is older than 14 days.",
