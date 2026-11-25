@@ -1,6 +1,6 @@
 import type { Payment, PaymentAllocation } from "../domain/types";
 import type { CurrencyValuation } from "../money/currencyValuation";
-import type { ProjectCashValuationEgp } from "./aggregate";
+import type { ProjectCashValuationReporting } from "./aggregate";
 
 /**
  * Value one project's incoming cash in the caller's valuation currency, split
@@ -52,7 +52,7 @@ export interface ProjectCashValuationInput {
 export function computeProjectCashValuation(
   input: ProjectCashValuationInput,
   valuation: CurrencyValuation,
-): ProjectCashValuationEgp {
+): ProjectCashValuationReporting {
   const allocatedByPayment = new Map<number, number>();
   for (const allocation of input.allocations) {
     if (!input.billableCertificateIds.has(allocation.certificateId)) continue;
@@ -62,22 +62,22 @@ export function computeProjectCashValuation(
     );
   }
 
-  const result: ProjectCashValuationEgp = {
-    certificateCollectionsEgp: 0,
-    advanceReceivedEgp: 0,
-    retentionReleasedEgp: 0,
-    totalActualCashInEgp: 0,
-    unallocatedCustomerCreditEgp: 0,
+  const result: ProjectCashValuationReporting = {
+    certificateCollectionsReporting: 0,
+    advanceReceivedReporting: 0,
+    retentionReleasedReporting: 0,
+    totalActualCashInReporting: 0,
+    unallocatedCustomerCreditReporting: 0,
   };
 
   for (const payment of input.payments) {
     const fx = input.resolveFx(payment);
-    const paymentEgp = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
-    result.totalActualCashInEgp += paymentEgp;
+    const paymentReporting = valuation.value(payment.amountMinor, fx.currency, fx.fxRateMicro);
+    result.totalActualCashInReporting += paymentReporting;
     if (payment.kind === "ADVANCE") {
-      result.advanceReceivedEgp += paymentEgp;
+      result.advanceReceivedReporting += paymentReporting;
     } else if (payment.kind === "RETENTION_RELEASE") {
-      result.retentionReleasedEgp += paymentEgp;
+      result.retentionReleasedReporting += paymentReporting;
     } else {
       // Clamped: an allocation total above the receipt would otherwise make the
       // derived remainder negative and overstate collections.
@@ -85,9 +85,9 @@ export function computeProjectCashValuation(
         payment.amountMinor,
         Math.max(0, allocatedByPayment.get(payment.id) ?? 0),
       );
-      const collectedEgp = valuation.value(allocatedMinor, fx.currency, fx.fxRateMicro);
-      result.certificateCollectionsEgp += collectedEgp;
-      result.unallocatedCustomerCreditEgp += paymentEgp - collectedEgp;
+      const collectedReporting = valuation.value(allocatedMinor, fx.currency, fx.fxRateMicro);
+      result.certificateCollectionsReporting += collectedReporting;
+      result.unallocatedCustomerCreditReporting += paymentReporting - collectedReporting;
     }
   }
 

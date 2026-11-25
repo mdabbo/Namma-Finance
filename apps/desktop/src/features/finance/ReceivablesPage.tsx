@@ -64,10 +64,10 @@ export function ReceivablesPage() {
     (financials?.projects ?? []).map((item) => [item.project.id, item.project]),
   );
   const scopedProject = scope.projectId !== null ? projectById.get(scope.projectId) ?? null : null;
-  const totalEgp = scoped.reduce((total, item) => total + item.unpaidEgp, 0);
-  const overdueEgp = scoped
+  const totalReporting = scoped.reduce((total, item) => total + item.unpaidReporting, 0);
+  const overdueReporting = scoped
     .filter((item) => item.overdue)
-    .reduce((total, item) => total + item.unpaidEgp, 0);
+    .reduce((total, item) => total + item.unpaidReporting, 0);
 
   function clearScopeParam(name: string) {
     const next = new URLSearchParams(searchParams);
@@ -158,10 +158,10 @@ export function ReceivablesPage() {
     {
       key: "unpaidBase",
       header: `${t("financeSection.consolidated")} (${base.code})`,
-      value: (row) => row.unpaidEgp,
+      value: (row) => row.unpaidReporting,
       exportValue: (row) =>
-        minorToInput(row.unpaidEgp, currencyInfo(base.code).exponent),
-      render: (row) => <span className="tnum">{base.format(row.unpaidEgp)}</span>,
+        minorToInput(row.unpaidReporting, currencyInfo(base.code).exponent),
+      render: (row) => <span className="tnum">{base.format(row.unpaidReporting)}</span>,
       align: "end",
     },
     {
@@ -200,20 +200,20 @@ export function ReceivablesPage() {
         <div className="mb-4 grid gap-3 sm:grid-cols-3" aria-label={t("financeSection.kpis")}>
           <KpiCard
             label={t("financeSection.currentReceivables")}
-            value={base.format(totalEgp)}
+            value={base.format(totalReporting)}
             icon={CircleDollarSign}
             hint={t("dashboard.reportingCurrency", { currency: base.code })}
-            tone={totalEgp > 0 ? "warning" : "default"}
+            tone={totalReporting > 0 ? "warning" : "default"}
           />
           <KpiCard
             label={t("financeSection.overdueReceivables")}
-            value={base.format(overdueEgp)}
+            value={base.format(overdueReporting)}
             icon={AlarmClock}
-            tone={overdueEgp > 0 ? "negative" : "positive"}
+            tone={overdueReporting > 0 ? "negative" : "positive"}
           />
           <KpiCard
             label={t("financeSection.upcomingCollections")}
-            value={base.format(upcoming.totalEgp)}
+            value={base.format(upcoming.totalReporting)}
             icon={CalendarClock}
             hint={t("financeSection.dueBy", { date: fmt.date(upcoming.horizonEndIso) })}
           />

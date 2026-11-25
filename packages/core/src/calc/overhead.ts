@@ -11,13 +11,13 @@ export type OverheadRule = "REVENUE" | "DIRECT_COST" | "EVEN";
 
 export interface OverheadBasis {
   projectId: number;
-  revenueEgp: number;
-  directCostEgp: number;
+  revenueReporting: number;
+  directCostReporting: number;
   isActive: boolean;
 }
 
 export function allocateOverhead(
-  totalOverheadEgp: number,
+  totalOverheadReporting: number,
   projects: OverheadBasis[],
   rule: OverheadRule,
 ): Map<number, number> {
@@ -27,10 +27,10 @@ export function allocateOverhead(
   let weights: number[];
   switch (rule) {
     case "REVENUE":
-      weights = projects.map((p) => Math.max(0, p.revenueEgp));
+      weights = projects.map((p) => Math.max(0, p.revenueReporting));
       break;
     case "DIRECT_COST":
-      weights = projects.map((p) => Math.max(0, p.directCostEgp));
+      weights = projects.map((p) => Math.max(0, p.directCostReporting));
       break;
     case "EVEN":
       weights = projects.map((p) => (p.isActive ? 1 : 0));
@@ -44,7 +44,7 @@ export function allocateOverhead(
   if (weights.every((w) => w === 0)) {
     weights = projects.map(() => 1);
   }
-  const shares = allocate(totalOverheadEgp, weights);
+  const shares = allocate(totalOverheadReporting, weights);
   projects.forEach((p, i) => result.set(p.projectId, shares[i] ?? 0));
   return result;
 }

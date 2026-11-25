@@ -9,7 +9,7 @@ export interface AgingInput {
   projectName: string;
   clientName: string;
   dueDate: string | null;
-  unpaidEgp: number;
+  unpaidReporting: number;
 }
 
 export type AgingBucket = "CURRENT" | "D1_30" | "D31_60" | "D61_90" | "D90_PLUS";
@@ -47,12 +47,12 @@ export function computeAging(items: AgingInput[], todayIso: string): AgingSummar
   const totals: Record<AgingBucket, number> = { CURRENT: 0, D1_30: 0, D31_60: 0, D61_90: 0, D90_PLUS: 0 };
   const rows: AgingRow[] = [];
   for (const item of items) {
-    if (item.unpaidEgp <= 0) continue;
+    if (item.unpaidReporting <= 0) continue;
     const daysOverdue = item.dueDate ? daysBetween(item.dueDate, todayIso) : 0;
     const bucket = bucketFor(daysOverdue);
-    totals[bucket] += item.unpaidEgp;
+    totals[bucket] += item.unpaidReporting;
     rows.push({ ...item, bucket, daysOverdue: Math.max(0, daysOverdue) });
   }
   rows.sort((a, b) => b.daysOverdue - a.daysOverdue);
-  return { rows, totals, grandTotal: rows.reduce((s, r) => s + r.unpaidEgp, 0) };
+  return { rows, totals, grandTotal: rows.reduce((s, r) => s + r.unpaidReporting, 0) };
 }

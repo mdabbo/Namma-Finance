@@ -13,26 +13,26 @@ export interface ProjectProfitability {
   projectId: number;
   projectCode: string;
   projectName: string;
-  revenueEgp: number;
-  directCostEgp: number;
-  grossProfitEgp: number;
+  revenueReporting: number;
+  directCostReporting: number;
+  grossProfitReporting: number;
   grossMarginBp: number;
-  overheadEgp: number;
-  netProfitEgp: number;
+  overheadReporting: number;
+  netProfitReporting: number;
   netMarginBp: number;
 }
 
 export function computeProfitability(
   projects: ProjectFinancials[],
-  totalOverheadEgp: number,
+  totalOverheadReporting: number,
   rule: OverheadRule,
 ): ProjectProfitability[] {
   const overhead = allocateOverhead(
-    totalOverheadEgp,
+    totalOverheadReporting,
     projects.map((p) => ({
       projectId: p.project.id,
-      revenueEgp: p.revenueEgp,
-      directCostEgp: p.expensesEgp,
+      revenueReporting: p.revenueReporting,
+      directCostReporting: p.expensesReporting,
       isActive: p.project.status === "ACTIVE",
     })),
     rule,
@@ -40,21 +40,21 @@ export function computeProfitability(
 
   return projects
     .map((p) => {
-      const gross = p.revenueEgp - p.expensesEgp;
+      const gross = p.revenueReporting - p.expensesReporting;
       const overheadShare = overhead.get(p.project.id) ?? 0;
       const net = gross - overheadShare;
       return {
         projectId: p.project.id,
         projectCode: p.project.code,
         projectName: p.project.name,
-        revenueEgp: p.revenueEgp,
-        directCostEgp: p.expensesEgp,
-        grossProfitEgp: gross,
-        grossMarginBp: ratioBp(gross, p.revenueEgp),
-        overheadEgp: overheadShare,
-        netProfitEgp: net,
-        netMarginBp: ratioBp(net, p.revenueEgp),
+        revenueReporting: p.revenueReporting,
+        directCostReporting: p.expensesReporting,
+        grossProfitReporting: gross,
+        grossMarginBp: ratioBp(gross, p.revenueReporting),
+        overheadReporting: overheadShare,
+        netProfitReporting: net,
+        netMarginBp: ratioBp(net, p.revenueReporting),
       };
     })
-    .sort((a, b) => b.netProfitEgp - a.netProfitEgp);
+    .sort((a, b) => b.netProfitReporting - a.netProfitReporting);
 }

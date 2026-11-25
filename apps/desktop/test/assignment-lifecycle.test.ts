@@ -91,14 +91,14 @@ async function alerts(assignmentId: number) {
   return workspaceState.teamPayables.filter((item) => item.assignmentId === assignmentId);
 }
 
-async function committedEgp(projectId: number) {
+async function committedReporting(projectId: number) {
   const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
-  return workspaceState.costsByProject.get(projectId)?.committedCostEgp ?? 0;
+  return workspaceState.costsByProject.get(projectId)?.committedCostReporting ?? 0;
 }
 
-async function accruedEgp(projectId: number) {
+async function accruedReporting(projectId: number) {
   const workspaceState = await loadWorkspaceFinancials(EGP_VALUATION);
-  return workspaceState.costsByProject.get(projectId)?.accruedCostEgp ?? 0;
+  return workspaceState.costsByProject.get(projectId)?.accruedCostReporting ?? 0;
 }
 
 describe("active assignments", () => {
@@ -107,7 +107,7 @@ describe("active assignments", () => {
     expect(await position(assignmentId)).toMatchObject({
       lifecycleStatus: "ACTIVE", accruedMinor: 0, dueMinor: 0, committedMinor: 60_000,
     });
-    expect(await committedEgp(projectId)).toBe(60_000);
+    expect(await committedReporting(projectId)).toBe(60_000);
     expect(await alerts(assignmentId)).toHaveLength(0);
   });
 
@@ -118,7 +118,7 @@ describe("active assignments", () => {
     expect(await position(assignmentId)).toMatchObject({
       accruedMinor: 30_000, dueMinor: 30_000, committedMinor: 60_000,
     });
-    expect(await accruedEgp(projectId)).toBe(30_000);
+    expect(await accruedReporting(projectId)).toBe(30_000);
     expect(await alerts(assignmentId)).toHaveLength(1);
   });
 });
@@ -133,7 +133,7 @@ describe("completed assignments", () => {
       lifecycleStatus: "COMPLETED", accruedMinor: 30_000, dueMinor: 30_000, committedMinor: 60_000,
     });
     expect(await alerts(assignmentId)).toHaveLength(1);
-    expect(await committedEgp(projectId)).toBe(60_000);
+    expect(await committedReporting(projectId)).toBe(60_000);
   });
 
   it("settles to nothing owed once the person is paid", async () => {
@@ -164,7 +164,7 @@ describe("cancelled assignments", () => {
     expect(await position(assignmentId)).toMatchObject({
       lifecycleStatus: "CANCELLED", accruedMinor: 0, dueMinor: 0, committedMinor: 0,
     });
-    expect(await committedEgp(projectId)).toBe(0);
+    expect(await committedReporting(projectId)).toBe(0);
     expect(await alerts(assignmentId)).toHaveLength(0);
   });
 
@@ -181,7 +181,7 @@ describe("cancelled assignments", () => {
       dueMinor: 20_000,       // still owed
       committedMinor: 30_000, // the unearned 30 000 is gone
     });
-    expect(await committedEgp(projectId)).toBe(30_000);
+    expect(await committedReporting(projectId)).toBe(30_000);
     // Still owed, so it still needs the office's attention.
     expect(await alerts(assignmentId)).toHaveLength(1);
   });
@@ -305,8 +305,8 @@ describe("archiving is visibility, not accounting", () => {
     expect(account).toMatchObject({
       archived: true, lifecycleStatus: "COMPLETED", accruedMinor: 30_000, committedMinor: 60_000,
     });
-    expect(await committedEgp(projectId)).toBe(60_000);
-    expect(await accruedEgp(projectId)).toBe(30_000);
+    expect(await committedReporting(projectId)).toBe(60_000);
+    expect(await accruedReporting(projectId)).toBe(30_000);
   });
 
   it("stops alerts when the person is archived", async () => {
@@ -337,7 +337,7 @@ describe("project cost reconciles across lifecycles", () => {
     // contributes only what it earned before stopping.
     const cancelledPosition = await position(cancelled);
     expect(cancelledPosition?.committedMinor).toBe(cancelledPosition?.accruedMinor);
-    expect(await committedEgp(projectId)).toBe(60_000 + (cancelledPosition?.committedMinor ?? 0));
+    expect(await committedReporting(projectId)).toBe(60_000 + (cancelledPosition?.committedMinor ?? 0));
   });
 
   it("keeps the dashboard team-payment alert count in step with what is owed", async () => {

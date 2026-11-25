@@ -89,11 +89,11 @@ describe("the phone's workspace in a chosen currency", () => {
     expect(workspace.currency).toBe("SAR");
     const narjis = workspace.projects.find((p) => p.project.code === "P-101")!;
     expect(narjis.project.currency).toBe("SAR");
-    expect(narjis.contractValueEgp).toBe(48_000_000); // SAR 480,000 exactly
-    expect(workspace.kpis.contractValueEgp).toBe(workspace.projects.reduce((s, p) => s + p.contractValueEgp, 0));
+    expect(narjis.contractValueReporting).toBe(48_000_000); // SAR 480,000 exactly
+    expect(workspace.kpis.contractValueReporting).toBe(workspace.projects.reduce((s, p) => s + p.contractValueReporting, 0));
     // SAR 4,200 at face value + EGP 158,000 at 12.8 = SAR 16,543.75 exactly.
-    expect(workspace.kpis.expensesEgp).toBe(1_654_375);
-    expect(workspace.kpis.profitEgp).toBe(workspace.kpis.revenueEgp - workspace.kpis.expensesEgp);
+    expect(workspace.kpis.expensesReporting).toBe(1_654_375);
+    expect(workspace.kpis.profitReporting).toBe(workspace.kpis.revenueReporting - workspace.kpis.expensesReporting);
   });
 
   it("leaves each project's own figures in the project's currency", async () => {

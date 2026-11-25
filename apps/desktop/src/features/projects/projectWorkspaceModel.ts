@@ -44,7 +44,7 @@ export interface ProjectAttentionSummary {
 export function projectAttentionSummary(input: {
   projectId: number;
   overdueCertificates: number;
-  unallocatedCustomerCreditEgp: number;
+  unallocatedCustomerCreditReporting: number;
   readyToCollect: readonly { projectId: number }[];
   teamPayables: readonly { projectId: number }[];
 }): ProjectAttentionSummary {
@@ -53,7 +53,7 @@ export function projectAttentionSummary(input: {
     readyToInvoice: input.readyToCollect.filter(
       (item) => item.projectId === input.projectId,
     ).length,
-    unallocatedPayments: input.unallocatedCustomerCreditEgp > 0 ? 1 : 0,
+    unallocatedPayments: input.unallocatedCustomerCreditReporting > 0 ? 1 : 0,
     teamPaymentsDue: input.teamPayables.filter(
       (item) => item.projectId === input.projectId,
     ).length,
