@@ -39,7 +39,7 @@ export function TimePage() {
       render: (e) => (
         <div>
           <p>{e.projectName}</p>
-          <p className="text-xs text-slate-400 tnum">{e.projectCode}{e.stageName ? ` · ${e.stageName}` : ""}</p>
+          <p className="text-xs text-muted tnum">{e.projectCode}{e.stageName ? ` · ${e.stageName}` : ""}</p>
         </div>
       ),
     },
@@ -63,7 +63,7 @@ export function TimePage() {
           ? minorToInput(laborCostMinor(e.minutes, e.hourlyRateMinor), currencyInfo(e.personCurrency).exponent)
           : "",
       render: (e) => (
-        <span className="tnum text-slate-500">
+        <span className="tnum text-muted">
           {e.hourlyRateMinor ? fmt.money(laborCostMinor(e.minutes, e.hourlyRateMinor), e.personCurrency) : "—"}
         </span>
       ),
@@ -240,7 +240,7 @@ export function TimeEntryForm({
           <Input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
         </Field>
       </div>
-      <p className="mt-2 text-xs text-slate-400">{t("time.quickHint")}</p>
+      <p className="mt-2 text-xs text-muted">{t("time.quickHint")}</p>
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={onClose}>{t("common.cancel")}</Button>
         <Button variant="primary" onClick={submit} disabled={busy}>{t("common.save")}</Button>

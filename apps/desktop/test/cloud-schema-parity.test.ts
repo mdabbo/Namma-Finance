@@ -21,6 +21,7 @@ const CLOUD_UPGRADES = [
   "supabase-0021-time-entry-capture.sql",
   "supabase-0022-assignment-lifecycle.sql",
   "supabase-0023-assignment-contract-fees.sql",
+  "supabase-0025-expense-claims.sql",
 ];
 
 let db: PGlite;

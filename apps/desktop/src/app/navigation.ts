@@ -137,6 +137,7 @@ export const SECONDARY_NAVIGATION: Readonly<Record<NavigationSectionId, readonly
     { id: "certificates", labelKey: "nav.certificates", to: "/finance/certificates" },
     { id: "payments", labelKey: "nav.payments", to: "/finance/payments" },
     { id: "expenses", labelKey: "nav.expenses", to: "/finance/expenses" },
+    { id: "claims", labelKey: "claims.title", to: "/finance/claims" },
     { id: "receivables", labelKey: "financeSection.receivables", to: "/finance/receivables" },
     { id: "cash-flow", labelKey: "reports.cashflow", to: "/finance/cash-flow" },
   ],
@@ -220,6 +221,9 @@ export function breadcrumbsForPath(pathname: string): BreadcrumbItem[] {
   }
   if (matchesPrefix(pathname, "/finance/expenses") || matchesPrefix(pathname, "/expenses")) {
     return [root, { labelKey: "nav.expenses" }];
+  }
+  if (matchesPrefix(pathname, "/finance/claims")) {
+    return [root, { labelKey: "claims.title" }];
   }
   if (matchesPrefix(pathname, "/finance/receivables")) {
     return [root, { labelKey: "financeSection.receivables" }];

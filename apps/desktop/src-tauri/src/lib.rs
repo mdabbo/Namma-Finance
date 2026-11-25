@@ -327,6 +327,25 @@ struct PersonPaymentCommandInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AcceptExpenseClaimInput {
+    claim_id: i64,
+    /// Required: a claim may arrive without one, an expense may not.
+    category_id: i64,
+    /// The project the expense is charged to; None for an office expense.
+    project_id: Option<i64>,
+    /// EGP per major unit × 1,000,000; exactly 1,000,000 for EGP.
+    fx_rate_micro: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectExpenseClaimInput {
+    claim_id: i64,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncedAssignmentInput {
     local_id: Option<i64>,
     sync_uuid: String,
@@ -602,6 +621,10 @@ const SYNC_TABLE_POLICIES: &[SyncTablePolicy] = &[
     },
     SyncTablePolicy {
         table: "recurring_expenses",
+        risk: SyncTableRisk::FinanciallyProtectedData,
+    },
+    SyncTablePolicy {
+        table: "expense_claims",
         risk: SyncTableRisk::FinanciallyProtectedData,
     },
 ];
@@ -2801,6 +2824,195 @@ async fn apply_synced_assignment_atomic(
 ) -> Result<(), String> {
     let pool = application_database_pool(&db_instances).await?;
     apply_synced_assignment_transaction(&pool, input).await
+}
+
+// ─── expense claims (plan step F6) ───────────────────────────────────────────
+//
+// A claim filed on the phone becomes an expense only here, when the office
+// accepts it. Accepting reserves the expense number, inserts the expense and
+// records the decision in ONE transaction: a claim is never accepted without
+// its expense, and no expense exists for a claim still pending.
+
+/// Who decided, as the claim records it: the cloud login, or this PC.
+const CLAIM_DECIDED_BY_SQL: &str =
+    "COALESCE(NULLIF((SELECT value FROM settings WHERE key='sync_email'),''),'DESKTOP')";
+
+#[tauri::command]
+async fn accept_expense_claim_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: AcceptExpenseClaimInput,
+) -> Result<i64, String> {
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    accept_expense_claim_transaction(pool, input).await
+}
+
+#[tauri::command]
+async fn reject_expense_claim_atomic(
+    db_instances: State<'_, DbInstances>,
+    input: RejectExpenseClaimInput,
+) -> Result<(), String> {
+    let instances = db_instances.0.read().await;
+    let pool = match instances.get("sqlite:mep-finance.db") {
+        Some(DbPool::Sqlite(pool)) => pool,
+        _ => return Err("database is not loaded".into()),
+    };
+    reject_expense_claim_transaction(pool, input).await
+}
+
+/// The pending claim, or why it cannot be decided.
+async fn pending_claim(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    claim_id: i64,
+) -> Result<sqlx::sqlite::SqliteRow, String> {
+    let claim = sqlx::query(
+        "SELECT id, sync_uuid, date, amount_minor, currency, description, supplier, decision
+         FROM expense_claims WHERE id=?",
+    )
+    .bind(claim_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "CLAIM_NOT_FOUND".to_string())?;
+    let decision: Option<String> = claim.try_get("decision").map_err(|e| e.to_string())?;
+    if decision.is_some() {
+        return Err("CLAIM_ALREADY_DECIDED".into());
+    }
+    Ok(claim)
+}
+
+async fn accept_expense_claim_transaction(
+    pool: &sqlx::SqlitePool,
+    input: AcceptExpenseClaimInput,
+) -> Result<i64, String> {
+    if input.fx_rate_micro <= 0 {
+        return Err("CLAIM_FX_RATE_REQUIRED".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    let claim = pending_claim(&mut tx, input.claim_id).await?;
+    let sync_uuid: String = claim.try_get("sync_uuid").map_err(|e| e.to_string())?;
+    let date: String = claim.try_get("date").map_err(|e| e.to_string())?;
+    let amount_minor: i64 = claim.try_get("amount_minor").map_err(|e| e.to_string())?;
+    let currency: String = claim.try_get("currency").map_err(|e| e.to_string())?;
+    let description: String = claim.try_get("description").map_err(|e| e.to_string())?;
+    let supplier: Option<String> = claim.try_get("supplier").map_err(|e| e.to_string())?;
+
+    if currency == "EGP" && input.fx_rate_micro != 1_000_000 {
+        return Err("CLAIM_EGP_RATE_MUST_BE_ONE".into());
+    }
+    let category: Option<i64> = sqlx::query_scalar("SELECT id FROM expense_categories WHERE id=?")
+        .bind(input.category_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    if category.is_none() {
+        return Err("CLAIM_CATEGORY_NOT_FOUND".into());
+    }
+    if let Some(project_id) = input.project_id {
+        let archived: Option<Option<String>> =
+            sqlx::query_scalar("SELECT archived_at FROM projects WHERE id=?")
+                .bind(project_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        match archived {
+            None => return Err("CLAIM_PROJECT_NOT_FOUND".into()),
+            Some(Some(_)) => return Err("CLAIM_PROJECT_ARCHIVED".into()),
+            Some(None) => {}
+        }
+    }
+    // The expense takes the claim's uuid, so a second desktop accepting the same
+    // claim makes the same record. If that record is already here (pulled from
+    // the other desktop before the decision was), accepting again would double it.
+    let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM expenses WHERE sync_uuid=?")
+        .bind(&sync_uuid)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    if existing.is_some() {
+        return Err("CLAIM_EXPENSE_EXISTS".into());
+    }
+
+    let year: i64 = date
+        .get(0..4)
+        .and_then(|y| y.parse().ok())
+        .ok_or_else(|| "CLAIM_INVALID_DATE".to_string())?;
+    let prefix: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE key='expense_number_prefix'")
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+    let prefix = prefix
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "EXP".to_string());
+    let number = reserve_next_number_in_tx(&mut tx, "EXPENSE", &prefix, year).await?;
+
+    let expense = sqlx::query(
+        "INSERT INTO expenses (number,date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,sync_uuid)
+         VALUES (?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(&number)
+    .bind(&date)
+    .bind(input.category_id)
+    .bind(&description)
+    .bind(input.project_id)
+    .bind(&supplier)
+    .bind(amount_minor)
+    .bind(&currency)
+    .bind(input.fx_rate_micro)
+    .bind(&sync_uuid)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    let expense_id = expense.last_insert_rowid();
+
+    // The category and project the office chose are recorded on the claim in
+    // the same statement as the decision; afterwards the claim is evidence.
+    let decided = sqlx::query(&format!(
+        "UPDATE expense_claims SET category_id=?, project_id=?, decision='ACCEPTED',
+           decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), decided_by={CLAIM_DECIDED_BY_SQL}
+         WHERE id=? AND decision IS NULL"
+    ))
+    .bind(input.category_id)
+    .bind(input.project_id)
+    .bind(input.claim_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if decided.rows_affected() != 1 {
+        return Err("CLAIM_ALREADY_DECIDED".into());
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(expense_id)
+}
+
+async fn reject_expense_claim_transaction(
+    pool: &sqlx::SqlitePool,
+    input: RejectExpenseClaimInput,
+) -> Result<(), String> {
+    let reason = input.reason.trim();
+    if reason.is_empty() {
+        return Err("CLAIM_REJECTION_REASON_REQUIRED".into());
+    }
+    let mut tx = begin_immediate(pool).await?;
+    pending_claim(&mut tx, input.claim_id).await?;
+    let decided = sqlx::query(&format!(
+        "UPDATE expense_claims SET decision='REJECTED', decision_reason=?,
+           decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), decided_by={CLAIM_DECIDED_BY_SQL}
+         WHERE id=? AND decision IS NULL"
+    ))
+    .bind(reason)
+    .bind(input.claim_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    if decided.rows_affected() != 1 {
+        return Err("CLAIM_ALREADY_DECIDED".into());
+    }
+    tx.commit().await.map_err(|e| e.to_string())
 }
 
 /// The payment itself, so the lifecycle and due-limit rules can be asserted
@@ -5402,7 +5614,7 @@ fn chrono_year_utc() -> i32 {
     year as i32
 }
 
-const CURRENT_SCHEMA_VERSION: i64 = 31;
+const CURRENT_SCHEMA_VERSION: i64 = 32;
 const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLICATION_ID: &str = "com.mepfinance.app";
 /// Migration lineage after the v0.7.0 rebase. The baseline recreates schema 24
@@ -6446,6 +6658,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
+            include_str!("../migrations/0010_expense_claims.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -6854,6 +7067,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
+            include_str!("../migrations/0010_expense_claims.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -7156,7 +7370,7 @@ mod financial_transaction_tests {
 
     #[test]
     fn sync_table_risk_mapping_classifies_every_mutable_table() {
-        assert_eq!(SYNC_TABLE_POLICIES.len(), 18);
+        assert_eq!(SYNC_TABLE_POLICIES.len(), 19);
 
         let simple = [
             "clients",
@@ -7179,6 +7393,7 @@ mod financial_transaction_tests {
             "project_assignments",
             "expenses",
             "recurring_expenses",
+            "expense_claims",
         ];
         for table in protected {
             assert_eq!(
@@ -7607,6 +7822,7 @@ mod financial_transaction_tests {
             include_str!("../migrations/0007_special_person_payments.sql"),
             include_str!("../migrations/0008_stage_progress_log.sql"),
             include_str!("../migrations/0009_assignment_contract_fees.sql"),
+            include_str!("../migrations/0010_expense_claims.sql"),
         ] {
             sqlx::raw_sql(migration).execute(&pool).await.unwrap();
         }
@@ -8321,6 +8537,373 @@ mod financial_transaction_tests {
             )
             .await;
             assert_eq!(rejected.unwrap_err(), "CANCELLATION_EVIDENCE_IS_FINAL");
+        });
+    }
+
+    // ─── expense claims (F6) ─────────────────────────────────────────────
+
+    const CLAIM_UUID: &str = "c1a1c1a1-0000-4000-8000-000000000001";
+
+    /// A person, a live and an archived project, and one pending claim.
+    async fn claim_fixture(pool: &sqlx::SqlitePool, currency: &str) -> i64 {
+        sqlx::raw_sql(
+            "INSERT INTO clients(name) VALUES('Claim Co');
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro) VALUES('PRJ-2026-700','Live',1,'EGP',1000000);
+             INSERT INTO projects(code,name,client_id,currency,fx_rate_micro,archived_at) VALUES('PRJ-2026-701','Old',1,'EGP',1000000,datetime('now'));
+             INSERT INTO people(type,name,currency) VALUES('EMPLOYEE','Omar','EGP');",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO expense_claims(person_id,project_id,date,amount_minor,currency,description,supplier,submitted_at,sync_uuid,updated_at)
+             VALUES(1,1,'2026-11-20',15000,?,'Printing the drawings','Copy Centre','2026-11-20T09:00:00.000Z',?,'2026-11-20T09:00:00.000Z')",
+        )
+        .bind(currency)
+        .bind(CLAIM_UUID)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    async fn first_category(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT id FROM expense_categories ORDER BY id LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    fn accept(
+        claim_id: i64,
+        category_id: i64,
+        project_id: Option<i64>,
+        fx_rate_micro: i64,
+    ) -> AcceptExpenseClaimInput {
+        AcceptExpenseClaimInput {
+            claim_id,
+            category_id,
+            project_id,
+            fx_rate_micro,
+        }
+    }
+
+    async fn expense_count(pool: &sqlx::SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM expenses")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn claim_decision(pool: &sqlx::SqlitePool, claim_id: i64) -> Option<String> {
+        sqlx::query_scalar("SELECT decision FROM expense_claims WHERE id=?")
+            .bind(claim_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn accepting_a_claim_creates_one_numbered_expense_from_its_figures() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            let expense_id = accept_expense_claim_transaction(
+                &pool,
+                accept(claim, category, Some(1), 1_000_000),
+            )
+            .await
+            .unwrap();
+
+            let row = sqlx::query(
+                "SELECT number,date,category_id,description,project_id,supplier,amount_minor,currency,fx_rate_micro,sync_uuid
+                 FROM expenses WHERE id=?",
+            )
+            .bind(expense_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(row.get::<String, _>("number"), "EXP-2026-0001");
+            assert_eq!(row.get::<String, _>("date"), "2026-11-20");
+            assert_eq!(row.get::<i64, _>("category_id"), category);
+            assert_eq!(row.get::<String, _>("description"), "Printing the drawings");
+            assert_eq!(row.get::<Option<i64>, _>("project_id"), Some(1));
+            assert_eq!(
+                row.get::<Option<String>, _>("supplier").as_deref(),
+                Some("Copy Centre")
+            );
+            assert_eq!(row.get::<i64, _>("amount_minor"), 15_000);
+            assert_eq!(row.get::<String, _>("currency"), "EGP");
+            assert_eq!(row.get::<i64, _>("fx_rate_micro"), 1_000_000);
+            // The claim's uuid, so a second desktop accepting it makes the same record.
+            assert_eq!(row.get::<String, _>("sync_uuid"), CLAIM_UUID);
+
+            let decided = sqlx::query("SELECT decision,decided_at,decided_by,category_id,project_id FROM expense_claims WHERE id=?")
+                .bind(claim)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                decided.get::<Option<String>, _>("decision").as_deref(),
+                Some("ACCEPTED")
+            );
+            assert!(decided.get::<Option<String>, _>("decided_at").is_some());
+            assert_eq!(
+                decided.get::<Option<String>, _>("decided_by").as_deref(),
+                Some("DESKTOP")
+            );
+            assert_eq!(decided.get::<Option<i64>, _>("category_id"), Some(category));
+            assert_eq!(decided.get::<Option<i64>, _>("project_id"), Some(1));
+        });
+    }
+
+    #[test]
+    fn a_claim_is_accepted_once_and_a_second_try_adds_nothing() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            accept_expense_claim_transaction(&pool, accept(claim, category, Some(1), 1_000_000))
+                .await
+                .unwrap();
+            let again = accept_expense_claim_transaction(
+                &pool,
+                accept(claim, category, Some(1), 1_000_000),
+            )
+            .await;
+            assert_eq!(again.unwrap_err(), "CLAIM_ALREADY_DECIDED");
+            let reject = reject_expense_claim_transaction(
+                &pool,
+                RejectExpenseClaimInput {
+                    claim_id: claim,
+                    reason: "x".into(),
+                },
+            )
+            .await;
+            assert_eq!(reject.unwrap_err(), "CLAIM_ALREADY_DECIDED");
+            assert_eq!(expense_count(&pool).await, 1);
+        });
+    }
+
+    #[test]
+    fn a_claim_whose_expense_already_arrived_from_another_desktop_is_not_doubled() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            sqlx::query(
+                "INSERT INTO expenses(number,date,category_id,description,amount_minor,currency,fx_rate_micro,sync_uuid)
+                 VALUES('EXP-2026-0009','2026-11-20',?,'From the other PC',15000,'EGP',1000000,?)",
+            )
+            .bind(category)
+            .bind(CLAIM_UUID)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let outcome =
+                accept_expense_claim_transaction(&pool, accept(claim, category, None, 1_000_000))
+                    .await;
+            assert_eq!(outcome.unwrap_err(), "CLAIM_EXPENSE_EXISTS");
+            assert_eq!(expense_count(&pool).await, 1);
+            assert_eq!(claim_decision(&pool, claim).await, None);
+        });
+    }
+
+    #[test]
+    fn accepting_needs_a_real_rate_category_and_live_project() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            for (input, reason) in [
+                (accept(claim, category, None, 0), "CLAIM_FX_RATE_REQUIRED"),
+                (
+                    accept(claim, category, None, 12_800_000),
+                    "CLAIM_EGP_RATE_MUST_BE_ONE",
+                ),
+                (
+                    accept(claim, 99_999, None, 1_000_000),
+                    "CLAIM_CATEGORY_NOT_FOUND",
+                ),
+                (
+                    accept(claim, category, Some(99_999), 1_000_000),
+                    "CLAIM_PROJECT_NOT_FOUND",
+                ),
+                (
+                    accept(claim, category, Some(2), 1_000_000),
+                    "CLAIM_PROJECT_ARCHIVED",
+                ),
+                (accept(99_999, category, None, 1_000_000), "CLAIM_NOT_FOUND"),
+            ] {
+                assert_eq!(
+                    accept_expense_claim_transaction(&pool, input)
+                        .await
+                        .unwrap_err(),
+                    reason
+                );
+            }
+            // Nothing half-done: no expense, no number used, the claim still pending.
+            assert_eq!(expense_count(&pool).await, 0);
+            assert_eq!(claim_decision(&pool, claim).await, None);
+            let id =
+                accept_expense_claim_transaction(&pool, accept(claim, category, None, 1_000_000))
+                    .await
+                    .unwrap();
+            let number: String = sqlx::query_scalar("SELECT number FROM expenses WHERE id=?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(number, "EXP-2026-0001");
+        });
+    }
+
+    #[test]
+    fn a_foreign_currency_claim_takes_the_rate_the_office_chose() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "SAR").await;
+            let category = first_category(&pool).await;
+            let id =
+                accept_expense_claim_transaction(&pool, accept(claim, category, None, 12_850_000))
+                    .await
+                    .unwrap();
+            let (currency, rate): (String, i64) =
+                sqlx::query_as("SELECT currency, fx_rate_micro FROM expenses WHERE id=?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!((currency.as_str(), rate), ("SAR", 12_850_000));
+        });
+    }
+
+    #[test]
+    fn the_expense_number_follows_the_office_prefix_and_the_claim_year() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            sqlx::query("INSERT INTO settings(key,value) VALUES('expense_number_prefix','OUT') ON CONFLICT(key) DO UPDATE SET value='OUT'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO expenses(number,date,category_id,description,amount_minor,currency,fx_rate_micro)
+                 VALUES('OUT-2026-0004','2026-03-01',?,'Earlier',100,'EGP',1000000)",
+            )
+            .bind(category)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let id =
+                accept_expense_claim_transaction(&pool, accept(claim, category, None, 1_000_000))
+                    .await
+                    .unwrap();
+            let number: String = sqlx::query_scalar("SELECT number FROM expenses WHERE id=?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(number, "OUT-2026-0005");
+        });
+    }
+
+    #[test]
+    fn rejecting_a_claim_needs_a_reason_and_creates_no_expense() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let blank = reject_expense_claim_transaction(
+                &pool,
+                RejectExpenseClaimInput {
+                    claim_id: claim,
+                    reason: "   ".into(),
+                },
+            )
+            .await;
+            assert_eq!(blank.unwrap_err(), "CLAIM_REJECTION_REASON_REQUIRED");
+            assert_eq!(claim_decision(&pool, claim).await, None);
+            reject_expense_claim_transaction(
+                &pool,
+                RejectExpenseClaimInput {
+                    claim_id: claim,
+                    reason: "  Personal purchase ".into(),
+                },
+            )
+            .await
+            .unwrap();
+            let (decision, reason): (Option<String>, Option<String>) =
+                sqlx::query_as("SELECT decision, decision_reason FROM expense_claims WHERE id=?")
+                    .bind(claim)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(decision.as_deref(), Some("REJECTED"));
+            assert_eq!(reason.as_deref(), Some("Personal purchase"));
+            assert_eq!(expense_count(&pool).await, 0);
+            let category = first_category(&pool).await;
+            let later =
+                accept_expense_claim_transaction(&pool, accept(claim, category, None, 1_000_000))
+                    .await;
+            assert_eq!(later.unwrap_err(), "CLAIM_ALREADY_DECIDED");
+        });
+    }
+
+    #[test]
+    fn a_decided_claim_cannot_be_edited_in_the_database() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            let category = first_category(&pool).await;
+            accept_expense_claim_transaction(&pool, accept(claim, category, None, 1_000_000))
+                .await
+                .unwrap();
+            let edit = sqlx::query("UPDATE expense_claims SET amount_minor=1 WHERE id=?")
+                .bind(claim)
+                .execute(&pool)
+                .await;
+            assert!(edit
+                .unwrap_err()
+                .to_string()
+                .contains("CLAIM_DECIDED_IMMUTABLE"));
+            // Sync bookkeeping alone still moves.
+            sqlx::query(
+                "UPDATE expense_claims SET updated_at='2099-01-01T00:00:00.000Z' WHERE id=?",
+            )
+            .bind(claim)
+            .execute(&pool)
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn decided_by_names_the_cloud_login_when_there_is_one() {
+        tauri::async_runtime::block_on(async {
+            let pool = migrated_pool().await;
+            let claim = claim_fixture(&pool, "EGP").await;
+            sqlx::query("INSERT INTO settings(key,value) VALUES('sync_email','office@dabworks.test') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .execute(&pool)
+                .await
+                .unwrap();
+            reject_expense_claim_transaction(
+                &pool,
+                RejectExpenseClaimInput {
+                    claim_id: claim,
+                    reason: "Duplicate".into(),
+                },
+            )
+            .await
+            .unwrap();
+            let by: Option<String> =
+                sqlx::query_scalar("SELECT decided_by FROM expense_claims WHERE id=?")
+                    .bind(claim)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(by.as_deref(), Some("office@dabworks.test"));
         });
     }
 
@@ -9789,6 +10372,12 @@ pub fn run() {
             sql: include_str!("../migrations/0009_assignment_contract_fees.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "expense_claims",
+            sql: include_str!("../migrations/0010_expense_claims.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -9833,6 +10422,8 @@ pub fn run() {
             apply_synced_expense_atomic,
             create_person_payment_atomic,
             delete_person_payment_atomic,
+            accept_expense_claim_atomic,
+            reject_expense_claim_atomic,
             cancel_assignment_atomic,
             create_milestone_certificates_atomic,
             create_project_atomic,

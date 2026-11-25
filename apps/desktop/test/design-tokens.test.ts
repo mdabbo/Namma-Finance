@@ -24,12 +24,10 @@ const HARD_CODED = /\b(?:text|bg|border|divide|ring|fill|stroke|outline|placehol
 /** Files still to migrate → their current count. Lower or delete entries; never add. */
 const CEILINGS: Record<string, number> = {
   "components/ui.tsx": 25,
-  "features/settings/SettingsPage.tsx": 25,
-  "features/audit/AuditPage.tsx": 24,
+  "features/audit/AuditPage.tsx": 2, // the JSON viewer is dark in both themes; no token for that
   "components/NotificationBell.tsx": 18,
   "features/projects/StagesTab.tsx": 17,
   "app/Layout.tsx": 16,
-  "features/clients/ClientDetailPage.tsx": 15,
   "features/projects/ContractForm.tsx": 15,
   "features/reports/CashflowView.tsx": 15,
   "features/reports/ProfitabilityView.tsx": 10,
@@ -49,11 +47,9 @@ const CEILINGS: Record<string, number> = {
   "features/dashboard/DashboardPage.tsx": 3,
   "features/finance/FinanceOverviewPage.tsx": 3,
   "features/projects/ProjectsPage.tsx": 3,
-  "features/time/TimePage.tsx": 3,
   "features/onboarding/OnboardingPanel.tsx": 2,
   "features/payments/PaymentsPage.tsx": 2,
   "features/certificates/CertificatesPage.tsx": 1,
-  "features/clients/ClientsPage.tsx": 1,
   "features/finance/ReceivablesPage.tsx": 1,
   "features/reports/ReportsCenter.tsx": 1,
 };

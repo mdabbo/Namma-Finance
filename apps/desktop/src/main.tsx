@@ -59,6 +59,7 @@ const router = createHashRouter([
       { path: "finance/certificates", lazy: page(() => import("./features/certificates/CertificatesPage"), "CertificatesPage") },
       { path: "finance/payments", lazy: page(() => import("./features/payments/PaymentsPage"), "PaymentsPage") },
       { path: "finance/expenses", lazy: page(() => import("./features/expenses/ExpensesPage"), "ExpensesPage") },
+      { path: "finance/claims", lazy: page(() => import("./features/expenses/ExpenseClaimsPage"), "ExpenseClaimsPage") },
       { path: "finance/receivables", lazy: page(() => import("./features/finance/ReceivablesPage"), "ReceivablesPage") },
       { path: "finance/cash-flow", lazy: page(() => import("./features/reports/CashflowView"), "CashflowView") },
 

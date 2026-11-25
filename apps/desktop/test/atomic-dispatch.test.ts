@@ -128,6 +128,19 @@ describe("every multi-statement write dispatches to its Rust command", () => {
     expect(invoke).toHaveBeenCalledWith("void_certificate_atomic", { certificateId: 11, reason: "duplicate" });
   });
 
+  it("expense claim accept/reject, with the field names lib.rs deserialises", async () => {
+    const claims = await import("../src/repositories/expenseClaims");
+    invoke.mockResolvedValue(42);
+    await expect(claims.acceptExpenseClaim({ claimId: 7, categoryId: 3, projectId: null, fxRateMicro: 1_000_000 })).resolves.toBe(42);
+    expect(invoke).toHaveBeenCalledWith("accept_expense_claim_atomic", {
+      input: { claimId: 7, categoryId: 3, projectId: null, fxRateMicro: 1_000_000 },
+    });
+
+    invoke.mockResolvedValue(undefined);
+    await claims.rejectExpenseClaim({ claimId: 7, reason: "Personal purchase" });
+    expect(invoke).toHaveBeenCalledWith("reject_expense_claim_atomic", { input: { claimId: 7, reason: "Personal purchase" } });
+  });
+
   it("number reservation", async () => {
     const { reserveNextNumberWithinExistingLock } = await import("../src/repositories/numbering");
     invoke.mockResolvedValue("PAY-2026-0001");
