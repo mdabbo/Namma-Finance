@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { sameRecord } from "./comparable";
+import { canonicalTimestamp, sameRecord } from "./comparable";
 import { execute, select, selectOne } from "../db";
 import { atomicCommand } from "../atomic";
 import { getSyncClient } from "./client";
@@ -33,6 +33,10 @@ export interface SyncReport {
   conflicts: number;
   ok: boolean;
   error?: string;
+  /** Exchange rates published for the phone this run (see publishFxRates). */
+  ratesPublished?: number;
+  /** Why publishing rates failed. It never fails the sync itself. */
+  ratesError?: string;
 }
 
 interface LocalRow {
@@ -1046,6 +1050,47 @@ async function alignSeededCategories(client: SupabaseClient): Promise<void> {
   }
 }
 
+// ─── exchange rates for the phone ───────────────────────────────────────────
+
+/**
+ * Publishes this PC's exchange rates (the currencies table) to the cloud's
+ * fx_rates table, so the phone reads the same rates the desktop uses. One-way:
+ * rates are never pulled back, because the desktop is where they are fetched
+ * from the Central Bank of Egypt or typed.
+ *
+ * It is best effort and NEVER throws. A failure here must not stop the sync
+ * (a missing cloud table once stopped every push after it), so it is recorded
+ * on the report instead: ratesError says why, ratesPublished says how many.
+ * Each rate carries the moment it was changed on this PC; the cloud's
+ * last-writer-wins guard keeps an older value from replacing a newer one if two
+ * PCs publish. EGP is not published: it is always 1.
+ */
+async function publishFxRates(client: SupabaseClient, report: SyncReport): Promise<void> {
+  try {
+    const rows = await select<{ code: string; fx_rate_micro: number; updated_at: string }>(
+      "SELECT code, fx_rate_micro, updated_at FROM currencies WHERE code <> 'EGP' AND fx_rate_micro > 0",
+    );
+    if (rows.length === 0) {
+      report.ratesPublished = 0;
+      return;
+    }
+    const payload = rows.map((row) => ({
+      code: row.code,
+      fx_rate_micro: row.fx_rate_micro,
+      // SQLite's datetime('now') is UTC without a zone; the cloud column is timestamptz.
+      updated_at: canonicalTimestamp(row.updated_at),
+    }));
+    const { error } = await client.from("fx_rates").upsert(payload, { onConflict: "code" });
+    if (error) {
+      report.ratesError = error.message;
+      return;
+    }
+    report.ratesPublished = payload.length;
+  } catch (e) {
+    report.ratesError = e instanceof Error ? e.message : String(e);
+  }
+}
+
 // ─── orchestration ──────────────────────────────────────────────────────────
 
 let running = false;
@@ -1084,6 +1129,7 @@ export async function runSync(): Promise<SyncReport> {
 
     await pushTombstones(client, report);
     for (const spec of SYNC_TABLES) await pushTable(client, spec, maps, report);
+    await publishFxRates(client, report);
 
     report.ok = true;
   } catch (e) {
