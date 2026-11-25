@@ -112,14 +112,14 @@ describe("money columns never export minor units", () => {
  */
 describe("money that is not known yet is never exported as zero", () => {
   interface Row { id: number }
-  const readModel = new Map<number, { totalEgp: number }>([[1, { totalEgp: 250_00 }], [3, { totalEgp: 0 }]]);
+  const readModel = new Map<number, { totalReporting: number }>([[1, { totalReporting: 250_00 }], [3, { totalReporting: 0 }]]);
   const columns: Column<Row>[] = [
     { key: "id", header: "Id", value: (row) => row.id },
     {
       key: "total",
       header: "Total (EGP)",
-      value: (row) => readModel.get(row.id)?.totalEgp ?? 0,
-      exportValue: (row) => readModelExport(readModel.get(row.id), (fin) => minorToInput(fin.totalEgp, 2)),
+      value: (row) => readModel.get(row.id)?.totalReporting ?? 0,
+      exportValue: (row) => readModelExport(readModel.get(row.id), (fin) => minorToInput(fin.totalReporting, 2)),
     },
   ];
 
@@ -133,7 +133,7 @@ describe("money that is not known yet is never exported as zero", () => {
   it("shows a placeholder on screen rather than a formatted zero", () => {
     expect(readModelDisplay(undefined, () => "EGP 0")).toBe(UNKNOWN_AMOUNT);
     expect(readModelDisplay(null, () => "EGP 0")).toBe(UNKNOWN_AMOUNT);
-    expect(readModelDisplay({ totalEgp: 0 }, () => "EGP 0")).toBe("EGP 0");
+    expect(readModelDisplay({ totalReporting: 0 }, () => "EGP 0")).toBe("EGP 0");
   });
 
   /** The pages that read money from the workspace read model must use it. */

@@ -25,8 +25,8 @@ export function ProfitabilityView() {
     return computeProfitability(financials.projects, overheadTotal, rule).map((row) => ({
       ...row,
       costs: financials.costsByProject.get(row.projectId)!,
-      loadedCosts: withAllocatedOverhead(financials.costsByProject.get(row.projectId)!, row.overheadEgp),
-    })).sort((a, b) => b.loadedCosts.forecastProfitEgp - a.loadedCosts.forecastProfitEgp);
+      loadedCosts: withAllocatedOverhead(financials.costsByProject.get(row.projectId)!, row.overheadReporting),
+    })).sort((a, b) => b.loadedCosts.forecastProfitReporting - a.loadedCosts.forecastProfitReporting);
   }, [financials, rule]);
 
   if (!financials) return <EmptyState message={t("common.loading")} />;
@@ -75,22 +75,22 @@ export function ProfitabilityView() {
                   <p className="font-medium">{row.projectName}</p>
                   <p className="text-xs text-slate-400 tnum">{row.projectCode}</p>
                 </td>
-                <td className="text-end tnum">{base.format(row.costs.recognizedRevenueEgp)}</td>
-                <td className="text-end tnum">{base.format(row.costs.actualCashInEgp)}</td>
-                <td className="text-end tnum">{base.format(row.costs.actualPaidCostEgp)}</td>
-                <td className="text-end tnum text-amber-600">{base.format(row.costs.accruedCostEgp)}</td>
-                <td className="text-end tnum">{base.format(row.costs.committedCostEgp)}</td>
-                <td className="text-end tnum">{base.format(row.costs.forecastCostEgp)}</td>
-                <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(row.overheadEgp)}</td>
-                <td className={cx("text-end tnum font-semibold", row.costs.actualProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.costs.actualProfitEgp)}</td>
-                <td className={cx("text-end tnum font-semibold", row.loadedCosts.actualProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.loadedCosts.actualProfitEgp)}</td>
-                <td className={cx("text-end tnum", row.costs.cashProfitEgp < 0 && "text-red-600")}>{base.format(row.costs.cashProfitEgp)}</td>
-                <td className={cx("text-end tnum", row.costs.committedProfitEgp < 0 && "text-red-600")}>{base.format(row.costs.committedProfitEgp)}</td>
-                <td className={cx("text-end tnum font-semibold", row.costs.forecastProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>
-                  {base.format(row.costs.forecastProfitEgp)} <span className="text-xs text-slate-400">({fmt.percent(row.costs.forecastMarginBp)})</span>
+                <td className="text-end tnum">{base.format(row.costs.recognizedRevenueReporting)}</td>
+                <td className="text-end tnum">{base.format(row.costs.actualCashInReporting)}</td>
+                <td className="text-end tnum">{base.format(row.costs.actualPaidCostReporting)}</td>
+                <td className="text-end tnum text-amber-600">{base.format(row.costs.accruedCostReporting)}</td>
+                <td className="text-end tnum">{base.format(row.costs.committedCostReporting)}</td>
+                <td className="text-end tnum">{base.format(row.costs.forecastCostReporting)}</td>
+                <td className="text-end tnum text-amber-600 dark:text-amber-400">{base.format(row.overheadReporting)}</td>
+                <td className={cx("text-end tnum font-semibold", row.costs.actualProfitReporting >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.costs.actualProfitReporting)}</td>
+                <td className={cx("text-end tnum font-semibold", row.loadedCosts.actualProfitReporting >= 0 ? "text-emerald-600" : "text-red-600")}>{base.format(row.loadedCosts.actualProfitReporting)}</td>
+                <td className={cx("text-end tnum", row.costs.cashProfitReporting < 0 && "text-red-600")}>{base.format(row.costs.cashProfitReporting)}</td>
+                <td className={cx("text-end tnum", row.costs.committedProfitReporting < 0 && "text-red-600")}>{base.format(row.costs.committedProfitReporting)}</td>
+                <td className={cx("text-end tnum font-semibold", row.costs.forecastProfitReporting >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  {base.format(row.costs.forecastProfitReporting)} <span className="text-xs text-slate-400">({fmt.percent(row.costs.forecastMarginBp)})</span>
                 </td>
-                <td className={cx("text-end tnum font-semibold", row.loadedCosts.forecastProfitEgp >= 0 ? "text-emerald-600" : "text-red-600")}>
-                  {base.format(row.loadedCosts.forecastProfitEgp)} <span className="text-xs text-slate-400">({fmt.percent(row.loadedCosts.forecastMarginBp)})</span>
+                <td className={cx("text-end tnum font-semibold", row.loadedCosts.forecastProfitReporting >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  {base.format(row.loadedCosts.forecastProfitReporting)} <span className="text-xs text-slate-400">({fmt.percent(row.loadedCosts.forecastMarginBp)})</span>
                 </td>
               </tr>
             ))}

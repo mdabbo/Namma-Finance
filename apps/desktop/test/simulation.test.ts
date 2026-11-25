@@ -235,7 +235,7 @@ describe("DABWORKS Finance — 10 projects × 20 people lifecycle simulation", (
     const totalDue = ws.projects.reduce((s, p) => s + p.totalDueMinor, 0);
     const totalPaid = ws.projects.reduce((s, p) => s + p.totalPaidMinor, 0);
     expect(totalPaid).toBeLessThanOrEqual(totalDue + 1);
-    expect(kpis.outstandingEgp).toBeGreaterThanOrEqual(-1);
+    expect(kpis.outstandingReporting).toBeGreaterThanOrEqual(-1);
   });
 
   it("CONCURRENCY: a stage-complete reconcile racing the background sweep must not double-create or lose links", async () => {

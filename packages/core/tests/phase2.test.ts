@@ -10,8 +10,8 @@ const TODAY = "2026-07-16";
 
 function fin(over: {
   id: number;
-  revenueEgp: number;
-  expensesEgp: number;
+  revenueReporting: number;
+  expensesReporting: number;
   status?: Project["status"];
 }): ProjectFinancials {
   return {
@@ -27,22 +27,22 @@ function fin(over: {
     advanceReceivedMinor: 0, retentionReleasedMinor: 0, totalActualCashInMinor: 0,
     unallocatedCustomerCreditMinor: 0, outstandingMinor: 0, outstandingReceivablesMinor: 0,
     remainingUncertifiedMinor: 0, retentionHeldMinor: 0, certifiedRatioBp: 0, collectionRatioBp: 0,
-    contractValueEgp: 0,
-    revenueEgp: over.revenueEgp,
-    billableRevenueEgp: 0, invoicedAmountEgp: 0, collectedEgp: 0,
-    certificateCollectionsEgp: 0, advanceReceivedEgp: 0, retentionReleasedEgp: 0,
-    totalActualCashInEgp: 0, unallocatedCustomerCreditEgp: 0, outstandingEgp: 0,
-    expensesEgp: over.expensesEgp,
-    profitEgp: over.revenueEgp - over.expensesEgp,
+    contractValueReporting: 0,
+    revenueReporting: over.revenueReporting,
+    billableRevenueReporting: 0, invoicedAmountReporting: 0, collectedReporting: 0,
+    certificateCollectionsReporting: 0, advanceReceivedReporting: 0, retentionReleasedReporting: 0,
+    totalActualCashInReporting: 0, unallocatedCustomerCreditReporting: 0, outstandingReporting: 0,
+    expensesReporting: over.expensesReporting,
+    profitReporting: over.revenueReporting - over.expensesReporting,
     marginBp: 0, overdueCertificates: 0,
   };
 }
 
 describe("overhead allocation", () => {
   const projects = [
-    { projectId: 1, revenueEgp: 600, directCostEgp: 100, isActive: true },
-    { projectId: 2, revenueEgp: 300, directCostEgp: 300, isActive: true },
-    { projectId: 3, revenueEgp: 100, directCostEgp: 0, isActive: false },
+    { projectId: 1, revenueReporting: 600, directCostReporting: 100, isActive: true },
+    { projectId: 2, revenueReporting: 300, directCostReporting: 300, isActive: true },
+    { projectId: 3, revenueReporting: 100, directCostReporting: 0, isActive: false },
   ];
 
   it("splits by revenue share and sums exactly", () => {
@@ -68,8 +68,8 @@ describe("overhead allocation", () => {
 
   it("falls back to even split when the basis is all zero", () => {
     const zeroRevenue = [
-      { projectId: 1, revenueEgp: 0, directCostEgp: 0, isActive: true },
-      { projectId: 2, revenueEgp: 0, directCostEgp: 0, isActive: true },
+      { projectId: 1, revenueReporting: 0, directCostReporting: 0, isActive: true },
+      { projectId: 2, revenueReporting: 0, directCostReporting: 0, isActive: true },
     ];
     const shares = allocateOverhead(100, zeroRevenue, "REVENUE");
     expect([...shares.values()].reduce((a, b) => a + b, 0)).toBe(100);
@@ -83,22 +83,22 @@ describe("overhead allocation", () => {
 describe("profitability with allocated overhead", () => {
   it("computes gross/net and ranks by net profit", () => {
     const rows = computeProfitability(
-      [fin({ id: 1, revenueEgp: 1000, expensesEgp: 300 }), fin({ id: 2, revenueEgp: 500, expensesEgp: 450 })],
+      [fin({ id: 1, revenueReporting: 1000, expensesReporting: 300 }), fin({ id: 2, revenueReporting: 500, expensesReporting: 450 })],
       300, // overhead: revenue share → 200 / 100
       "REVENUE",
     );
     expect(rows[0]!.projectId).toBe(1);
-    expect(rows[0]!.grossProfitEgp).toBe(700);
-    expect(rows[0]!.overheadEgp).toBe(200);
-    expect(rows[0]!.netProfitEgp).toBe(500);
+    expect(rows[0]!.grossProfitReporting).toBe(700);
+    expect(rows[0]!.overheadReporting).toBe(200);
+    expect(rows[0]!.netProfitReporting).toBe(500);
     expect(rows[0]!.netMarginBp).toBe(5000);
-    expect(rows[1]!.netProfitEgp).toBe(500 - 450 - 100);
+    expect(rows[1]!.netProfitReporting).toBe(500 - 450 - 100);
   });
 
   it("net profits + overhead reconcile with office totals", () => {
-    const projects = [fin({ id: 1, revenueEgp: 777, expensesEgp: 123 }), fin({ id: 2, revenueEgp: 333, expensesEgp: 55 })];
+    const projects = [fin({ id: 1, revenueReporting: 777, expensesReporting: 123 }), fin({ id: 2, revenueReporting: 333, expensesReporting: 55 })];
     const rows = computeProfitability(projects, 217, "REVENUE");
-    const totalNet = rows.reduce((s, r) => s + r.netProfitEgp, 0);
+    const totalNet = rows.reduce((s, r) => s + r.netProfitReporting, 0);
     expect(totalNet).toBe(777 - 123 + 333 - 55 - 217);
   });
 });
@@ -109,9 +109,9 @@ describe("cash-flow series with forecast", () => {
       actualIn: [{ date: "2026-06-10", egpMinor: 500 }, { date: "2026-07-01", egpMinor: 200 }],
       actualOut: [{ date: "2026-06-15", egpMinor: 300 }],
       openReceivables: [
-        { dueDate: "2026-08-15", unpaidEgp: 1000 }, // future month
-        { dueDate: "2026-05-01", unpaidEgp: 400 },  // overdue → current month
-        { dueDate: null, unpaidEgp: 50 },           // unscheduled → current month
+        { dueDate: "2026-08-15", unpaidReporting: 1000 }, // future month
+        { dueDate: "2026-05-01", unpaidReporting: 400 },  // overdue → current month
+        { dueDate: null, unpaidReporting: 50 },           // unscheduled → current month
       ],
       recurring: [{ egpMinor: 100, dayOfMonth: 1 }],
       todayIso: TODAY,
@@ -163,11 +163,11 @@ describe("receivables aging", () => {
   it("totals buckets and sorts most-overdue first", () => {
     const summary = computeAging(
       [
-        { certificateId: 1, certificateNumber: "PC-1", projectName: "P", clientName: "C", dueDate: "2026-07-01", unpaidEgp: 100 }, // 15 days
-        { certificateId: 2, certificateNumber: "PC-2", projectName: "P", clientName: "C", dueDate: "2026-03-01", unpaidEgp: 200 }, // 137 days
-        { certificateId: 3, certificateNumber: "PC-3", projectName: "P", clientName: "C", dueDate: "2026-08-01", unpaidEgp: 300 }, // future
-        { certificateId: 4, certificateNumber: "PC-4", projectName: "P", clientName: "C", dueDate: null, unpaidEgp: 50 },
-        { certificateId: 5, certificateNumber: "PC-5", projectName: "P", clientName: "C", dueDate: "2026-01-01", unpaidEgp: 0 }, // settled → excluded
+        { certificateId: 1, certificateNumber: "PC-1", projectName: "P", clientName: "C", dueDate: "2026-07-01", unpaidReporting: 100 }, // 15 days
+        { certificateId: 2, certificateNumber: "PC-2", projectName: "P", clientName: "C", dueDate: "2026-03-01", unpaidReporting: 200 }, // 137 days
+        { certificateId: 3, certificateNumber: "PC-3", projectName: "P", clientName: "C", dueDate: "2026-08-01", unpaidReporting: 300 }, // future
+        { certificateId: 4, certificateNumber: "PC-4", projectName: "P", clientName: "C", dueDate: null, unpaidReporting: 50 },
+        { certificateId: 5, certificateNumber: "PC-5", projectName: "P", clientName: "C", dueDate: "2026-01-01", unpaidReporting: 0 }, // settled → excluded
       ],
       TODAY,
     );

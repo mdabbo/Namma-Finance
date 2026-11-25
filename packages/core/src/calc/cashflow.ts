@@ -15,7 +15,7 @@ export interface DatedAmount {
 export interface OpenReceivable {
   /** Due date (submission + terms, or override); null = not yet scheduled. */
   dueDate: string | null;
-  unpaidEgp: number;
+  unpaidReporting: number;
 }
 
 export interface RecurringItem {
@@ -91,12 +91,12 @@ export function buildCashflow(input: CashflowInput): CashflowMonth[] {
   // Unpaid receivables: expected in their due month; overdue or unscheduled
   // ones are expected in the CURRENT month (they are collectible now).
   for (const receivable of input.openReceivables) {
-    assertMinor(receivable.unpaidEgp);
-    if (receivable.unpaidEgp <= 0) continue;
+    assertMinor(receivable.unpaidReporting);
+    if (receivable.unpaidReporting <= 0) continue;
     let month = receivable.dueDate ? monthOf(receivable.dueDate) : currentMonth;
     if (month < currentMonth) month = currentMonth;
     const i = index.get(month);
-    if (i !== undefined) rows[i]!.inForecast += receivable.unpaidEgp;
+    if (i !== undefined) rows[i]!.inForecast += receivable.unpaidReporting;
   }
 
   // Recurring expenses hit every FUTURE month (the current month's actuals

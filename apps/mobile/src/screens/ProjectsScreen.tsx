@@ -29,7 +29,7 @@ export function ProjectsScreen() {
     return (data?.projects ?? [])
       .filter((fin) => filter === "ALL" || fin.project.status === filter)
       .filter((fin) => !q || fin.project.name.toLowerCase().includes(q) || fin.project.code.toLowerCase().includes(q))
-      .sort((a, b) => (STATUS_ORDER[a.project.status] ?? 9) - (STATUS_ORDER[b.project.status] ?? 9) || b.contractValueEgp - a.contractValueEgp);
+      .sort((a, b) => (STATUS_ORDER[a.project.status] ?? 9) - (STATUS_ORDER[b.project.status] ?? 9) || b.contractValueReporting - a.contractValueReporting);
   }, [data, query, filter]);
 
   const count = (f: Filter) => (data?.projects ?? []).filter((fin) => f === "ALL" || fin.project.status === f).length;

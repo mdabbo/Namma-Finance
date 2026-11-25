@@ -72,17 +72,17 @@ describe("reporting currency: a SAR workspace reported in SAR", () => {
     const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, workspace.valuation);
 
     expect(workspace.valuation.currency).toBe("SAR");
-    expect(overview.contractValueEgp).toBe(32_500_000); // SAR 325,000.00 — was 317,031.19
-    expect(overview.outstandingReceivablesEgp).toBe(8_125_000); // SAR 81,250.00 — was 79,257.80
+    expect(overview.contractValueReporting).toBe(32_500_000); // SAR 325,000.00 — was 317,031.19
+    expect(overview.outstandingReceivablesReporting).toBe(8_125_000); // SAR 81,250.00 — was 79,257.80
 
     // The dashboard now agrees with the contract page, which reads the
     // project's own figures.
     const project = workspace.projects.find((row) => row.project.id === projectId)!;
-    expect(overview.contractValueEgp).toBe(project.contractValueMinor);
-    expect(overview.outstandingReceivablesEgp).toBe(project.outstandingReceivablesMinor);
+    expect(overview.contractValueReporting).toBe(project.contractValueMinor);
+    expect(overview.outstandingReceivablesReporting).toBe(project.outstandingReceivablesMinor);
 
     const [receivable] = selectOpenReceivables(financeContractInputs(workspace), workspace.valuation);
-    expect(receivable?.unpaidEgp).toBe(8_125_000);
+    expect(receivable?.unpaidReporting).toBe(8_125_000);
   });
 
   it("is what the old pipeline got wrong: EGP at the project rate, back at today's", async () => {
@@ -90,8 +90,8 @@ describe("reporting currency: a SAR workspace reported in SAR", () => {
     const pivot = await loadWorkspaceFinancials(EGP_VALUATION);
     const overview = computeDashboardOverview(pivot.projects, pivot.allExpenses, EGP_VALUATION);
     // An executable record of the defect, on these rates.
-    expect(fromEgpPiasters(overview.contractValueEgp, "SAR", SAR_TODAY)).toBe(31_703_120);
-    expect(fromEgpPiasters(overview.outstandingReceivablesEgp, "SAR", SAR_TODAY)).toBe(7_925_780);
+    expect(fromEgpPiasters(overview.contractValueReporting, "SAR", SAR_TODAY)).toBe(31_703_120);
+    expect(fromEgpPiasters(overview.outstandingReceivablesReporting, "SAR", SAR_TODAY)).toBe(7_925_780);
   });
 
   it("does not move when the central-bank rate does", async () => {
@@ -101,7 +101,7 @@ describe("reporting currency: a SAR workspace reported in SAR", () => {
       rawExec(`UPDATE currencies SET fx_rate_micro=${rateToday} WHERE code='SAR'`);
       const workspace = await loadWorkspaceFinancials(reportingValuation("SAR", rateToday));
       const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, workspace.valuation);
-      figures.push([overview.contractValueEgp, overview.outstandingReceivablesEgp]);
+      figures.push([overview.contractValueReporting, overview.outstandingReceivablesReporting]);
     }
     expect(figures).toEqual([[32_500_000, 8_125_000], [32_500_000, 8_125_000], [32_500_000, 8_125_000]]);
   });
@@ -119,19 +119,19 @@ describe("reporting currency: a SAR workspace reported in SAR", () => {
     const workspace = await loadWorkspaceFinancials(reportingValuation("SAR", SAR_TODAY));
     const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, workspace.valuation);
 
-    expect(overview.totalCashInEgp).toBe(5_000_001 + 3_250_000);
-    expect(overview.certificateCollectionsEgp).toBe(3_333_333);
-    expect(overview.unallocatedCustomerCreditEgp).toBe(5_000_001 - 3_333_333);
-    expect(overview.advanceReceivedEgp).toBe(3_250_000);
+    expect(overview.totalCashInReporting).toBe(5_000_001 + 3_250_000);
+    expect(overview.certificateCollectionsReporting).toBe(3_333_333);
+    expect(overview.unallocatedCustomerCreditReporting).toBe(5_000_001 - 3_333_333);
+    expect(overview.advanceReceivedReporting).toBe(3_250_000);
     expect(dashboardCashInComponentsReconcile(overview)).toBe(true);
-    expect(overview.cashOutEgp).toBe(1_234_567);
-    expect(overview.netCashPositionEgp).toBe(5_000_001 + 3_250_000 - 1_234_567);
-    expect(overview.outstandingReceivablesEgp).toBe(8_125_000 - 3_333_333);
+    expect(overview.cashOutReporting).toBe(1_234_567);
+    expect(overview.netCashPositionReporting).toBe(5_000_001 + 3_250_000 - 1_234_567);
+    expect(overview.outstandingReceivablesReporting).toBe(8_125_000 - 3_333_333);
 
     expect(workspace.cashIn.map((row) => row.egpMinor).sort((a, b) => a - b)).toEqual([3_250_000, 5_000_001]);
     const kpis = expenseSectionKpis(workspace.allExpenses, null, "2026-03-20", workspace.valuation);
-    expect(kpis.totalEgp).toBe(1_234_567);
-    expect(workspace.costsByProject.get(projectId)!.actualPaidCostEgp).toBe(1_234_567);
+    expect(kpis.totalReporting).toBe(1_234_567);
+    expect(workspace.costsByProject.get(projectId)!.actualPaidCostReporting).toBe(1_234_567);
   });
 });
 
@@ -163,19 +163,19 @@ describe("reporting currency: a mixed portfolio", () => {
     const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, workspace.valuation);
     const usdInSar = fromEgpPiasters(toEgpPiasters(10_000_000, "USD", USD_AT_SIGNING), "SAR", SAR_TODAY);
 
-    expect(overview.contractValueEgp).toBe(32_500_000 + usdInSar);
+    expect(overview.contractValueReporting).toBe(32_500_000 + usdInSar);
     // EGP 260,000.00 of overhead at today's SAR rate.
-    expect(overview.cashOutEgp).toBe(2_000_000);
+    expect(overview.cashOutReporting).toBe(2_000_000);
   });
 
   it("leaves an EGP report exactly as the pivot always computed it", async () => {
     await mixedPortfolio();
     const workspace = await loadWorkspaceFinancials(EGP_VALUATION);
     const overview = computeDashboardOverview(workspace.projects, workspace.allExpenses, EGP_VALUATION);
-    expect(overview.contractValueEgp).toBe(
+    expect(overview.contractValueReporting).toBe(
       toEgpPiasters(32_500_000, "SAR", SAR_AT_SIGNING) + toEgpPiasters(10_000_000, "USD", USD_AT_SIGNING),
     );
-    expect(overview.cashOutEgp).toBe(26_000_000);
+    expect(overview.cashOutReporting).toBe(26_000_000);
   });
 });
 
