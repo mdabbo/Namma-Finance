@@ -104,7 +104,7 @@ export function SettingsPage() {
                           // brand-50 measured 1.01:1 against the canvas - no visible
                           // highlight at all. These separate the active row from it.
                           ? "bg-brand-200 font-semibold text-brand-800 dark:bg-surface-subtle dark:text-brand-100"
-                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200",
+                          : "text-muted hover:bg-surface-subtle hover:text-foreground",
                       )}
                     >
                       {t(item.labelKey)}
@@ -213,7 +213,7 @@ export function SettingsPage() {
               <option value="SAR">SAR</option>
               <option value="USD">USD</option>
             </Select>
-            <p className="mt-1 text-xs text-slate-400">{t("settings.baseCurrencyNote")}</p>
+            <p className="mt-1 text-xs text-muted">{t("settings.baseCurrencyNote")}</p>
           </Field>
         </Card>
         )}
@@ -237,7 +237,7 @@ export function SettingsPage() {
         {section === "advanced" && (
         <Card className="p-5">
           <SectionTitle icon={<Wrench size={16} />} title={t("settings.logFolder")} />
-          <p className="mb-3 text-xs text-slate-400">{t("settings.logFolderHint")}</p>
+          <p className="mb-3 text-xs text-muted">{t("settings.logFolderHint")}</p>
           <Button
             onClick={() => {
               setLogFolderFailed(false);
@@ -274,12 +274,12 @@ export function SettingsPage() {
               <span className="text-xs text-red-600">{t("settings.ratesFailed")}</span>
             )}
           </div>
-          <p className="mb-3 text-xs text-slate-400">{t("settings.syncRatesNote")}</p>
+          <p className="mb-3 text-xs text-muted">{t("settings.syncRatesNote")}</p>
           <div className="grid grid-cols-2 gap-x-8 gap-y-2">
             {rates.map((rate) => (
               <div key={rate.code} className="flex items-center gap-3">
                 <span className="w-12 text-sm font-semibold tnum">{rate.code}</span>
-                <span className="text-xs text-slate-400">{t("settings.ratePerEgp")} {rate.code}:</span>
+                <span className="text-xs text-muted">{t("settings.ratePerEgp")} {rate.code}:</span>
                 <Input
                   dir="ltr"
                   className="!w-32 text-end tnum"
@@ -331,7 +331,7 @@ export function SettingsPage() {
                 </Button>
               </div>
             ))}
-            <div className="flex items-center gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+            <div className="flex items-center gap-3 border-t border-border-subtle pt-3">
               <Input
                 className="!w-56"
                 placeholder={t("settings.categoryNameAr")}
@@ -376,7 +376,7 @@ export function SettingsPage() {
         {section === "backup" && (
         <Card className="p-5">
           <SectionTitle icon={<DatabaseBackup size={16} />} title={t("settings.backup")} />
-          <p className="mb-3 text-xs text-slate-400">{t("settings.dailyBackupNote")}</p>
+          <p className="mb-3 text-xs text-muted">{t("settings.dailyBackupNote")}</p>
           <Field label={t("settings.backupFolder")} className="mb-1 max-w-xl">
             <div className="flex gap-2">
               <Input value={settings?.backupFolder ?? ""} readOnly dir="ltr" className="flex-1 text-xs" />
@@ -395,7 +395,7 @@ export function SettingsPage() {
               )}
             </div>
           </Field>
-          <p className="mb-4 text-xs text-slate-400">{t("settings.backupFolderNote")}</p>
+          <p className="mb-4 text-xs text-muted">{t("settings.backupFolderNote")}</p>
           <Field label={t("settings.backupRetention")} className="mb-4 max-w-xs">
             <Input key={settings?.backupRetentionCount ?? 14} type="number" min={1} max={365} defaultValue={settings?.backupRetentionCount ?? 14} onBlur={(e) => { const value=Math.min(365,Math.max(1,Number(e.target.value)||14)); if(value!==settings?.backupRetentionCount) updateSetting.mutate({key:"backupRetentionCount",value}); }} />
           </Field>
@@ -407,8 +407,8 @@ export function SettingsPage() {
           </div>
           {backups.length > 0 && (
             <div className="max-h-48 overflow-y-auto text-xs">
-              <p className="mb-1 font-medium text-slate-500">{t("settings.lastBackup")}:</p>
-              <ul className="space-y-1 text-slate-400">
+              <p className="mb-1 font-medium text-muted">{t("settings.lastBackup")}:</p>
+              <ul className="space-y-1 text-muted">
                 {backups.map((b) => (
                   <li key={b.id} className="flex justify-between gap-4">
                     <span dir="ltr" className="truncate" title={b.sha256Checksum??undefined}>{b.filename}</span>
@@ -470,7 +470,7 @@ function DataToolsSection() {
 function ReleaseValue({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs text-slate-400">{label}</dt>
+      <dt className="text-xs text-muted">{label}</dt>
       <dd className="mt-1 font-semibold tnum" dir="auto">{value}</dd>
     </div>
   );
@@ -519,7 +519,7 @@ function SecuritySection() {
   return (
     <Card className="p-5">
       <SectionTitle icon={<Lock size={16} />} title={t("lock.sectionTitle")} />
-      <p className="mb-3 text-xs text-slate-400">{t("lock.hint")}</p>
+      <p className="mb-3 text-xs text-muted">{t("lock.hint")}</p>
       <div className="flex flex-wrap items-end gap-3">
         {enabled && (
           <Field label={t("lock.current")} className="w-56">
@@ -591,7 +591,7 @@ function UsersSection() {
   return (
     <Card className="p-5">
       <SectionTitle icon={<UsersRound size={16} />} title={t("settings.usersTitle")} />
-      <p className="mb-3 text-xs text-slate-400">{t("settings.usersHint")}</p>
+      <p className="mb-3 text-xs text-muted">{t("settings.usersHint")}</p>
       {error && <p className="mb-2 text-xs text-red-600">{(error as Error).message}</p>}
       <div className="space-y-2">
         {rows.map((row) => (
@@ -609,7 +609,7 @@ function UsersSection() {
             </Select>
           </div>
         ))}
-        {rows.length === 0 && !error && <p className="text-xs text-slate-400">{t("common.empty")}</p>}
+        {rows.length === 0 && !error && <p className="text-xs text-muted">{t("common.empty")}</p>}
       </div>
     </Card>
   );
@@ -630,7 +630,7 @@ function DemoDataSection() {
   return (
     <Card className="p-5">
       <SectionTitle icon={<FlaskConical size={16} />} title={t("settings.demoData")} />
-      <p className="mb-3 text-xs text-slate-400">{t("settings.demoDataNote")}</p>
+      <p className="mb-3 text-xs text-muted">{t("settings.demoDataNote")}</p>
       <Button
         className="!text-red-600"
         disabled={demo.remove.isPending}
@@ -684,7 +684,7 @@ function SyncSection() {
   return (
     <Card className="p-5">
       <SectionTitle icon={<CloudUpload size={16} />} title={t("settings.syncTitle")} />
-      <p className="mb-4 text-xs text-slate-400">{t("settings.syncNote")}</p>
+      <p className="mb-4 text-xs text-muted">{t("settings.syncNote")}</p>
 
       <div className="mb-4 grid grid-cols-2 gap-4">
         <Field label={t("settings.syncUrl")}>
@@ -762,7 +762,7 @@ function SyncSection() {
 
       {session && (
         <div className="mb-4 flex items-center gap-3">
-          <span className="text-sm text-slate-500">
+          <span className="text-sm text-muted">
             {t("settings.syncSignedInAs")} <b dir="ltr">{session.user.email}</b>
           </span>
           <Button variant="ghost" onClick={() => sync.signOut.mutate()}>{t("settings.syncSignOut")}</Button>
@@ -805,8 +805,8 @@ function SyncSection() {
               <details className="mt-2">
                 <summary className="cursor-pointer">{t("settings.syncCompareVersions")}</summary>
                 <div className="mt-2 grid gap-2 md:grid-cols-2" dir="ltr">
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white p-2 dark:bg-slate-900">{JSON.stringify(JSON.parse(conflict.local_json), null, 2)}</pre>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white p-2 dark:bg-slate-900">{JSON.stringify(JSON.parse(conflict.remote_json), null, 2)}</pre>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-surface p-2">{JSON.stringify(JSON.parse(conflict.local_json), null, 2)}</pre>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-surface p-2">{JSON.stringify(JSON.parse(conflict.remote_json), null, 2)}</pre>
                 </div>
               </details>
             </div>
@@ -827,7 +827,7 @@ function SyncReportLine({
 }) {
   const { t } = useTranslation();
   return (
-    <p className={cx("mt-3 text-xs", report.ok ? "text-slate-400" : "text-red-600")}>
+    <p className={cx("mt-3 text-xs", report.ok ? "text-muted" : "text-red-600")}>
       {t("settings.syncLast")}: {dateFmt(report.finishedAt)} —{" "}
       {report.ok
         ? `${t("settings.syncOk")} · ${t("settings.syncPulled")}: ${report.pulled + report.deletedLocal} · ${t("settings.syncPushed")}: ${report.pushed + report.deletedRemote}`
