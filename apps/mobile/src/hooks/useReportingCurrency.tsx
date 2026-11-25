@@ -1,13 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useQuery } from "@tanstack/react-query";
 import type { CurrencyValuation } from "@mep/core";
 import { isReportingCurrency, valuationFor, type ReportingCurrency } from "../lib/reporting";
+import { chooseRate, loadDesktopRates, type RateSource } from "../lib/fxRates";
+import { useSupabase } from "./useWorkspace";
 
 /**
  * The reporting currency chosen on this phone, and that currency's rate in
- * EGP. Both live on the device (AsyncStorage, `namaa.*` keys like the rest of
- * the app's settings); a rate is kept per currency so switching back and forth
- * does not lose one.
+ * EGP. The currency lives on the device (AsyncStorage, `namaa.*` keys like the
+ * rest of the app's settings). The rate is the desktop's when it has published
+ * one (lib/fxRates.ts); otherwise the one typed here, kept per currency so
+ * switching back and forth does not lose one.
  */
 
 const CURRENCY_KEY = "namaa.reportingCurrency";
@@ -17,6 +21,10 @@ interface ReportingCurrencyState {
   currency: ReportingCurrency;
   /** EGP per major unit × 1,000,000; null when none has been set yet. */
   fxRateMicro: number | null;
+  /** Whose rate it is: the desktop's, or one typed on this phone. */
+  rateSource: RateSource | null;
+  /** When the desktop last changed the rate (ISO); null for a typed one. */
+  rateUpdatedAt: string | null;
   /** Null for a foreign currency that has no rate yet: totals stay in EGP. */
   valuation: CurrencyValuation | null;
   loaded: boolean;
@@ -30,6 +38,10 @@ export function ReportingCurrencyProvider({ children }: { children: ReactNode })
   const [currency, setCurrencyState] = useState<ReportingCurrency>("EGP");
   const [rates, setRates] = useState<Partial<Record<ReportingCurrency, number>>>({});
   const [loaded, setLoaded] = useState(false);
+  const client = useSupabase();
+  // A failed or missing table answers with no rates, and the phone falls back
+  // to the typed ones; it is retried on the next open or refresh.
+  const desktop = useQuery({ queryKey: ["fx-rates"], queryFn: () => loadDesktopRates(client), staleTime: 5 * 60_000 });
 
   useEffect(() => {
     void (async () => {
@@ -60,9 +72,20 @@ export function ReportingCurrencyProvider({ children }: { children: ReactNode })
   }, []);
 
   const value = useMemo<ReportingCurrencyState>(() => {
-    const fxRateMicro = currency === "EGP" ? 1_000_000 : rates[currency] ?? null;
-    return { currency, fxRateMicro, valuation: valuationFor(currency, fxRateMicro), loaded, setCurrency, setRate };
-  }, [currency, rates, loaded, setCurrency, setRate]);
+    const chosen = chooseRate(currency, desktop.data ?? {}, currency === "EGP" ? null : rates[currency] ?? null);
+    return {
+      currency,
+      fxRateMicro: chosen.fxRateMicro,
+      rateSource: chosen.source,
+      rateUpdatedAt: chosen.updatedAt,
+      valuation: valuationFor(currency, chosen.fxRateMicro),
+      // Wait for the desktop's answer before the first figures, so they are not
+      // computed at a typed rate and then recomputed a moment later.
+      loaded: loaded && !desktop.isPending,
+      setCurrency,
+      setRate,
+    };
+  }, [currency, rates, desktop.data, desktop.isPending, loaded, setCurrency, setRate]);
 
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

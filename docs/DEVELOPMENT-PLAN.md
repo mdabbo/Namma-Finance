@@ -667,7 +667,7 @@ the office decides.
 | Time entries | Certificates |
 | Expense capture with a photo | Payments and allocations |
 | Drawing received / document status (after E2) | Contract revisions, variation orders |
-| Site photos against a project | Team payments |
+| Site photos against a project | Team payments — except earned payments capped at due, which the phone may record (owner decision 2026-11-25; see PHASE4-MOBILE.md) |
 | Requests for approval | Anything touching two or more financial tables |
 | Everything read-only | |
 
@@ -736,7 +736,9 @@ Expo Go is a development harness, not a way to give someone an app.
 3. The Supabase URL and anon key are entered at setup and stored on the device;
    keep it that way. Never commit them.
 
-**F4. An offline queue.**
+**F4. An offline queue.** — BUILT 2026-11-20 on `feat/f5-mobile-time-entries`
+(`apps/mobile/src/lib/timeQueue.ts`, tests in
+`apps/desktop/test/mobile-time-queue.test.ts`). Not yet tried on a phone.
 Site signal is unreliable, so writes must queue.
 1. Queue in local storage with a client-generated uuid per record — the cloud
    tables already use uuid keys, so a retried insert is idempotent rather than a
@@ -745,7 +747,9 @@ Site signal is unreliable, so writes must queue.
 3. Server timestamps decide ordering; the existing last-write-wins guard
    (`nf_lww_guard`) rejects stale updates.
 
-**F5. Time entries** — the first write feature. Person, project, date, minutes,
+**F5. Time entries** — BUILT 2026-11-20 with F4 (Time tab,
+`apps/mobile/src/screens/TimeScreen.tsx`). Needs a new APK (adds
+`expo-crypto`). The first write feature. Person, project, date, minutes,
 note. Validate with the same core schemas the desktop uses.
 
 **F6. Expense claims with a photo.**
