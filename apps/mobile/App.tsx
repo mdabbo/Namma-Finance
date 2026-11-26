@@ -20,6 +20,7 @@ import { ProjectDetailScreen } from "./src/screens/ProjectDetailScreen";
 import { PayTeamScreen } from "./src/screens/PayTeamScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TimeScreen } from "./src/screens/TimeScreen";
+import { ClaimsScreen } from "./src/screens/ClaimsScreen";
 import { TimeQueueProvider } from "./src/hooks/useTimeQueue";
 import { AppLockGate } from "./src/hooks/useAppLock";
 import { fetchServerNow } from "./src/lib/timeEntriesCloud";
@@ -27,7 +28,7 @@ import { colors } from "./src/lib/theme";
 import { fontFamilyFor, layoutDirection, TAJAWAL } from "./src/lib/layout";
 import { Icon, type IconName } from "./src/components/ui";
 
-const TAB_ICONS: Record<string, IconName> = { Home: "home", Projects: "briefcase", Time: "clock", Settings: "settings" };
+const TAB_ICONS: Record<string, IconName> = { Home: "home", Projects: "briefcase", Time: "clock", Claims: "file-text", Settings: "settings" };
 import { syncNativeDirection } from "./src/lib/nativeDirection";
 import type { ProjectsStackParams } from "./src/navigation";
 
@@ -140,6 +141,7 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
       home: t("nav.dashboard"),
       projects: t("nav.projects"),
       time: t("nav.time"),
+      claims: t("mobile.claimsTab"),
       settings: t("nav.settings"),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -174,6 +176,7 @@ function MainNavigator({ onSignedOut }: { onSignedOut: () => void }) {
           )}
         </Tabs.Screen>
         <Tabs.Screen name="Time" component={TimeScreen} options={{ title: screens.time }} />
+        <Tabs.Screen name="Claims" component={ClaimsScreen} options={{ title: screens.claims }} />
         <Tabs.Screen name="Settings" options={{ title: screens.settings }}>
           {() => <SettingsScreen onSignedOut={onSignedOut} />}
         </Tabs.Screen>

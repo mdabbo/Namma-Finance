@@ -33,9 +33,21 @@ certified/collected bars) · **Project detail** (totals + certificates) ·
 
 ## Notes / current limits (v0.1)
 
-- **Time entries and team payments are the only writes.** Certificates,
-  client payments and every other financial record stay on the desktop (a test
-  holds every cloud write to `time_entries` and `person_payments`).
+- **Time entries, team payments and expense claims are the only writes.**
+  Certificates, client payments and every other financial record stay on the
+  desktop (a test holds every cloud write to `time_entries`,
+  `person_payments` and `expense_claims`, and every file upload to the
+  receipt bucket).
+- **Expense claims** (Claims tab; plan F6): who, what, how much, when, and an
+  optional receipt photo. A claim is not an expense: the office accepts it on
+  the desktop (Finance → Expense claims), and only that creates the numbered
+  expense. The photo is shrunk to 1600 px on its long side (JPEG, quality 0.7),
+  its SHA-256 is taken from the exact bytes kept, and it waits in the app's own
+  documents folder until it is uploaded to
+  `namaa-documents/<login id>/claims/<claim uuid>.jpg`. The outbox uploads
+  the photo BEFORE it sends the claim, so the office never sees a claim whose
+  receipt is missing; the file on the phone is deleted once the claim is sent.
+  A pending claim can be withdrawn. Needs `docs/supabase-0025-expense-claims.sql`.
 - **Paying the team** (project page → Team → Pay; owner decision 2026-11-25):
   only an earned payment, capped at what is due now. "Due" follows the
   desktop's own rule (`assignment_person_payment_due`): voided payments do not

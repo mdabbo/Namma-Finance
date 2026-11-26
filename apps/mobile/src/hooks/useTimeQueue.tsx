@@ -7,6 +7,7 @@ import {
   discard as discardItem,
   EMPTY_QUEUE,
   enqueue as enqueueItem,
+  enqueueClaim,
   enqueuePayment,
   flush,
   parseQueue,
@@ -14,10 +15,13 @@ import {
   prune,
   retry as retryItem,
   type QueueState,
+  releasedAttachments,
+  type ExpenseClaimRow,
   type PersonPaymentRow,
   type TimeEntryRow,
 } from "../lib/timeQueue";
-import { sendOutboxRow } from "../lib/timeEntriesCloud";
+import { sendOutboxItem } from "../lib/claimsCloud";
+import { deleteReceipt, readReceipt } from "../lib/receiptPhoto";
 import { useSupabase } from "./useWorkspace";
 
 /**
@@ -35,6 +39,8 @@ interface TimeQueueApi {
   sending: boolean;
   save(row: TimeEntryRow): void;
   pay(row: PersonPaymentRow): void;
+  /** Files an expense claim, or withdraws one; a photo is uploaded before the claim is sent. */
+  claim(row: ExpenseClaimRow, attachmentPath?: string): void;
   retry(uuid: string): void;
   discard(uuid: string): void;
   sendNow(): void;
@@ -61,10 +67,13 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
   const commit = useCallback((update: (current: QueueState) => QueueState) => {
     const next = update(stateRef.current);
     if (next === stateRef.current) return;
+    const before = stateRef.current;
     stateRef.current = next;
     setState(next);
     // Written before anything is sent, so a queued entry survives the app closing.
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => undefined);
+    // A receipt photo nobody will upload any more is not kept.
+    for (const path of releasedAttachments(before, next)) deleteReceipt(path);
   }, []);
 
   const sendNow = useCallback(async () => {
@@ -75,11 +84,12 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
       const result = await flush(stateRef.current, {
         serverNow,
         deviceNow: () => Date.now(),
-        send: (row, table) => sendOutboxRow(client, row, table),
+        send: (row, table, attachmentPath) => sendOutboxItem(client, row, table, attachmentPath, readReceipt),
       });
       commit((current) => applyFlush(current, result, new Date().toISOString()));
       if (result.outcomes.some((entry) => entry.outcome.kind === "ok")) {
         void queryClient.invalidateQueries({ queryKey: ["time-entries"] });
+        void queryClient.invalidateQueries({ queryKey: ["expense-claims"] });
         // A payment changes the team's paid and due figures.
         void queryClient.invalidateQueries({ queryKey: ["workspace"] });
       }
@@ -96,7 +106,9 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
       .catch(() => null)
       .then((raw) => {
         if (cancelled) return;
-        const stored = prune(parseQueue(raw), Date.now());
+        const loadedState = parseQueue(raw);
+        const stored = prune(loadedState, Date.now());
+        for (const path of releasedAttachments(loadedState, stored)) deleteReceipt(path);
         stateRef.current = stored;
         setState(stored);
         setLoaded(true);
@@ -134,6 +146,10 @@ export function TimeQueueProvider({ serverNow, children }: { serverNow: () => Pr
       },
       pay: (row) => {
         commit((current) => enqueuePayment(current, row, new Date().toISOString()));
+        void sendNow();
+      },
+      claim: (row, attachmentPath) => {
+        commit((current) => enqueueClaim(current, row, attachmentPath, new Date().toISOString()));
         void sendNow();
       },
       retry: (uuid) => {

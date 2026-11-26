@@ -34,6 +34,14 @@
         {
           "faceIDPermission": "Allow DABWORKS Finance to use Face ID to unlock the app."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow DABWORKS Finance to use your photos so you can attach a receipt to an expense claim.",
+          "cameraPermission": "Allow DABWORKS Finance to use the camera so you can photograph a receipt for an expense claim.",
+          "microphonePermission": false
+        }
       ]
     ]
   }

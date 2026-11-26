@@ -383,7 +383,7 @@ describe("the time-entry form", () => {
   });
 });
 
-describe("the phone writes nothing but time entries and team payments", () => {
+describe("the phone writes nothing but time entries, team payments and expense claims", () => {
   const mobile = fileURLToPath(new URL("../../mobile", import.meta.url));
   const files: string[] = [];
   const collect = (dir: string) => {
@@ -398,15 +398,19 @@ describe("the phone writes nothing but time entries and team payments", () => {
   files.push(join(mobile, "App.tsx"));
 
   it("keeps every cloud write in lib/timeEntriesCloud.ts, limited to the outbox tables", () => {
-    const writers = files.filter((path) => /\.(insert|upsert|update|delete)\s*\(/.test(readFileSync(path, "utf8")));
+    // A write to a cloud table goes through `.from(table)`; Map.delete and the
+    // like are not cloud writes. Writes to file storage are checked separately.
+    const writers = files.filter((path) => /\.from\([^)]*\)\s*\.(insert|upsert|update|delete)\s*\(/.test(readFileSync(path, "utf8")));
     expect(writers.map((path) => relative(mobile, path).replace(/\\/g, "/"))).toEqual(["src/lib/timeEntriesCloud.ts"]);
+    const storageWriters = files.filter((path) => /\.storage\b[^;]*\.(upload|remove|update|move|copy)\s*\(/.test(readFileSync(path, "utf8")));
+    expect(storageWriters.map((path) => relative(mobile, path).replace(/\\/g, "/"))).toEqual(["src/lib/claimsCloud.ts"]);
     const source = readFileSync(join(mobile, "src/lib/timeEntriesCloud.ts"), "utf8");
     const writes = source.match(/\.from\([^)]*\)\s*\.(insert|upsert|update|delete)\(/g) ?? [];
     expect(writes).toEqual([".from(table).upsert("]);
     expect(source).toContain("if (!OUTBOX_TABLES.includes(table)) return");
-    // Adding a table here is a decision, not a refactor: payments go through
-    // the desktop's checks when it pulls them; nothing else the phone could
-    // write does.
-    expect([...OUTBOX_TABLES]).toEqual(["time_entries", "person_payments"]);
+    // Adding a table here is a decision, not a refactor: the desktop checks a
+    // payment again when it pulls it, and a claim is only ever a claim until the
+    // office accepts it; nothing else the phone could write has that safety.
+    expect([...OUTBOX_TABLES]).toEqual(["time_entries", "person_payments", "expense_claims"]);
   });
 });

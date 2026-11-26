@@ -79,9 +79,10 @@ revision, and variation-order mutations are preserved as reviewable
 
 ## Mobile companion
 
-The Expo app writes only time entries and earned team payments (the desktop
-re-checks each payment and adds its expense; everything else financial stays
-on the desktop) and is pinned to Expo SDK 54 because
+The Expo app writes only time entries, earned team payments (the desktop
+re-checks each payment and adds its expense) and expense claims (which become
+expenses only when accepted on the desktop); everything else financial stays
+on the desktop and is pinned to Expo SDK 54 because
 that is the newest SDK the public Expo Go client supports. Arabic renders with
 LTR layout, and there is no standalone APK yet. See
 [PHASE4-MOBILE.md](./PHASE4-MOBILE.md).

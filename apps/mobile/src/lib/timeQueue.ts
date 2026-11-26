@@ -1,6 +1,8 @@
 /**
- * The phone's outbox (plan steps F4 and F5): time entries, and payments to
- * the team (see lib/team.ts). These are the only two things the phone writes.
+ * The phone's outbox (plan steps F4, F5 and F6): time entries, payments to
+ * the team (see lib/team.ts) and expense claims (lib/claimForm.ts). These are
+ * the only three things the phone writes. A claim may carry a receipt photo,
+ * which is uploaded before the claim itself is sent.
  *
  * Site signal is unreliable, so nothing is sent straight from a form: it is
  * put in this queue, kept on the phone, and sent when the cloud answers. Four
@@ -57,8 +59,36 @@ export interface PersonPaymentRow {
   created_at: string;
 }
 
+/**
+ * An expense claim in the cloud's column names, minus updated_at. It carries no
+ * category, decision or rate: the office chooses those when it accepts the
+ * claim, and leaving them out of what the phone sends means a phone write can
+ * never overwrite them.
+ */
+export interface ExpenseClaimRow {
+  uuid: string;
+  /** The claimant. */
+  person_id: string;
+  project_id: string | null;
+  /** YYYY-MM-DD */
+  date: string;
+  amount_minor: number;
+  currency: string;
+  description: string;
+  supplier: string | null;
+  /** "<login id>/claims/<claim uuid>.jpg", or null with no photo. */
+  receipt_storage_key: string | null;
+  receipt_sha256: string | null;
+  /** When the phone filed it (ISO). */
+  submitted_at: string;
+  /** "YYYY-MM-DD HH:MM:SS" in UTC, the desktop's own spelling. */
+  created_at: string;
+  /** Set when the claim is withdrawn while still waiting for a decision. */
+  deleted_at: string | null;
+}
+
 /** The cloud tables the outbox writes. Nothing else is written from the phone. */
-export const OUTBOX_TABLES = ["time_entries", "person_payments"] as const;
+export const OUTBOX_TABLES = ["time_entries", "person_payments", "expense_claims"] as const;
 export type OutboxTable = (typeof OUTBOX_TABLES)[number];
 
 export type QueueStatus = "pending" | "sent" | "rejected";
@@ -76,7 +106,13 @@ interface QueueItemBase {
 
 export type QueueItem =
   | (QueueItemBase & { table: "time_entries"; row: TimeEntryRow })
-  | (QueueItemBase & { table: "person_payments"; row: PersonPaymentRow });
+  | (QueueItemBase & { table: "person_payments"; row: PersonPaymentRow })
+  | (QueueItemBase & {
+      table: "expense_claims";
+      row: ExpenseClaimRow;
+      /** The compressed receipt kept on the phone until it has been uploaded. */
+      attachmentPath?: string;
+    });
 
 export type OutboxRow = QueueItem["row"];
 
@@ -110,11 +146,31 @@ export function enqueuePayment(state: QueueState, row: PersonPaymentRow, nowIso:
   return put(state, { table: "person_payments", row }, nowIso);
 }
 
-function put(
-  state: QueueState,
-  entry: { table: "time_entries"; row: TimeEntryRow } | { table: "person_payments"; row: PersonPaymentRow },
-  nowIso: string,
-): QueueState {
+/**
+ * Files a claim, or replaces its waiting copy: withdrawing a claim that has not
+ * been sent yet simply replaces it, and one already sent becomes a new item.
+ */
+export function enqueueClaim(state: QueueState, row: ExpenseClaimRow, attachmentPath: string | undefined, nowIso: string): QueueState {
+  return put(state, { table: "expense_claims", row, ...(attachmentPath ? { attachmentPath } : {}) }, nowIso);
+}
+
+/**
+ * The photo files no longer needed: those of items that were dropped between two
+ * states (discarded or forgotten after being sent). The caller deletes them.
+ */
+export function releasedAttachments(before: QueueState, after: QueueState): string[] {
+  const kept = new Set(after.items.flatMap((item) => (item.table === "expense_claims" && item.attachmentPath ? [item.attachmentPath] : [])));
+  return before.items.flatMap((item) =>
+    item.table === "expense_claims" && item.attachmentPath && !kept.has(item.attachmentPath) ? [item.attachmentPath] : [],
+  );
+}
+
+type QueueEntry =
+  | { table: "time_entries"; row: TimeEntryRow }
+  | { table: "person_payments"; row: PersonPaymentRow }
+  | { table: "expense_claims"; row: ExpenseClaimRow; attachmentPath?: string };
+
+function put(state: QueueState, entry: QueueEntry, nowIso: string): QueueState {
   const row = entry.row;
   const existing = state.items.find((item) => item.row.uuid === row.uuid);
   const item = {
@@ -203,8 +259,11 @@ export interface FlushDeps {
   /** The cloud's current time in ms. Throws when the cloud cannot be reached. */
   serverNow(): Promise<number>;
   deviceNow(): number;
-  /** Sends one row, with the given updated_at, to its table. */
-  send(row: OutboxRow & { updated_at: string }, table: OutboxTable): Promise<SendOutcome>;
+  /**
+   * Sends one row, with the given updated_at, to its table. A claim's receipt
+   * path comes along so it can be uploaded first.
+   */
+  send(row: OutboxRow & { updated_at: string }, table: OutboxTable, attachmentPath?: string): Promise<SendOutcome>;
 }
 
 export interface FlushResult {
@@ -245,7 +304,11 @@ export async function flush(state: QueueState, deps: FlushDeps): Promise<FlushRe
     lastStamp = stamp;
     let outcome: SendOutcome;
     try {
-      outcome = await deps.send({ ...item.row, updated_at: new Date(stamp).toISOString() }, item.table);
+      outcome = await deps.send(
+        { ...item.row, updated_at: new Date(stamp).toISOString() },
+        item.table,
+        item.table === "expense_claims" ? item.attachmentPath : undefined,
+      );
     } catch (error) {
       outcome = { kind: "transient", message: error instanceof Error ? error.message : String(error) };
     }
@@ -270,8 +333,12 @@ export function applyFlush(state: QueueState, result: FlushResult, nowIso: strin
     // Changed while it was being sent: the newer version is still to go.
     if (!done || done.rev !== item.rev || item.status !== "pending") return item;
     switch (done.outcome.kind) {
-      case "ok":
-        return { ...item, status: "sent" as const, sentAt: nowIso, attempts: item.attempts + 1, lastError: undefined };
+      case "ok": {
+        const sent = { ...item, status: "sent" as const, sentAt: nowIso, attempts: item.attempts + 1, lastError: undefined };
+        // The photo is in the cloud now; the file on the phone is no longer needed.
+        if (sent.table === "expense_claims") delete sent.attachmentPath;
+        return sent;
+      }
       case "rejected":
         return { ...item, status: "rejected" as const, attempts: item.attempts + 1, lastError: done.outcome.message };
       case "transient":
